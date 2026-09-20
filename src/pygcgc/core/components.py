@@ -37,6 +37,7 @@ class ComponentDetectionSettings:
     low_confidence_ratio: float = 0.30
     min_bic_gap: float = 10.0
     min_explained_fraction: float = 0.80
+    screening_ions: int = 20
     max_ions: int = 60
     automatically_separate: bool = True
 
@@ -278,20 +279,31 @@ def fit_candidate_region(run, fold, candidates: CandidateSet, region: CandidateR
                          settings: ComponentDetectionSettings = ComponentDetectionSettings()
                          ) -> ComponentGroup:
     """Fit and assess all plausible overlapping components in one region."""
-    cube = candidate_cube(run, fold, candidates, region, max_ions=settings.max_ions)
+    screening_cube = candidate_cube(
+        run, fold, candidates, region,
+        max_ions=min(settings.screening_ions, settings.max_ions))
     ordered = sorted(region.candidate_indices,
                      key=lambda index: float(candidates.score[index]), reverse=True)
     hints = [SimpleNamespace(row=float(candidates.row[index] - region.row0),
                              col=float(candidates.col[index] - region.col0))
              for index in ordered]
     max_k = max(1, min(int(settings.max_components), len(hints)))
-    fits = [fit_overlap(cube, k, model=settings.model, apex_hint=hints,
+    fits = [fit_overlap(screening_cube, k, model=settings.model, apex_hint=hints,
                         include_background=True, background_order=settings.background_order,
-                        n_starts=settings.n_starts, seed=region_index + k)
+                        n_starts=1, seed=region_index + k)
             for k in range(1, max_k + 1)]
     fits.sort(key=lambda result: result.bic)
-    fit = fits[0]
-    bic_gap = float(fits[1].bic - fit.bic) if len(fits) > 1 else np.inf
+    screened = fits[0]
+    bic_gap = float(fits[1].bic - screened.bic) if len(fits) > 1 else np.inf
+    # Model-order screening needs only the strongest diagnostic ions.  Once k
+    # is chosen, refit that model on the wider ion set so stored spectra and
+    # amounts are not restricted to the cheap screening subset.
+    cube = candidate_cube(run, fold, candidates, region, max_ions=settings.max_ions)
+    refined_hints = [SimpleNamespace(row=component.row0, col=component.col0)
+                     for component in screened.components]
+    fit = fit_overlap(cube, screened.k, model=settings.model, apex_hint=refined_hints,
+                      include_background=True, background_order=settings.background_order,
+                      n_starts=settings.n_starts, seed=region_index + 1000)
     return group_from_fit(run_name, region_index, fit, cube,
                           settings.low_confidence_ratio, bic_gap=bic_gap,
                           min_bic_gap=settings.min_bic_gap,
