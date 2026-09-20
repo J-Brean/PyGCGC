@@ -1,7 +1,7 @@
 """Milestone 4 walkthrough: clean, calibrate and quantify a whole sequence,
 then print a few results and write the four tables.
 
-    python examples/milestone4_quant.py path/to/dummy_gcxgc
+    python examples/tutorials/03_quantification.py path/to/dummy_gcxgc
 """
 
 import csv
@@ -48,5 +48,5 @@ for s in sorted(signals, key=lambda s: -s.volume)[:5]:
     print(f"  t1 {s.t1 / 60:6.2f} min  t2 {s.t2:4.2f} s  ratio {s.ratio:7.3f} to {s.istd}"
           + (f"  ~{s.amount:.2f} ng as {s.surrogate}" if s.surrogate else ""))
 
-for p in report.write("milestone4_results"):
+for p in report.write("03_results"):
     print("wrote", p)

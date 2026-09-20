@@ -11,7 +11,7 @@ target-table row, at the position it was actually found.
 
 A one-shot, read-only analysis of whichever run is open when it's shown
 -- like ✂️ overlap and 🗂️ batch, there's nothing here to undo or save
-(see HANDOVER.md section 5), so it's a dialog, not a docked panel or its
+(see docs/architecture.md section 5), so it's a dialog, not a docked panel or its
 own Project state. Reopening it (the toolbar button) is how it picks up
 a run switch; the loaded library stays put across that, since it isn't
 tied to any one run.

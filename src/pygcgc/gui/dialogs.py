@@ -6,7 +6,7 @@ from dataclasses import fields, replace
 
 from PySide6 import QtWidgets
 
-from ..core import CalibrationSettings, PeakSettings, QuantSettings
+from ..core import QuantSettings
 
 # field: (label, tooltip, (min, max, step, decimals) or choices)
 PEAK_FIELDS = {

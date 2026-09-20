@@ -1,7 +1,7 @@
 """Milestone 3 walkthrough: clean one sample, check the result, and plot
 raw against cleaned for a bleed ion.
 
-    python examples/milestone3_background.py path/to/dummy_gcxgc
+    python examples/tutorials/02_background.py path/to/dummy_gcxgc
 """
 
 import sys
@@ -53,5 +53,5 @@ for ax, img, title in [(axes[0], raw_img, "raw"), (axes[1], clean_img, "cleaned"
     ax.tick_params(labelsize=7)
 axes[0].set_ylabel("$t_2$ (s)", fontsize=8)
 fig.tight_layout()
-fig.savefig("milestone3_background.png")
-print("Saved milestone3_background.png")
+fig.savefig("02_background.png")
+print("Saved 02_background.png")

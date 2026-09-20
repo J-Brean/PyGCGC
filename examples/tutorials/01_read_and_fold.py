@@ -2,7 +2,7 @@
 check the period, fold, and save a figure.
 
 Run from the repository folder:
-    python examples/milestone1_walkthrough.py path/to/dummy_gcxgc
+    python examples/tutorials/01_read_and_fold.py path/to/dummy_gcxgc
 """
 
 import sys
@@ -64,5 +64,5 @@ for ax, img, f, t2, title in [
 axes[1].axhspan(period, t2_ext[-1] + fixed.row_pitch, color="w", alpha=0.12, lw=0)
 axes[1].set_xlabel("$t_1$ (min)", fontsize=8)
 fig.tight_layout()
-fig.savefig("milestone1_sample_B.png")
-print("Saved milestone1_sample_B.png")
+fig.savefig("01_sample_B.png")
+print("Saved 01_sample_B.png")

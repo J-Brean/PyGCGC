@@ -1,7 +1,7 @@
 """Milestone 7 walkthrough: flag which blobs look like siloxane, and fit
 and subtract the siloxane component from the whole run.
 
-    python examples/milestone7_siloxane.py path/to/dummy_gcxgc
+    python examples/tutorials/06_siloxane.py path/to/dummy_gcxgc
 """
 
 import sys

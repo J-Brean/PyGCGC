@@ -1,6 +1,6 @@
 # ROADMAP: what's left, what's shaky, what's missing
 
-All 12 planned milestones are built (see README.md's Status table and HANDOVER.md section 9 for what each one actually delivered). This file pulls every "provisional," "not built," "not yet checked" and "untested" note scattered across README.md's Known limitations and HANDOVER.md's per-milestone write-ups into one place, organised by what to *do* about each one, so a future session (or James) can pick a starting point without re-reading both files cover to cover.
+All 12 planned milestones are built (see README.md's Status table and docs/milestone-specs.md for what each one actually delivered). This file pulls every "provisional," "not built," "not yet checked" and "untested" note scattered across docs/known-limitations.md and CHANGELOG.md's per-milestone write-ups into one place, organised by what to *do* about each one, so a future session (or James) can pick a starting point without re-reading both files cover to cover.
 
 **Keep this current.** When a caveat here gets resolved (real data checks out an assumption, a GUI gap gets filled, a threshold gets properly tuned), delete it or move it to "done" rather than leaving it stale — the same discipline HANDOVER.md itself asks for.
 
@@ -57,11 +57,17 @@ These aren't bugs — they're placeholders the milestone spec always intended to
   at t2 5–9 s but not at t2 3 s, so background suitability needs a rejection rule. BIC,
   ion apexes and MCR restarts support two stable mathematical factors near
   15 min / 1.2 s; a third is unstable and identities remain unknown.
-  The Overlap dialog now exposes the border-free candidate regions and an
-  overlapping coloured contribution map. Weak estimates are retained, shown
-  in orange and labelled low confidence; the set is reported as unresolved.
+  The Overlap dialog exposes border-free candidate regions and overlapping
+  coloured contribution maps. Durable component groups are fitted automatically,
+  persisted, manually replaceable, undoable, listed as peaks, drawn as overlapping
+  contours, searched by the identification dialog and exportable to CSV with warnings.
   A measured-alkane-template option appears once that run has an alkane ladder.
-  Component groups are still read-only and are not persisted or sent to quant.
+  On the six focus groups, ion screening reduced runtime from about 266 s to 152 s
+  and preserved the same 14 proposed components, but every group fails the present
+  quality gates (33–78% explained; weak components in four groups). Next: measured
+  or locally learned peak profiles, restart/stability and held-out prediction gates,
+  neighbouring-group reconciliation, residual search and run-wide caching. Do not
+  send component volumes to production quantification yet.
 
 - **🫧 `SiloxaneSettings.score_threshold` (0.3).** Still provisional. The reference spectrum is now measured (column bleed from the real run, with a cyclic-peak preset, table editing and click-to-pick in the 🫧 panel), but the threshold has not been chosen from a ROC curve: the real run has no labelled siloxane blobs, and with the bleed reference 873 of 4068 blobs score at or above 0.3 (nearly all in the bleed-dominated last 20 minutes). Label some blobs, then choose it. Run `tests/test_siloxane.py::test_dummy_siloxane_score_separates_real_targets_from_planted_siloxanes` when the dummy pack is to hand.
 - **⛓️ Alkane qualifier gate** is now enforced, against measured defaults (71/57 = 0.66, 85/57 = 0.44, 30% tolerance), editable in the ⛓️ panel and pickable from a clicked alkane. On the real run the ratios are steady from C13 to C28 (71/57 0.60 to 0.69, 85/57 0.37 to 0.51) but fall for lighter alkanes (C12 0.54/0.32, C11 0.48/0.25, C10 0.36/0.17), so the gate stops the ladder at C12. Lower the expected ratios or switch the gate off to extend it. The ratios also drift up slowly with carbon number, which a single expected value does not capture.

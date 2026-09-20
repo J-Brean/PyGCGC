@@ -1,7 +1,7 @@
 """Milestone 6 walkthrough: find every blob in a run, look at what makes
 each one interesting, and try the hand-editing operations.
 
-    python examples/milestone6_blobs.py path/to/dummy_gcxgc
+    python examples/tutorials/05_blob_detection.py path/to/dummy_gcxgc
 """
 
 import sys

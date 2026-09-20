@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from ...core import CalibrationFit
 

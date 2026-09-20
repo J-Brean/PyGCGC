@@ -44,7 +44,7 @@ keeps a whole run to well under a second.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 import scipy.sparse as sp

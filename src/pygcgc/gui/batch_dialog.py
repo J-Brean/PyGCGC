@@ -215,7 +215,7 @@ class BatchDialog(QtWidgets.QDialog):
         selected in the combo, the volcano groups selected, if any -- so
         the file matches what's on screen) plus provenance. The batch
         dialog has no interactive edit log of its own to add (see
-        HANDOVER.md section 5: 🗂️ is deliberately not part of the per-run
+        docs/architecture.md section 5: 🗂️ is deliberately not part of the per-run
         Project state that accumulates one), so `edits` is always empty
         here; only period, method and settings are recorded."""
         if self.result is None:

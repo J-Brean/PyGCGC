@@ -7,7 +7,7 @@ a person changed by hand along the way (`Provenance`, built by
 since a scripted `pygcgc batch` run or the batch dialog has no interactive
 review to report -- 🗂️ is deliberately decoupled from the per-run Project
 state that accumulates 🔍's edit log, 🧪's decisions and ⛓️'s stencils (see
-HANDOVER.md section 5); only a caller that has that state can pass it in.
+docs/architecture.md section 5); only a caller that has that state can pass it in.
 
 The rest of the module turns a `QuantReport` and/or a feature table into
 actual files: a formatted spreadsheet with flagged rows picked out, a

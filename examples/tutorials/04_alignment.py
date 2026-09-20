@@ -1,7 +1,7 @@
 """Milestone 5 walkthrough: align two runs on their internal standards and
 compare them.
 
-    python examples/milestone5_align.py path/to/dummy_gcxgc
+    python examples/tutorials/04_alignment.py path/to/dummy_gcxgc
 """
 
 import sys

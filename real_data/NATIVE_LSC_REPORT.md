@@ -9,7 +9,7 @@
 > and the true modulation period remain outstanding.
 
 Date: 2026-09-19. Scope: the six instrument files in this folder, especially the
-three LSC files. This report supersedes the technical conclusions in FORMAT_NOTES.md.
+three LSC files.
 
 ## Outcome
 
