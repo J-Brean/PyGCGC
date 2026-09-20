@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pygcgc"
+version = "0.12.0"
+description = "Processing and visualisation for GC×GC-EI-ToF-MS data"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "James Brean" }]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "netCDF4>=1.6",
+    "scikit-image>=0.22",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.8"]
+report = ["openpyxl>=3.1"]
+gui = ["PySide6>=6.6", "pyqtgraph>=0.13.7", "PyOpenGL>=3.1"]
+test = ["pytest>=8", "pytest-qt>=4.4", "matplotlib>=3.8", "openpyxl>=3.1", "PySide6>=6.6", "pyqtgraph>=0.13.7",
+       "PyOpenGL>=3.1"]
+
+[project.scripts]
+pygcgc = "pygcgc.cli:main"
+
+[project.gui-scripts]
+pygcgc-gui = "pygcgc.gui.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pygcgc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+qt_api = "pyside6"
+markers = ["dummy: needs the synthetic dummy data pack (skipped if not found)"]

@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.pytest_*/
+*.egg-info/
+dist/
+build/
+
+# raw and generated instrument data
+real_data/*.DAT
+real_data/*.DAX
+real_data/*.HDR
+real_data/*.lsc
+real_data/*.csv
+real_data/blob_diagnosis/

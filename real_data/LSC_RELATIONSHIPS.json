@@ -1,0 +1,18 @@
+{
+  "dbc_exact_mass_matches": 2467075,
+  "dbc_masses_not_exactly_in_raw": 816355,
+  "matched_dbc_intensities_greater_than_raw": 0,
+  "dax_records": 6721,
+  "dax_valid_blocks": 6720,
+  "dax_final_scan": 430035,
+  "dat_all_indexed_blocks_measurement_id_9131": true,
+  "dat_block_bytes_percentiles": [
+    101296.0,
+    199794.0,
+    744512.0
+  ],
+  "calibration_70eV_quadratic_residual_Da_range": [
+    -0.010193467940268874,
+    0.012501585176323715
+  ]
+}
