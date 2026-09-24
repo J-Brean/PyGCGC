@@ -1,4 +1,4 @@
-# PyGCGC
+﻿# PyGCGC
 
 A desktop app and Python package for processing comprehensive two-dimensional gas chromatography data with 70 eV electron-ionisation time-of-flight mass spectrometry (GC×GC-EI-ToF-MS). It reads native Markes FT04/SD04 `.lsc` files and ANDI (AIA) `.cdf` exports.
 
@@ -33,6 +33,8 @@ A desktop app and Python package for processing comprehensive two-dimensional ga
 | 10 | ⛓️ Hydrocarbon and isomer mapper, stencils | Done |
 | 11 | 🗂️ Cached, parallel batch pipeline, feature table, QC charts, PCA and volcano plots | Done |
 | 12 | 📤 Provenance, Excel/HTML/PDF reports, publication figures, PyInstaller spec | Done |
+| 13 | 🧩 Unsupervised clustering: peaks grouped by mass spectrum (tree or density), pixel regions with no peak detection, cross-run cluster tables, PERMANOVA, coloured chromatograms | Built; checked on one real 70 eV run and on synthetic multi-run data, not yet on a real multi-sample set |
+| 14 | 🧬 Compound classes: readable TOML rules (17 shipped classes), spectrum, ladder and 14 eV evidence, a per-blob reason, editable in a text file | Built; checked on one real run (the alkane ladder and hand-checked compounds), not against a labelled class library |
 
 All 12 milestones are done. Milestones 8, 10, 11 and 12 were built ahead of 9 while James looked into a NIST23 licence for the MS identifier; 9 was finally built too, tested against small synthetic libraries with a known answer -- **a real library (NIST or otherwise) hasn't been plugged in yet.**
 
@@ -49,6 +51,25 @@ with confidence warnings. The supplied crowded real segment still fails the curr
 quality gates, so these amounts remain review estimates and do not feed production
 quantification. See the [implementation plan](docs/MS_AWARE_COMPONENT_IMPLEMENTATION_PLAN.md).
 
+**Find peaks** now fits overlapping components across the run by default. It screens
+plausible component counts using a few diagnostic mass channels, then estimates each
+selected component's spectrum and intensity from a wider set. Opening a group allows a
+slower repeated-start refit; accepting it replaces the automatic result. Optional rapid
+proposals remain in the settings. On the supplied 215,015-scan 70 eV acquisition, file
+reading, background correction and MS-aware separation took about 154 seconds combined
+with four worker processes on the development machine, down from 344 seconds before the
+performance pass. One-worker runs took 191 to 224 seconds. Weak or
+poorly reconstructed groups remain flagged for review.
+
+The number of peaks in each local fit is chosen from the mass spectra and held-out data,
+not from the number of candidate apexes, so a shoulder with a different spectrum can be
+found and a broad single peak is not split. On planted peaks in real background this
+raised exact-count accuracy for equal pairs from 0.28 to 0.70 and cut false splits of
+broad peaks from 95% to 10%. Close, unequal pairs and tailing peaks remain poor. A 📊
+signal-accounting report shows how much of the total signal the fitted peaks explain
+(37% on the supplied file). Classify and Cluster now use the fitted peaks. See
+[docs/CLAUDE_CODE_HANDOVER.md](docs/CLAUDE_CODE_HANDOVER.md).
+
 ## Install
 
 PyGCGC needs Python 3.11 or newer. **There is no `main.py` to run** — this is a proper installable Python package (that's what `pyproject.toml` does), which is more setup than a single script but pays off as two plain commands, `pygcgc` and `pygcgc-gui`, that work from anywhere once installed.
@@ -64,7 +85,7 @@ No admin rights are needed. This installs:
 - `PySide6`, `pyqtgraph` and `PyOpenGL` (for ✂️'s 3D view) for the app
 - `matplotlib`, `openpyxl`, `pytest` and `pytest-qt` for charts, spreadsheet export and tests
 
-That's it — you only ever need to run this again if the environment gets rebuilt from scratch, or `pyproject.toml`'s dependencies change. (If you only want the core, no GUI, for scripts or a server: `uv pip install -e .` instead. The `plot` extra alone gets you matplotlib for `pygcgc fold --png` and the 📤 report charts without the full GUI; `report` alone gets you openpyxl for Excel export.)
+That's it — you only ever need to run this again if the environment gets rebuilt from scratch, or `pyproject.toml`'s dependencies change. (If you only want the core, no GUI, for scripts or a server: `uv pip install -e .` instead. The `plot` extra alone gets you matplotlib for `pygcgc fold --png` and the 📤 report charts without the full GUI; `report` alone gets you openpyxl for Excel export; `cluster` alone gets you scikit-learn, which 🧩's retention-aware method (HDBSCAN) and pixel regions need. The `gui` and `test` extras include it, and peak clustering by spectrum alone needs only scipy.)
 
 ## Quick start
 
@@ -175,7 +196,7 @@ pygcgc fold  RUN.cdf --period 4 [--phase 0.55 | --targets CSV] [--mz 178 202] [-
 pygcgc clean RUN.cdf [...] --period 4 [--phase 0.55 | --targets CSV] [--stiffness 1e4] [--percentile 20] [--outdir cleaned] [--workers 4]
 pygcgc crop  RUN.cdf --start 10 --end 14 [--mz-min 35 --mz-max 300] [-o small.cdf]
 pygcgc quant FOLDER [--period 4] [--targets CSV] [--sequence CSV] [--levels CSV] [--outdir results] [--workers 4] [--no-interpolate] [--xlsx]
-pygcgc batch FOLDER [--period 4] [--cache-dir DIR] [--workers N] [--outdir out] [--siloxane] [--no-blobs] [--no-quant] [--reference RUN] [--config pipeline.json] [--save-config pipeline.json] [--report {xlsx,html,pdf,all}]
+pygcgc batch FOLDER [--period 4] [--cache-dir DIR] [--workers N] [--outdir out] [--siloxane] [--no-blobs] [--no-quant] [--reference RUN] [--config pipeline.json] [--save-config pipeline.json] [--report {xlsx,html,pdf,all}] [--cluster] [--cluster-threshold 0.3] [--regions N]
 pygcgc gui   [FOLDER | PROJECT.json]
 
 # alignment (📍), the ⛓️ hydrocarbon mapper, ✂️ overlap and 🏷️ identify are interactive (clicking peaks, drawing stencils, picking a blob, loading a library), so they have no CLI command yet.
@@ -188,7 +209,7 @@ What each command does:
 - `clean` writes background-corrected `.cdf` files.
 - `crop` cuts out a small window, which is handy for test files and bug reports.
 - `quant` cleans, calibrates and quantifies a whole folder (runs, `sequence.csv`, `target_table.csv`, calibration levels, `method.json`) and writes the four result tables. With more than one `cal_set`, samples between blocks are interpolated by default; `--no-interpolate` uses the nearest block before each sample instead. Always writes `provenance.json`; `--xlsx` also writes `report.xlsx` with flagged rows highlighted.
-- `batch` runs the same pipeline as `quant`, plus optionally 🫧 and 🔍, across a process pool with disk caching (so re-running the same folder resumes instead of recomputing), and writes a `feature_table.csv` (with a `gap_filled` column) alongside the usual result tables when 🔍 is on. `--config` loads a saved pipeline (`BatchConfig.save`/`.load`) instead of the flags above; `--save-config` writes one out from whatever flags were given, for reuse. Always writes `provenance.json`; `--report` also writes `report.xlsx`/`.html`/`.pdf` (or all three), with a volcano plot if the loaded config's `group_a`/`group_b` each name two or more runs.
+- `batch` runs the same pipeline as `quant`, plus optionally 🫧 and 🔍, across a process pool with disk caching (so re-running the same folder resumes instead of recomputing), and writes a `feature_table.csv` (with a `gap_filled` column) alongside the usual result tables when 🔍 is on. `--config` loads a saved pipeline (`BatchConfig.save`/`.load`) instead of the flags above; `--save-config` writes one out from whatever flags were given, for reuse. Always writes `provenance.json`; `--report` also writes `report.xlsx`/`.html`/`.pdf` (or all three), with a volcano plot if the loaded config's `group_a`/`group_b` each name two or more runs. `--cluster` (needs 🔍) also pools every run's blobs and groups them by mass spectrum, writing `peak_clusters.csv` and `cluster_run_table.csv` (each cluster's percent share of each run's peak volume, plus a "Clusters" sheet with `--report xlsx`), and prints a PERMANOVA of the config's two run groups if it names any. `--regions N` divides every run into N pixel regions of similar spectrum with no peak detection and writes `region_run_table.csv` and one `region_labels_<run>.npy` per run.
 
 PowerShell doesn't expand `*.cdf`, so list the files or use Python.
 
@@ -243,6 +264,19 @@ tf = g.fit_alignment(anchors_2d)             # kind="auto": a shift here (only 2
 print(tf.summary())
 ref_fold = g.fold(runs[0], 4.0, phases[0].phase)
 aligned_tic = g.resample_to_reference(f.tic_image(clean), f, ref_fold, tf)
+
+# 🧩 group peaks by mass spectrum, pooled across runs (`result` is a BatchResult from g.run_batch)
+tables = [g.PeakTable.from_blobs(p.blobs, name) for name, p in result.prepped.items()]
+table = g.PeakTable.concat(tables)
+clusters = g.cluster_peaks(table, g.ClusterSettings())          # tree; method="density" adds retention
+names = list(result.prepped)
+features = g.cluster_features(table, clusters, names, relative=True)   # one Feature per cluster: the run table
+groups = ["control", "control", "exposed", "exposed"]               # one label per run in `names`
+print(g.permanova(g.feature_table_matrix(features, names), groups))    # (pseudo-F, p)
+
+# 🧩 or divide a run into pixel regions with no peak detection (needs scikit-learn)
+model, labels = g.segment_pixels(clean, f, g.SegmentSettings(n_regions=12))   # labels: (rows, modulations), -1 = baseline
+print(model.top_ions(0), g.region_shares(labels, clean, f, len(model)))
 ```
 
 ## Projects

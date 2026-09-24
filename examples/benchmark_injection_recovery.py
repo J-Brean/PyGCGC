@@ -7,6 +7,7 @@ local fitting under background interference rather than realistic peak shape.
 
 from pathlib import Path
 from types import SimpleNamespace
+import argparse
 import json
 
 import numpy as np
@@ -14,11 +15,18 @@ from scipy import sparse
 from scipy.optimize import linear_sum_assignment
 
 from pygcgc import (BlobCube, Run, candidate_cube, candidate_regions,
-                    find_candidates, fit_overlap, fold, mcr_restarts,
+                    find_candidates, fit_overlap, fit_shapes_fast, fold, initialise_overlap, mcr_restarts,
+                    refit_spectra,
                     remove_background)
 from pygcgc.core.background import storage_threshold
 from pygcgc.core.peaks import Frame
 
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--fast-only", action="store_true")
+parser.add_argument("--max-sigma-row", type=float, default=3.0)
+parser.add_argument("--max-nfev", type=int, default=24)
+args = parser.parse_args()
 
 root = Path(__file__).resolve().parents[1]
 data_dir = root / "real_data" / "blob_diagnosis"
@@ -82,9 +90,16 @@ for separation_rows in (3, 6, 10):
         cube = BlobCube(injected, mask, ions, row0, col0, folded.row_pitch,
                         folded.spec.period, float(folded.t1[0]))
         hints = [SimpleNamespace(row=row, col=col) for row, col in centres]
-        fit = fit_overlap(cube, 2, model="gaussian", include_background=True,
-                          background_order=1, n_starts=8, seed=separation_rows,
-                          apex_hint=hints)
+        if args.fast_only:
+            fit = refit_spectra(
+                fit_shapes_fast(cube, 2, model="gaussian", apex_hint=hints,
+                                max_sigma_row=args.max_sigma_row,
+                                max_nfev=args.max_nfev), cube,
+                include_background=True, background_order=1)
+        else:
+            fit = fit_overlap(cube, 2, model="gaussian", include_background=True,
+                              background_order=1, n_starts=8, seed=separation_rows,
+                              apex_hint=hints)
         recovered_spectra = np.asarray([component.spectrum for component in fit.components])
         truth_unit = spectra / np.maximum(np.linalg.norm(spectra, axis=1)[:, None], 1e-12)
         recovered_unit = recovered_spectra / np.maximum(
@@ -103,7 +118,10 @@ for separation_rows in (3, 6, 10):
             "spectral_cosine": cosine[truth_idx, recovered_idx].tolist(),
             "converged": fit.converged,
         })
-        print(separation_rows, minor_ratio, np.round(errors, 3), flush=True)
+        shape_summary = [(round(c.row0, 2), round(c.col0, 2),
+                          round(c.sigma_row, 2), round(c.sigma_col, 2))
+                         for c in fit.components]
+        print(separation_rows, minor_ratio, np.round(errors, 3), shape_summary, flush=True)
 
 summary = {
     "method": "ideal Gaussian profiles and two real MCR spectral factors injected into real background",
@@ -113,4 +131,7 @@ summary = {
                                  for case in results)),
     "total_cases": len(results),
 }
-(data_dir / "injection_metrics.json").write_text(json.dumps(summary, indent=2))
+suffix = f"_row{args.max_sigma_row:g}" if args.max_sigma_row != 3.0 else ""
+suffix += f"_nfev{args.max_nfev}" if args.max_nfev != 24 else ""
+(data_dir / (f"fast_injection_metrics{suffix}.json" if args.fast_only else
+             "injection_metrics.json")).write_text(json.dumps(summary, indent=2))

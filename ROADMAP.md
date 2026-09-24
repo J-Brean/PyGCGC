@@ -1,4 +1,4 @@
-# ROADMAP: what's left, what's shaky, what's missing
+﻿# ROADMAP: what's left, what's shaky, what's missing
 
 All 12 planned milestones are built (see README.md's Status table and docs/milestone-specs.md for what each one actually delivered). This file pulls every "provisional," "not built," "not yet checked" and "untested" note scattered across docs/known-limitations.md and CHANGELOG.md's per-milestone write-ups into one place, organised by what to *do* about each one, so a future session (or James) can pick a starting point without re-reading both files cover to cover.
 
@@ -45,7 +45,8 @@ These aren't bugs — they're placeholders the milestone spec always intended to
   audit and first implementation are in `docs/BLOB_DIAGNOSIS_AND_PLAN.md`.
   Per-ion candidates plus TIC prominence remove candidate centres from the
   reviewed background comparison band while retaining 21 in the crowded focus.
-  Ideal-profile injection into real background now passes 4 of 9 conditions;
+  The fast shared-width fit passes 5 of 9 ideal-profile injections into real
+  background (the older unrestricted fit passed 4 of 9);
   equal peaks pass down to 0.06 s, but every 10%-minor case fails. Annotate
   known/isolated/weak/held-out windows before making it the default or using
   fitted factors for quantification. It is now a saved first-class method beside
@@ -62,12 +63,23 @@ These aren't bugs — they're placeholders the milestone spec always intended to
   persisted, manually replaceable, undoable, listed as peaks, drawn as overlapping
   contours, searched by the identification dialog and exportable to CSV with warnings.
   A measured-alkane-template option appears once that run has an alkane ladder.
-  On the six focus groups, ion screening reduced runtime from about 266 s to 152 s
-  and preserved the same 14 proposed components, but every group fails the present
-  quality gates (33–78% explained; weak components in four groups). Next: measured
-  or locally learned peak profiles, restart/stability and held-out prediction gates,
+  Complete-link grouping now prevents candidate chains from forming huge calculation
+  windows. The ten-minute cache has 120 bounded regions and takes about 13 s; the full
+  supplied file takes 68 s for detection/separation with four worker processes after
+  preparation (154 s including reading and background correction). Most crowded
+  focus groups still fail the present explained-signal gate. Next: measured or locally learned
+  peak profiles and held-out prediction gates,
   neighbouring-group reconciliation, residual search and run-wide caching. Do not
   send component volumes to production quantification yet.
+  Production spectra use 30 ions after eight-ion count/shape screening. Weak components
+  remain visible and explicitly low confidence; do not send their volumes to production
+  quantification yet. Four worker processes now cut the supplied full-file separation to
+  68 s; a bounded job queue avoids retaining every local cube at once. Increasing the
+  fast optimizer limit from 12 to 24 steps reduces premature non-convergence flags on
+  the ten-minute segment (37 to 10), but still leaves 110 of 120 regions unresolved.
+  Widening the Gaussian width limit worsened known-area recovery (5/9 to 1/9), so it
+  is not a route to trustworthy weak-component amounts. The next accuracy decision
+  needs annotated known peaks or a known co-eluting standard mix.
 
 - **🫧 `SiloxaneSettings.score_threshold` (0.3).** Still provisional. The reference spectrum is now measured (column bleed from the real run, with a cyclic-peak preset, table editing and click-to-pick in the 🫧 panel), but the threshold has not been chosen from a ROC curve: the real run has no labelled siloxane blobs, and with the bleed reference 873 of 4068 blobs score at or above 0.3 (nearly all in the bleed-dominated last 20 minutes). Label some blobs, then choose it. Run `tests/test_siloxane.py::test_dummy_siloxane_score_separates_real_targets_from_planted_siloxanes` when the dummy pack is to hand.
 - **⛓️ Alkane qualifier gate** is now enforced, against measured defaults (71/57 = 0.66, 85/57 = 0.44, 30% tolerance), editable in the ⛓️ panel and pickable from a clicked alkane. On the real run the ratios are steady from C13 to C28 (71/57 0.60 to 0.69, 85/57 0.37 to 0.51) but fall for lighter alkanes (C12 0.54/0.32, C11 0.48/0.25, C10 0.36/0.17), so the gate stops the ladder at C12. Lower the expected ratios or switch the gate off to extend it. The ratios also drift up slowly with carbon number, which a single expected value does not capture.
@@ -81,6 +93,7 @@ These aren't bugs — they're placeholders the milestone spec always intended to
 - **🗂️ Comparisons James wants:** similar-sample pairs, samples against blanks, samples against standard mixes. Check the feature-matching radius on these with real data.
 - **Internal-standard pairing.** Default is nearest by normalised (t1, t2) distance; consider making the target table's `istd` column optional (auto nearest) once the real internal-standard list exists.
 - **✂️ BbF/BkF and benz[a]anthracene/chrysene** (both in the dummy data) are the natural first real test of `fit_overlap`/`choose_k`/`mcr_als` against the milestone's own 10% acceptance target.
+- **🧩 Every default, on a real multi-sample set.** Run **Scan distances** and **Check stability** on real samples before trusting the merge distance (0.3), and try pixel regions pooled across runs with PQN on, then **Test groups**, on samples whose groups you already know differ. The cross-run tables, PQN and PERMANOVA have only seen synthetic runs. Also check that an internal standard or a known spiked compound falls in the cluster or region you expect, and that replicate injections cluster together (a replicate PERMANOVA should not separate them).
 
 ## 2. Built in `core/`, not reachable from the GUI
 
@@ -107,8 +120,8 @@ Done 2026-09-20. `gui/dialogs.SettingsDialog` builds a form from any settings da
   apexes and stable MCR restarts support two mathematical components; spatial
   holdout gives only a small further gain at three. Known-area injection into a
   real background passes the 10% area target for equal peaks down to 0.06 s and
-  for a 30% minor peak at 0.20 s, but weak/close peaks fail badly (only 4 of 9
-  cases pass overall). Measured isolated profiles, held-out annotations and
+  for a 30% minor peak at 0.20 s. The current fast shared-width fit passes 5 of 9
+  cases overall, while 10%-minor peaks still fail. Measured isolated profiles, held-out annotations and
   window/noise perturbations are still required before quantification integration.
 - **✂️ MCR-ALS unimodality** is a cheap capping-toward-the-peak approximation, not a true isotonic-regression projection.
 - **✂️ PARAFAC2 was never built at all** — PARAFAC assumes every run's own elution profile has the same shape; PARAFAC2 would tolerate per-run retention-time drift, but needs materially more machinery, and there's no real multi-run drift yet to say it's worth building.
@@ -117,7 +130,8 @@ Done 2026-09-20. `gui/dialogs.SettingsDialog` builds a form from any settings da
 - **🗂️ The feature-matching radius and gap-fill window** (`max_distance`, `t1_half_s`/`t2_half_s`) are fixed constants; whether they should scale with real peak width (from 🔍) is unknown.
 - **🗂️ Progress reporting** is a single job message, not a per-run progress bar.
 - **📤 Reports never carry a real manual-edit log** (see section 2 above — the mechanism exists, nothing populates it yet).
-- **📦 The PyInstaller spec (`packaging/pygcgc.spec`) has never been built, on any platform.** There was no environment with PyInstaller available while writing it. Before trusting it: install PyInstaller, build it, run the frozen app against the dummy data pack, and add whatever `hiddenimports` its own build warnings ask for.
+- **📦 The PyInstaller spec (`packaging/pygcgc.spec`) has never been built, on any platform.** There was no environment with PyInstaller available while writing it. Before trusting it: install PyInstaller, build it, run the frozen app against the dummy data pack, and add whatever `hiddenimports` its own build warnings ask for. It now also lists scikit-learn's usual dynamic imports (for 🧩), untested for the same reason.
+- **🧩 What is simplified in the clustering.** Retention time is left out of the distance by default so runs need no alignment to compare (the density method adds it, and then pooled runs should be aligned). Peak clusters use average-linkage on the largest 5,000 peaks and place the rest by nearest centroid. Pixel regions are k-means on truncated-SVD spectra, smoothed afterwards, not a spatially aware model, and their number is chosen by hand. The run table is scaled to percent of each run's own total, optionally PQN; there is no internal-standard normalisation, centred log-ratio (negative values break the existing PCA's log transform) or QC drift correction. Cluster results and names are not saved in the project.
 
 ## 5. Real gaps against the original design spec (not simplifications — just not done)
 

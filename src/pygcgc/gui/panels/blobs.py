@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..blob_state import LEGACY, MS_AWARE
 
@@ -24,6 +24,8 @@ class BlobsPanel(QtWidgets.QWidget):
     mergeRequested = QtCore.Signal(list)
     rowActivated = QtCore.Signal(int)
     selectionChanged = QtCore.Signal(list)
+    exportRequested = QtCore.Signal()
+    accountingRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -31,11 +33,12 @@ class BlobsPanel(QtWidgets.QWidget):
         self.candidates = None
         self.regions = None
         self.component_set = None
-        self.method = LEGACY
+        self.method = MS_AWARE
         self.current_run: str | None = None
         self._updating = False
         self._row_regions: list[int] = []
         self._row_components: list = []
+        self._row_groups: list = []
 
         self.method_box = QtWidgets.QComboBox()
         self.method_box.addItem("MS-aware separation", MS_AWARE)
@@ -52,7 +55,7 @@ class BlobsPanel(QtWidgets.QWidget):
         self.explanation.setWordWrap(True)
         self.find_btn = QtWidgets.QPushButton("Find peaks")
         self.find_btn.clicked.connect(self.findRequested)
-        self.resolve_btn = QtWidgets.QPushButton("Resolve selected region…")
+        self.resolve_btn = QtWidgets.QPushButton("Inspect/refit selected blob…")
         self.resolve_btn.clicked.connect(self._resolve_selected)
         self.add_btn = QtWidgets.QPushButton("➕ Add")
         self.add_btn.clicked.connect(self.addRequested)
@@ -60,6 +63,14 @@ class BlobsPanel(QtWidgets.QWidget):
         self.merge_btn.clicked.connect(self._merge_selected)
         self.delete_btn = QtWidgets.QPushButton("Delete")
         self.delete_btn.clicked.connect(self._delete_selected)
+        self.export_btn = QtWidgets.QPushButton("Export peaks CSV…")
+        self.export_btn.clicked.connect(self.exportRequested)
+        self.account_btn = QtWidgets.QPushButton("📊 Signal accounting")
+        self.account_btn.setToolTip("How much of the run's total signal the fitted peaks explain, and where the rest is.")
+        self.account_btn.clicked.connect(self.accountingRequested)
+        self.accounting = QtWidgets.QLabel("")
+        self.accounting.setWordWrap(True)
+        self.accounting.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
 
         self.table = QtWidgets.QTableWidget(0, len(LEGACY_COLUMNS))
         self.table.setHorizontalHeaderLabels(LEGACY_COLUMNS)
@@ -74,7 +85,8 @@ class BlobsPanel(QtWidgets.QWidget):
         self.status.setWordWrap(True)
 
         buttons = QtWidgets.QHBoxLayout()
-        for widget in (self.find_btn, self.resolve_btn, self.add_btn, self.merge_btn, self.delete_btn):
+        for widget in (self.find_btn, self.resolve_btn, self.add_btn, self.merge_btn,
+                       self.delete_btn, self.export_btn, self.account_btn):
             buttons.addWidget(widget)
         buttons.addStretch(1)
         layout = QtWidgets.QVBoxLayout(self)
@@ -83,8 +95,9 @@ class BlobsPanel(QtWidgets.QWidget):
         layout.addWidget(self.explanation)
         layout.addLayout(buttons)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.accounting)
         layout.addWidget(self.status)
-        self.set_method(LEGACY)
+        self.set_method(MS_AWARE)
 
     def set_method(self, method: str) -> None:
         self.method = method
@@ -95,9 +108,8 @@ class BlobsPanel(QtWidgets.QWidget):
         self.method_box.blockSignals(False)
         ms_aware = method == MS_AWARE
         self.explanation.setText(
-            "Finds peak centres from ions that independently agree, then groups nearby centres into "
-            "shared analysis regions. The rectangles are work areas, not claims that one compound owns "
-            "every enclosed pixel." if ms_aware else
+            "Fits a list of overlapping peaks using both position and mass spectrum. Each row and "
+            "colour is one proposed peak; unresolved estimates remain visible with a warning." if ms_aware else
             "Finds peaks on one combined intensity surface and assigns each pixel to one hard-edged blob. "
             "Kept for compatibility with existing siloxane, ladder and library-search tools.")
         columns = REGION_COLUMNS if ms_aware else LEGACY_COLUMNS
@@ -126,37 +138,22 @@ class BlobsPanel(QtWidgets.QWidget):
         if self.component_set is not None and self.component_set.components:
             self._fill_components(stale, running)
             return
-        self.table.setColumnCount(len(REGION_COLUMNS))
-        self.table.setHorizontalHeaderLabels(REGION_COLUMNS)
-        self._row_regions = list(range(0 if regions is None else len(regions)))
-        self._row_components = [None] * len(self._row_regions)
-        count = 0 if regions is None else len(regions)
-        self.table.setRowCount(count)
-        for row, region in enumerate(regions or []):
-            indices = np.asarray(region.candidate_indices, dtype=int)
-            strongest = int(indices[np.argmax(candidates.score[indices])])
-            support = {int(mz) for i in indices for mz in candidates.support_ions[i]}
-            accepted = (self.component_set.group_for_region(row)
-                        if self.component_set is not None else None)
-            values = (str(row), f"{candidates.t1[strongest] / 60:.3f}",
-                      f"{candidates.t2[strongest]:.3f}", str(len(indices)),
-                      str(len(accepted.components)) if accepted is not None else "",
-                      str(len(support)), f"{candidates.score[strongest]:.1f}",
-                      f"{(region.col1-region.col0)*candidates.period:.1f}",
-                      f"{(region.row1-region.row0)*candidates.pitch:.3f}")
-            self._set_row(row, values)
+        self.table.setColumnCount(len(COMPONENT_COLUMNS))
+        self.table.setHorizontalHeaderLabels(COMPONENT_COLUMNS)
+        self._row_regions = []
+        self._row_components = []
+        self._row_groups = []
+        self.table.setRowCount(0)
         if running:
-            self.status.setText(f"Finding MS-aware peak regions on {self.current_run}…")
+            self.status.setText(f"Finding overlapping peaks on {self.current_run}…")
         elif regions is None:
-            self.status.setText("No MS-aware detection has been run on this data yet." if self.current_run else "")
+            self.status.setText("Press Find peaks to detect overlapping blobs automatically."
+                                if self.current_run else "")
         elif stale:
-            self.status.setText(f"{count} regions, out of date. Find peaks to refresh.")
+            self.status.setText("Peak results are out of date. Press Find peaks to refresh.")
         else:
-            accepted = (len(self.component_set.components)
-                        if self.component_set is not None else 0)
-            self.status.setText(
-                f"{count} analysis regions from {len(candidates)} candidate centres; "
-                f"{accepted} accepted overlapping component{'s' if accepted != 1 else ''}. ")
+            self.status.setText("No overlapping blobs were fitted. Enable automatic separation "
+                                "in detection settings and press Find peaks.")
 
     def _fill_components(self, stale: bool, running: bool) -> None:
         self.table.setColumnCount(len(COMPONENT_COLUMNS))
@@ -165,12 +162,14 @@ class BlobsPanel(QtWidgets.QWidget):
                 for component in group.components]
         self._row_regions = [group.region_index for group, _component in rows]
         self._row_components = [component for _group, component in rows]
+        self._row_groups = [group for group, _component in rows]
         self.table.setRowCount(len(rows))
         for row, (group, component) in enumerate(rows):
             order = np.argsort(component.spectrum)[::-1]
             ions = [f"{component.mz[index]:g}" for index in order[:3]
                     if component.spectrum[index] > 0]
-            confidence = component.confidence
+            confidence = ("candidate proposal" if group.warning.startswith("rapid candidate proposals")
+                          else component.confidence)
             if group.unresolved:
                 confidence += " / unresolved group"
             values = (str(row), f"{component.t1 / 60:.3f}", f"{component.t2:.3f}",
@@ -178,19 +177,44 @@ class BlobsPanel(QtWidgets.QWidget):
                       f"{100 * component.relative_to_largest:.0f}%", ", ".join(ions),
                       confidence, str(group.region_index))
             self._set_row(row, values)
+            confidence_item = self.table.item(row, 6)
+            if component.confidence == "low":
+                confidence_item.setForeground(QtGui.QColor("#ff9f43"))
+            detail = group.warning or "No automatic quality warning"
+            confidence_item.setToolTip(detail)
+            explained_text = (f"{100 * group.explained_fraction:.1f}%"
+                              if np.isfinite(group.explained_fraction) else "not measured")
+            bic_text = (f"{group.bic_gap:.1f}"
+                        if np.isfinite(group.bic_gap) else "not applicable")
+            spread_text = (f"{group.restart_position_spread:.2f} pixels"
+                           if np.isfinite(group.restart_position_spread) else "not checked")
+            self.table.item(row, 7).setToolTip(
+                f"Explained fraction: {explained_text}\n"
+                f"BIC gap: {bic_text}\n"
+                f"Restart position spread: {spread_text}\n"
+                f"{detail}")
         if running:
             self.status.setText(f"Separating overlapping components on {self.current_run}…")
         else:
             unresolved = sum(group.unresolved for group in self.component_set.groups)
             stale_note = " Results are out of date." if stale else ""
-            self.status.setText(
-                f"{len(rows)} overlapping components in {len(self.component_set.groups)} groups; "
-                f"{unresolved} unresolved group{'s' if unresolved != 1 else ''}.{stale_note}")
+            proposals = sum(group.warning.startswith("rapid candidate proposals")
+                            for group in self.component_set.groups)
+            if proposals:
+                self.status.setText(
+                    f"{len(rows)} rapid peak proposals in {len(self.component_set.groups)} groups. "
+                    "Open a group to jointly separate its overlapping spectra."
+                    f"{stale_note}")
+            else:
+                self.status.setText(
+                    f"{len(rows)} overlapping blobs found automatically; "
+                    f"{unresolved} unresolved group{'s' if unresolved != 1 else ''}.{stale_note}")
 
     def _fill_blobs(self, stale, running, siloxane_scores, siloxane_threshold) -> None:
         blobs = self.blobs
         self._row_regions = []
         self._row_components = []
+        self._row_groups = []
         count = 0 if blobs is None else len(blobs)
         self.table.setRowCount(count)
         for i in range(count):
@@ -232,6 +256,9 @@ class BlobsPanel(QtWidgets.QWidget):
         self._updating = False
         self._refresh_buttons()
 
+    def show_accounting(self, text: str) -> None:
+        self.accounting.setText(text)
+
     def selected_indices(self) -> list[int]:
         return sorted({index.row() for index in self.table.selectedIndexes()})
 
@@ -240,6 +267,9 @@ class BlobsPanel(QtWidgets.QWidget):
 
     def component_for_row(self, row: int):
         return self._row_components[row] if 0 <= row < len(self._row_components) else None
+
+    def group_for_row(self, row: int):
+        return self._row_groups[row] if 0 <= row < len(self._row_groups) else None
 
     def selected_region_indices(self) -> list[int]:
         return sorted({self._row_regions[row] for row in self.selected_indices()
@@ -277,6 +307,13 @@ class BlobsPanel(QtWidgets.QWidget):
         self.merge_btn.setVisible(legacy)
         self.delete_btn.setEnabled(legacy and selected >= 1)
         self.delete_btn.setVisible(legacy)
+        has_components = (self.component_set is not None
+                          and bool(self.component_set.components))
+        self.export_btn.setVisible(not legacy)
+        self.export_btn.setEnabled(not legacy and has_components)
+        self.account_btn.setVisible(not legacy)
+        self.account_btn.setEnabled(not legacy and has_components)
+        self.accounting.setVisible(not legacy)
 
     def _resolve_selected(self) -> None:
         rows = self.selected_indices()

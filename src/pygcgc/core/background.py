@@ -38,13 +38,16 @@ so where most pixels are empty the noise can't be measured; there it is
 set to a third of the storage threshold.
 
 Only ions that actually carry background are processed in steps 1 to 3
-(an ion whose pixels are mostly empty has a background of zero), which
-keeps a whole run to well under a second.
+(an ion whose pixels are mostly empty has a background of zero). Independent
+ion surfaces are filtered concurrently; large native acquisitions still take
+time proportional to their scans and mass channels.
 """
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
+import os
 
 import numpy as np
 import scipy.sparse as sp
@@ -386,7 +389,7 @@ def remove_background(run: Run, fold: Fold, settings: BackgroundSettings = Backg
     removed_spikes = np.asarray(run.data.sum(axis=0)).ravel() - np.asarray(work.data.sum(axis=0)).ravel()
     baselines: dict[int, np.ndarray] = {}
     complete = fold.complete
-    for k, j in enumerate(candidates):
+    def background_for_ion(j):
         a, b_ = csc.indptr[j], csc.indptr[j + 1]
         rows = csc.indices[a:b_]
         xic = np.zeros(run.n_scans)
@@ -396,9 +399,27 @@ def remove_background(run: Run, fold: Fold, settings: BackgroundSettings = Backg
         bg = base[col_of_scan[rows]]
         if pattern is not None:
             bg = bg + pattern[row_of_scan[rows], col_of_scan[rows]]
-        csc.data[a:b_] -= bg.astype(csc.data.dtype)
-        removed[j] += float(bg.sum())
-        baselines[int(run.mz[j])] = base
+        return int(j), rows, bg, base
+
+    # The rolling percentile is implemented in SciPy and releases the GIL.
+    # Ion surfaces are independent, so a small thread pool gives useful CPU
+    # parallelism without copying the full sparse run into Windows processes.
+    worker_count = min(4, max(1, os.cpu_count() or 1), max(len(candidates), 1))
+    if worker_count > 1:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            backgrounds = executor.map(background_for_ion, candidates)
+            for j, rows, bg, base in backgrounds:
+                a, b_ = csc.indptr[j], csc.indptr[j + 1]
+                csc.data[a:b_] -= bg.astype(csc.data.dtype)
+                removed[j] += float(bg.sum())
+                baselines[int(run.mz[j])] = base
+    else:
+        for candidate in candidates:
+            j, rows, bg, base = background_for_ion(candidate)
+            a, b_ = csc.indptr[j], csc.indptr[j + 1]
+            csc.data[a:b_] -= bg.astype(csc.data.dtype)
+            removed[j] += float(bg.sum())
+            baselines[int(run.mz[j])] = base
 
     blank_scale: dict[int, float] = {}
     if s.subtract_blank and blank is not None and blank_fold is not None:

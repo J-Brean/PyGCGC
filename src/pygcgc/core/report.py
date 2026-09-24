@@ -125,7 +125,8 @@ def _clean(v):
 
 # ------------------------------------------------------------- Excel
 def write_excel(path, *, report: QuantReport | None = None, feature_table: list | None = None,
-                run_names: list | None = None, provenance: Provenance | None = None) -> Path:
+                run_names: list | None = None, provenance: Provenance | None = None,
+                cluster_table: list | None = None) -> Path:
     """One workbook, one sheet per table, a light fill on any row that
     needs a look: a target result flagged or not "ok", a calibration that
     didn't pass, an internal standard out of tolerance, or a feature whose
@@ -177,6 +178,11 @@ def write_excel(path, *, report: QuantReport | None = None, feature_table: list 
             row["gap_filled"] = "; ".join(n for n in names if f.filled.get(n))
             rows.append(row)
         sheet("Feature table", rows, flagged=lambda r: bool(r["gap_filled"]), fill=filled_fill)
+
+    if cluster_table:
+        names = run_names or sorted({n for f in cluster_table for n in f.volumes})
+        sheet("Clusters", [{"cluster": f.id, "t1_min": f.ref_t1 / 60.0, "t2_s": f.ref_t2,
+                            **{n: f.volumes.get(n) for n in names}} for f in cluster_table])
 
     if provenance is not None:
         ws = wb.create_sheet("Provenance")
@@ -285,6 +291,117 @@ def chromatogram_caption(name: str, ion: str, scale: str, t1_range_min, t2_range
             f"{scale_txt} scale. The modulation period was {period:g} s and the phase {phase:.3f} s. "
             f"Data: {processing}. [Add site, period of sampling, instrument settings and the colour-scale "
             f"limits before submission.]\n")
+
+
+def cluster_rgb(image, clusters, colour_clusters, levels=None, scale: str = "log") -> np.ndarray:
+    """A chromatogram coloured by cluster, as (rows, modulations, 3) floats.
+    Hue is the cluster and brightness is the signal, so the picture still
+    reads as a chromatogram. `clusters` is the label of each pixel (-1 outside
+    every clustered peak); the clusters in `colour_clusters` get one colour
+    each, in order, other clustered pixels share a light grey, and pixels
+    outside any clustered peak are dim grey."""
+    from .cluster import CLUSTER_COLOURS, OTHER_COLOUR
+    img = np.asarray(image, dtype=float)
+    disp = {"log": lambda a: np.log10(1.0 + np.clip(a, 0, None)), "sqrt": lambda a: np.sqrt(np.clip(a, 0, None)),
+            "linear": lambda a: a}[scale](img)
+    if levels is None:
+        finite = disp[np.isfinite(disp)]
+        levels = (float(np.quantile(finite, 0.5)), float(np.quantile(finite, 0.9995)))
+    bright = np.clip((disp - levels[0]) / max(levels[1] - levels[0], 1e-12), 0.0, 1.0)
+    clusters = np.asarray(clusters, dtype=int)
+    size = max(int(clusters.max()), max(colour_clusters, default=-1)) + 2
+    palette = np.full((size, 3), OTHER_COLOUR, dtype=float) / 255.0     # index -1 wraps to the last row
+    for slot, k in enumerate(colour_clusters):
+        palette[k] = np.asarray(CLUSTER_COLOURS[slot % len(CLUSTER_COLOURS)], dtype=float) / 255.0
+    palette[-1] = 0.0
+    colour = palette[np.where(clusters >= 0, clusters, -1)]
+    inside = (clusters >= 0)[..., None]
+    # Footprints reach down to low S/N, so a floor here would paint the whole baseline. Coloured pixels get
+    # only a faint floor and are otherwise as bright as the signal; pixels outside any peak are kept dimmer.
+    return np.where(inside, colour * (0.08 + 0.92 * bright)[..., None], (0.4 * bright)[..., None] * np.ones(3))
+
+
+def plot_cluster_chromatogram(image, clusters, t1_start_s, t2_s, colour_clusters, labels=None, t1_range_min=None,
+                              t2_range_s=None, levels=None, scale: str = "log", width_mm: float = 89.0):
+    """The chromatogram coloured by which cluster each peak falls in, as a
+    publication figure: boxed axes with inward ticks, Arial 7 to 8 pt, no
+    title, a frameless key inside the panel. `labels` maps a cluster to its
+    key text (default "c<k>"). Arguments as `plot_chromatogram`, plus the
+    per-pixel `clusters` and the `colour_clusters` that get a colour each."""
+    from matplotlib.patches import Patch
+    from .cluster import CLUSTER_COLOURS, OTHER_COLOUR
+    plt = _agg_pyplot()
+    plt.rcParams.update({"font.family": ["Arial", "Helvetica", "DejaVu Sans"], "font.size": 7})
+    rgb = cluster_rgb(image, clusters, colour_clusters, levels, scale)
+    t1 = np.asarray(t1_start_s, dtype=float) / 60.0
+    t2 = np.asarray(t2_s, dtype=float)
+    dt1, dt2 = (t1[1] - t1[0] if t1.size > 1 else 0.0), (t2[1] - t2[0] if t2.size > 1 else 0.0)
+    fig, ax = plt.subplots(figsize=(width_mm / 25.4, width_mm / 25.4 * 0.9), dpi=300)
+    ax.imshow(rgb, origin="lower", aspect="auto", interpolation="nearest",
+              extent=[t1[0], t1[-1] + dt1, t2[0] - 0.5 * dt2, t2[-1] + 0.5 * dt2])
+    ax.set_xlim(*(t1_range_min if t1_range_min is not None else (t1[0], t1[-1] + dt1)))
+    ax.set_ylim(*(t2_range_s if t2_range_s is not None else (t2[0] - 0.5 * dt2, t2[-1] + 0.5 * dt2)))
+    ax.set_xlabel("First-dimension retention time (min)", fontsize=8)
+    ax.set_ylabel("Second-dimension retention time (s)", fontsize=8)
+    ax.tick_params(direction="in", top=True, right=True, length=3, width=0.5, labelsize=7, color="white")
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.6)
+    labels = labels or {}
+    handles = [Patch(facecolor=np.asarray(CLUSTER_COLOURS[i % len(CLUSTER_COLOURS)]) / 255.0, edgecolor="none",
+                     label=labels.get(k, f"c{k}")) for i, k in enumerate(colour_clusters)]
+    if np.isin(np.unique(clusters), list(colour_clusters) + [-1], invert=True).any():
+        handles.append(Patch(facecolor=np.asarray(OTHER_COLOUR) / 255.0, edgecolor="none", label="other clusters"))
+    if handles:
+        ax.legend(handles=handles, loc="upper left", frameon=False, fontsize=7, labelcolor="white", handlelength=0.9,
+                  handleheight=0.9, handletextpad=0.4, labelspacing=0.15, borderaxespad=0.4)
+    fig.subplots_adjust(left=0.13, right=0.98, bottom=0.12, top=0.98)
+    return fig
+
+
+def cluster_caption(name: str, colour_clusters, labels: dict, n_peaks: int, n_clustered: int, unassigned_percent: float,
+                    settings, scale: str, t1_range_min, t2_range_s, period: float, phase: float, processing: str) -> str:
+    """The sibling caption text for `plot_cluster_chromatogram`, in the house style."""
+    win = ""
+    if t1_range_min is not None and t2_range_s is not None:
+        win = (f" The window spans t₁ = {t1_range_min[0]:.1f} to {t1_range_min[1]:.1f} min and "
+               f"t₂ = {t2_range_s[0]:.2f} to {t2_range_s[1]:.2f} s.")
+    scale_txt = {"log": "log₁₀(1 + signal)", "sqrt": "square-root", "linear": "linear"}[scale]
+    key = "; ".join(f"{labels.get(k, f'c{k}')}" for k in colour_clusters)
+    cut = (f"the tree was cut into {settings.n_clusters} groups" if settings.n_clusters
+           else f"the tree was cut at a cosine distance of {settings.distance_threshold:g}")
+    return (f"GC×GC–EI-ToF-MS chromatogram of {name} with each peak coloured by the spectral cluster it belongs to.{win} "
+            f"Hue gives the cluster and brightness the signal on a {scale_txt} scale. Coloured clusters, largest first by "
+            f"volume, are {key}; the key lists the ions with the largest share of each cluster's ion current. Light grey "
+            f"marks all other clusters and dark grey the pixels outside any clustered peak. Peaks ({n_peaks} detected, "
+            f"{n_clustered} clustered, {unassigned_percent:.1f}% of the peak volume unassigned) were grouped from their "
+            f"mass spectra alone by average-linkage hierarchical clustering of the cosine distance between spectra weighted "
+            f"as intensity^{settings.weight_a:g} × m/z^{settings.weight_b:g} over m/z ≥ {settings.mz_min}; {cut}, and groups of "
+            f"fewer than {settings.min_cluster_size} peaks were not called clusters. The modulation period was {period:g} s "
+            f"and the phase {phase:.3f} s. Data: {processing}. [Add site, sampling period and instrument settings before "
+            f"submission.]\n")
+
+
+def region_caption(name: str, colour_regions, labels: dict, n_regions: int, labelled_percent: float, n_runs: int,
+                   settings, scale: str, t1_range_min, t2_range_s, period: float, phase: float, processing: str) -> str:
+    """The sibling caption text for a pixel-region figure (`core.segment`), in the house style."""
+    win = ""
+    if t1_range_min is not None and t2_range_s is not None:
+        win = (f" The window spans t₁ = {t1_range_min[0]:.1f} to {t1_range_min[1]:.1f} min and "
+               f"t₂ = {t2_range_s[0]:.2f} to {t2_range_s[1]:.2f} s.")
+    scale_txt = {"log": "log₁₀(1 + signal)", "sqrt": "square-root", "linear": "linear"}[scale]
+    key = "; ".join(f"{labels.get(k, f'r{k}')}" for k in colour_regions)
+    fitted = "this run" if n_runs == 1 else f"{n_runs} runs together"
+    return (f"GC×GC–EI-ToF-MS chromatogram of {name} divided into regions of similar mass spectrum, with no peak detection.{win} "
+            f"Hue gives the region and brightness the signal on a {scale_txt} scale. Coloured regions, largest first by "
+            f"signal, are {key}; the key lists the ions with the largest share of each region's ion current. Light grey marks "
+            f"all other regions and dark grey the {100.0 - labelled_percent:.0f}% of pixels that were baseline. The spectra of "
+            f"the brightest scans (above the {settings.keep_percentile:g}th percentile of the total signal) were weighted as "
+            f"intensity^{settings.weight_a:g} × m/z^{settings.weight_b:g} over m/z ≥ {settings.mz_min}, scaled to unit length, "
+            f"reduced to {settings.n_components} directions by truncated singular value decomposition and grouped into "
+            f"{n_regions} regions by k-means fitted on {fitted}; each pixel took the commonest region among its scans and a "
+            f"majority filter of radius {settings.smooth} pixel{'s' * (settings.smooth != 1)} removed speckle. The modulation "
+            f"period was {period:g} s and the phase {phase:.3f} s. Data: {processing}. [Add site, sampling period and "
+            f"instrument settings before submission.]\n")
 
 
 def plot_pca(result: PCAResult, width_mm: float = 89.0):

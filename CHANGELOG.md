@@ -6,6 +6,63 @@ not checked). This was section 2 of the old HANDOVER.md.
 
 ## State of play
 
+**🧩 Unsupervised clustering, 2026-09-21.** Workflow step 10 (`core/cluster.py`, `core/segment.py`,
+`gui/cluster_state.py`, `gui/panels/clusters.py`). Peaks (legacy blobs, or the MS-aware components
+through `core/peaktable.py`) are grouped by mass spectrum: cosine distance, average-linkage tree fitted
+on the largest 5,000 peaks with the rest placed by nearest centroid, and retention deliberately left out
+so runs need no alignment. Options: a 14 eV block, HDBSCAN on spectra plus retention (scikit-learn), and
+pixel regions that need no peak detection (truncated SVD and k-means on the brightest scans). Pooled runs
+give a cluster or region table (percent of each run, optionally PQN) that feeds `pca`, `volcano` and a
+PERMANOVA; there are merge, stability (bootstrap adjusted Rand index) and distance-scan tools, a Name
+column, and the cluster-coloured chromatogram as a live 2D fill and an 89 or 183 mm figure with a caption
+file. CLI: `pygcgc batch --cluster --regions N`. Real-data check, one 70 eV acquisition (4,068 legacy
+blobs): 102 clusters at merge distance 0.3 with 2.2% of the volume unassigned, and an adjusted Rand
+index of 0.52 against the rule-based 🧬 classes (clusters of 94% alkane, 100% alkylbenzene, 86% siloxane
+and 100% naphthalene appeared without any rules). Pixel regions (12) took 11.6 s on 215,015 scans and
+separated the C3 and C4 alkylbenzene bands, the aromatic roof-tile band, the aliphatics and the siloxane
+bleed. HDBSCAN with default settings collapsed the run into one cluster of 3,695 peaks, so "leaf"
+selection is the default and still leaves about 30% of the volume unassigned. **Not checked:** any real
+multi-sample set (the cross-run parts are tested on synthetic runs only), tandem 14 eV data, and the
+frozen-app build with scikit-learn. Legacy footprints cover most of the plane on this run, so peak
+clusters are only as good as those boundaries. Full suite at the time: 509 passed, 25 skipped, plus three
+unrelated `test_gui.py` failures (stencil lift, homolog table, settings dialog) that fail identically
+with the cluster code switched off. A session that froze mid-work had left duplicate function
+definitions in `cluster.py` (the later one silently wins); they were removed. See
+[known limitations](docs/known-limitations.md) and the [ROADMAP](ROADMAP.md) for what to check first.
+
+**🧬 Compound classes, 2026-09-21.** Built as a readable replacement for GC Image's CLIC, run after blob detection.
+`core/chemclass.py` classifies blobs from a TOML rule file (`presets/chemical_classes.toml`, 17 classes, ion-set
+shares, fuzzy ramps, need/prefer, a tier and a per-blob reason). Evidence: the apex spectrum, the ⛓️ ladder (t2 above
+the alkane line) and, when the 14 eV file of the same acquisition is loaded, soft molecular-ion features
+(`soft_M_mass`, `soft_M_mod14`, ...) read on the 70 eV pixel grid. GUI: workflow step 7 (`gui/class_state.py`,
+`gui/panels/classes.py`), so Identify is now step 8 and Quantify step 9. Checked on `real_data/`
+(`real_data/CLASS_VALIDATION.md`): the alkane ladder recovers, and 14 eV recovers 9 of 10 alkane molecular masses but
+changes only about 25 of 4068 calls. Not resolved: alkene against cycloalkane at unit mass; sulfur heteroaromatics
+(class disabled, M+2 unreliable); whether the alkylbenzene block at t2 above 4 s is real. MS-aware users get blobs
+found privately by the legacy detector. Results are not saved in the project. Three `tests/test_gui.py` tests
+(stencil lift, homologous series button, settings dialogs) fail while the MS-aware method is the default in
+`blob_state.py`, because they expect legacy blobs; they pass with the legacy default.
+
+**Automatic model selection, downstream use and speed, 2026-09-21:** the number of
+fitted peaks per window is now chosen by `core/modelselect.py` (grow from one peak;
+accept only on BIC, spectral distinctness or resolution, and held-out gain; merge
+same-spectrum unresolved peaks with a warning) and duplicates across windows are removed.
+The residual prototype was removed after it made false splitting worse. Held-out planted-peak
+benchmark (`examples/benchmark_blob_finder.py`): exact count for 1:1 pairs 0.70 (was 0.28),
+false splits of broad single peaks 10% (was 95%), median area error for distinct pairs
+0.02 to 0.03 (was 0.3 to 0.6). Open: 1:0.1 pairs, tailing pairs, runtime about 4x on the
+ten-minute segment. A fixed bug: spectra from different windows were compared on mismatched
+ion lists. Second pass: `core/peaktable.py` gives Classify and Cluster the fitted peaks
+(spectra re-solved on all ions), which previously ran the legacy detector silently;
+a blob click fell from 5.6 s to 0.49 s (contours batched and cached), and on 24 September
+pan/zoom with the overlay open fell from ~400 ms to ~15-40 ms per step (bulk overlay pens
+at 1 px, since wider pens use Qt's slow stroker; legacy pixel-edge outlines merged into
+runs); clicking a blob now shows its own spectrum; 📊 signal accounting
+added (on the supplied file the fitted peaks explain 37% of the signal); the sensitivity
+trade-off is in `examples/benchmark_sensitivity.py`. See
+[docs/CLAUDE_CODE_HANDOVER.md](docs/CLAUDE_CODE_HANDOVER.md). Amounts are still not
+validated against a labelled standard and must not feed quantification.
+
 **Real blob audit, 2026-09-20:** James supplied period 10 s and phase 1.81 s
 for the acquisition in `real_data/`, highlighting t1 around 15 min and t2 around
 1.2 s. See [diagnosis and phased plan](docs/BLOB_DIAGNOSIS_AND_PLAN.md).

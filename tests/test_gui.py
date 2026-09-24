@@ -75,7 +75,9 @@ def test_latest_request_wins(qtbot):
 @pytest.fixture
 def window(qtbot, synthetic_folder):
     from pygcgc.gui.mainwindow import MainWindow
+    from pygcgc.gui.blob_state import LEGACY
     w = MainWindow()
+    w.blobs.set_method(LEGACY)  # older GUI flows below intentionally exercise legacy blobs
     w.jobs_panel.clear_after_ms = 10
     qtbot.addWidget(w)
     w.resize(1400, 900)
@@ -463,7 +465,9 @@ def test_blob_siloxane_removal_blocks_blobs_keeps_them_findable_and_undoes(qtbot
 @pytest.fixture
 def qwin(qtbot, cal_folder):
     from pygcgc.gui.mainwindow import MainWindow
+    from pygcgc.gui.blob_state import LEGACY
     w = MainWindow()
+    w.blobs.set_method(LEGACY)
     w.jobs_panel.clear_after_ms = 10
     qtbot.addWidget(w)
     w.resize(1400, 900)
@@ -849,7 +853,7 @@ def test_find_blobs_runs_and_fills_panel(qtbot, window):
     assert w.blobs_panel.table.rowCount() == len(blobs)
 
 
-def test_ms_aware_detection_is_a_first_class_peak_method(qtbot, window):
+def test_ms_aware_detection_is_a_first_class_peak_method(qtbot, window, tmp_path):
     from pygcgc.gui.blob_state import MS_AWARE
 
     w = window
@@ -864,7 +868,7 @@ def test_ms_aware_detection_is_a_first_class_peak_method(qtbot, window):
     regions = w.blobs.regions_for(i)
     assert candidates is not None and len(candidates) > 0
     assert regions
-    assert "overlapping components" in w.blobs_panel.status.text()
+    assert "overlapping blobs" in w.blobs_panel.status.text()
 
     w.act_blob_overlay.setChecked(True)
     automatic = w.blobs.components_for(i)
@@ -897,6 +901,48 @@ def test_ms_aware_detection_is_a_first_class_peak_method(qtbot, window):
     assert 0 not in w.blobs.accepted_groups_by_name.get("RUN_A", {})
     w.undo.redo()
     assert 0 in w.blobs.accepted_groups_by_name["RUN_A"]
+    export_path = tmp_path / "components.csv"
+    w.export_components(export_path)
+    assert export_path.exists()
+    assert "group_unresolved" in export_path.read_text(encoding="utf-8")
+
+
+def test_clicking_an_ms_aware_component_shows_its_own_full_ion_spectrum(qtbot, window):
+    from pygcgc.gui.blob_state import MS_AWARE
+
+    w = window
+    w.blobs_panel.method_box.setCurrentIndex(w.blobs_panel.method_box.findData(MS_AWARE))
+    i = w.project.index_of("RUN_A")
+    w.set_run(i)
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.components_for(i) is not None
+                    and bool(w.blobs.components_for(i).components), timeout=TIMEOUT)
+    w.act_blob_overlay.setChecked(True)
+    component_set = w.blobs.components_for(i)
+    component = component_set.components[0]
+    fold = w.project.fold(i)
+    col, t2 = fold.to_fold(component.t1)
+    w._point_clicked(int(col), float(t2))
+    assert w.blobs_panel.selected_indices() != []
+    qtbot.waitUntil(lambda: w.spectrum.mz.size > 0, timeout=TIMEOUT)
+    assert "fitted peak" in w.spectrum.title
+    assert f"{component.t1 / 60:.3f}" in w.spectrum.title
+    # re-solved on every run ion, not truncated to the component's own ~30 diagnostic ions
+    assert w.spectrum.mz.size >= component.mz.size
+    run = w.project.base_run(i)
+    assert set(w.spectrum.mz.astype(int).tolist()) <= set(run.mz.astype(int).tolist())
+
+
+def test_new_project_defaults_to_automatic_overlapping_blobs(window):
+    from pygcgc.gui.blob_state import BlobState, MS_AWARE
+    from pygcgc.gui.panels.blobs import BlobsPanel
+
+    fresh = BlobState(window.project)
+    assert fresh.method == MS_AWARE
+    assert fresh.component_settings.automatically_separate
+    fresh.from_dict({})
+    assert fresh.method == MS_AWARE
+    assert BlobsPanel().method == MS_AWARE
 
 
 def test_peak_detection_method_is_saved(window):
@@ -921,9 +967,17 @@ def test_blob_overlay_and_click_selects_row(qtbot, window):
     assert len(x) > 0                            # something is actually drawn
     col, t2 = _peak_pixel(w, i, 50)
     w._point_clicked(col, t2)
-    assert w.blobs_panel.selected_indices() == [int(np.argmin(np.hypot(
+    row = int(np.argmin(np.hypot(
         (blobs.t1 - (w.project.fold(i).t1[col] + 0.5 * w.project.fold(i).spec.period)) / 60.0,
-        (blobs.t2 - t2) / 0.5)))]
+        (blobs.t2 - t2) / 0.5)))
+    assert w.blobs_panel.selected_indices() == [row]
+    # the clicked blob's own spectrum is shown, not just whatever pixel was under the cursor
+    expected = blobs.apex_spectra[row] if (
+        blobs.apex_spectra.shape[0] == len(blobs)
+        and (blobs.apex_spectra[row] > 0).sum() >= 5) else blobs.spectra[row]
+    np.testing.assert_array_equal(w.spectrum.mz, blobs.mz[expected > 0])
+    np.testing.assert_array_equal(w.spectrum.intensity, expected[expected > 0])
+    assert f"{blobs.t1[row] / 60:.3f}" in w.spectrum.title
 
 
 def test_blob_delete_is_undoable(qtbot, window):
@@ -1008,6 +1062,9 @@ def test_blobs_saved_and_reloaded(qtbot, window, tmp_path):
 def hydro_window(qtbot, alkane_folder):
     from pygcgc.gui.mainwindow import MainWindow
     w = MainWindow()
+    # Hydrocarbon mapping still consumes legacy BlobSet features, so these tests
+    # choose that method explicitly now that fresh projects start MS-aware.
+    w.blobs.set_method("legacy")
     w.jobs_panel.clear_after_ms = 10
     qtbot.addWidget(w)
     w.resize(1400, 900)
@@ -1290,7 +1347,7 @@ def test_toolbar_follows_the_working_order(qtbot, hydro_window):
     tb = [a.text().lstrip("✓▸ ") for a in w.findChildren(__import__("PySide6").QtWidgets.QToolBar)[0].actions()
           if a.text()]
     order = ["📂 Open", "1 🔄 Fold", "2 📍 Align", "3 🧹 Background", "4 🔍 Peaks", "5 🫧 Siloxane",
-             "6 ⛓️ Hydrocarbons", "7 🏷️ Identify", "8 🧪 Quantify", "✂️ Resolve overlap", "🗂️ Batch"]
+             "6 ⛓️ Hydrocarbons", "7 🧬 Classify", "8 🏷️ Identify", "9 🧪 Quantify", "✂️ Resolve overlap", "🗂️ Batch"]
     pos = [tb.index(x) for x in order if x in tb]
     assert len(pos) == len(order) and pos == sorted(pos)
 

@@ -36,8 +36,11 @@ src/pygcgc/
     align.py            anchor fitting (shift/affine/smooth), cross-validation, propagation, resampling
     hydrocarbons.py     ⛓️ n-alkane ladder, homologous series, group-type stencils
     identify.py         🏷️ MSP import/export, weighted dot-product search, target-decoy confidence
+    chemclass.py        🧬 compound classes from blob spectra: TOML rules, fuzzy criteria, 14 eV soft features
     batch.py            🗂️ cached process-pool pipeline, feature table, QC, PCA, volcano
-    report.py           📤 provenance, Excel/HTML/PDF reports, publication figures
+    cluster.py          🧩 PeakTable (any detector's peaks), spectral tree and density clustering, cross-run cluster tables, PQN, PERMANOVA, merge, stability and distance scan
+    segment.py          🧩 pixel regions: truncated SVD and k-means on every bright scan's spectrum, no peak detection
+    report.py           📤 provenance, Excel/HTML/PDF reports, publication figures (including the cluster-coloured chromatogram)
   gui/
     app.py              start-up
     mainwindow.py       window, docks, toolbars, shortcuts, wiring
@@ -50,6 +53,9 @@ src/pygcgc/
     align_state.py      📍 reference, anchors, transforms, batch search
     blob_state.py       🔍 per-run blobs, background job, hand-edit log
     hydrocarbon_state.py ⛓️ per-run alkane series, stencil frame
+    cluster_state.py    🧩 settings, the latest peak or region result, groups, names; clustering as a job
+    (also in gui/) views/image2d.py has a second RGBA layer for the cluster colours; panels/clusters.py is the 🧩 panel
+    class_state.py      🧬 per-run class results, rule file, 14 eV partner lookup, classify job
     overlap_dialog.py   ✂️ pick a blob, 3D surface, unique-ion map/split, peak-shape fit, MCR-ALS
     identify_dialog.py  🏷️ load a library, search blobs, promote to target, add to in-house library
     batch_dialog.py     🗂️ folder pipeline dialog: run, feature table, QC, PCA, volcano, 📤 export
@@ -57,7 +63,7 @@ src/pygcgc/
     theme.py            dark and light themes
     constants.py        small constants shared across GUI modules
     views/              image2d (2D), trace1d (1D), spectrum, review (🧪 gallery), compare (📍), surface3d (✂️), results_colours
-    panels/             run list, fold, layers, background, calibration, results, align, blobs, siloxane, hydrocarbons
+    panels/             run list, fold, layers, background, calibration, results, align, blobs, siloxane, hydrocarbons, classes
   cli.py                command line
 tests/                  pytest suite
 examples/tutorials/     top-to-bottom walkthroughs on the dummy data pack
@@ -133,7 +139,12 @@ HANDOVER.md, ROADMAP.md, CHANGELOG.md   see the documentation map in README.md
 - **R² is shown but never used for decisions**; weights are chosen by relative error, curvature by Mandel's test.
 
 - **Blob detection takes the maximum of the TIC-S/N and ion-summed-S/N surfaces, not just the ion sum.** An earlier version switched over entirely; on a run with only a couple of active ions this occasionally under-performed the plain TIC method it was meant to improve on, because a single ion's own noise estimate is noisier than the noise estimate of a bigger, brighter TIC image. Taking the max keeps every guarantee the old method had and only ever adds sensitivity.
-- **Co-elution clustering uses `scipy.cluster.hierarchy.fclusterdata`, not DBSCAN.** scipy is already a dependency and scikit-learn isn't; for the handful of ion-apex points inside one blob's footprint, single-linkage clustering with a distance threshold behaves the same as DBSCAN would.
+- **Co-elution clustering uses `scipy.cluster.hierarchy.fclusterdata`, not DBSCAN.** scipy is already a dependency and scikit-learn isn't (a core one; see the next entries); for the handful of ion-apex points inside one blob's footprint, single-linkage clustering with a distance threshold behaves the same as DBSCAN would.
+- **🧩 Peak clustering leaves retention time out of the distance by default.** Runs never align perfectly, so a distance that used position would turn drift into false differences; spectra do not drift, so clusters mean the same in every run and pooled runs need no alignment. The default is scipy only (average-linkage tree on cosine distance, fitted on the largest 5,000 peaks, the rest placed by nearest centroid so memory stays bounded and a new run can be assigned to an existing result). `method="density"` adds retention and needs scikit-learn (HDBSCAN).
+- **🧩 scikit-learn is an optional extra, `cluster`,** imported lazily in the two places that need it (HDBSCAN in `cluster.py`, TruncatedSVD, k-means and `normalize` in `segment.py`), and included in the `gui` and `test` extras. Everything that only needs hierarchical clustering works without it.
+- **🧩 `PeakTable` is the only thing clustering reads.** It holds run, position, volume, spectra (and optionally the 14 eV spectra) per peak, so a new detector needs only its own constructor (`PeakTable.from_blobs` takes any `BlobSet`-shaped object, including the MS-aware `ComponentPeaks`). Cluster and region results are recomputed on demand and not saved; only the settings, groups and normalisation choice are.
+- **🧩 Cross-run tables are `Feature` lists.** `cluster_features` returns the same `Feature` objects the batch feature table uses, so `pca`, `volcano`, `feature_table_matrix` and `plot_pca` work on cluster tables unchanged. Pixel regions produce the same shape from each run's signal share per region.
+- **🧩 The fill layer is a second `ImageItem`, not a recolouring of the first.** `ChromatogramView.set_cluster_layer` overlays an RGBA array in the main image's place, and hides it whenever it would not line up (an aligned or extended image). The label image on the plain folded grid comes from `cluster_label_image` (which undoes the detector's extended-frame wrap) for peaks and from `SegmentResult.label_image` for regions.
 - **Blank subtraction scales per connected region of one ion's own significant pixels, not per TIC blob.** Reusing the TIC `BlobSet` was considered and rejected: it would need `find_blobs` run on the blank as a prerequisite, cross-module coordinate reconciliation (the TIC blob frame is extended for wrap-around; the plain per-ion image background.py already works with isn't), and a TIC blob could bundle two DIFFERENT ions' artefacts together anyway if they happen to co-elute in the TIC. A plain `scipy.ndimage.label` on that one ion's own significant-pixel mask is simpler, self-contained, and exactly the right granularity for "two artefacts on the same ion varying independently between tubes."
 - **The 🔍 edit log (delete/merge/add) is positional and is cleared on a settings change, but kept across a fold or 🧹 change.** `find_blobs`'s output order is stable for the same settings and data, so "delete blob 3" replays correctly after e.g. re-cleaning; it isn't guaranteed to mean the same thing after the detection surface itself changes, so a settings change starts the log over rather than risk silently misapplying it.
 - **🫧 removal needs a per-pixel goodness-of-fit gate, not just a presence-count gate.** The spec's literal wording ("fewer than N siloxane ions present -> don't fit") protects an isolated single-ion peak, but not a real three-ion coincidence in the wrong proportions: a least-squares fit across a handful of ions is pulled toward whichever ion the reference weights most, so the *dominant* ion can still get subtracted to nothing even when the ratios plainly don't match. Requiring the pixel's own ion ratios to resemble the reference (a per-pixel cosine similarity, `min_fit_cosine`) closes that gap; `test_a_real_coincidence_in_the_wrong_ratio_is_not_removed` is the test that found it needed closing.

@@ -1,4 +1,4 @@
-# MS-aware overlapping peak detection: full implementation plan
+﻿# MS-aware overlapping peak detection: full implementation plan
 
 20 September 2026.
 
@@ -517,6 +517,45 @@ Before using component volumes for production quantification:
 
 ## 14. Delivery phases
 
+Implementation status on 20 September 2026:
+
+- **Phase A is substantially complete.** Durable components and groups reconstruct their
+  contours, persist in projects, and support undoable accepted manual replacements. Source
+  fingerprints are not yet stored inside `ComponentSet`; the surrounding project state
+  clears or marks results stale when its inputs change.
+- **Phase B has a first automatic implementation.** Candidate-guided Gaussian fits, BIC
+  screening, repeated final fits and conservative quality gates run from **Find peaks**.
+  Position stability across the repeated starts is stored and participates in the unresolved
+  decision. Neighbour reconciliation, residual search, spectral/amount stability, cancellation within
+  a group and group caching remain.
+
+Performance revision, 21 September 2026: **Find peaks** now fits the whole run with a fast
+separable solver. Complete-link grouping prevents chained giant windows; each local cube
+folds only its own scans and ions; nearby Gaussians share widths; eight diagnostic ions
+screen component count and shape before one 30-ion spectrum solve. The cached ten-minute
+segment has 231 candidates in 120 regions and takes about 13 seconds. On the complete supplied
+70 eV acquisition, reading took 27 seconds, four-thread background correction 60 seconds,
+and four-process detection/separation 68 seconds (154 seconds end to end, down from 344).
+The bounded process queue uses four workers by default on machines with enough CPUs;
+one-process separation took 118 to 131 seconds in separate runs. `fast_proposals` still
+provides approximate previews, while `refine_selected` retains the slower repeated-start
+review path. The long independent mass-channel filters are threaded.
+- **Phase C's normal component-first view is implemented.** The table contains components,
+  the main image contains overlapping contours, and calculation rectangles are hidden when
+  fitted components exist. Rich merge/split/add/suppress review operations remain.
+- **Phase D is partly complete.** Identification searches fitted component spectra and CSV
+  export includes group confidence. Cross-run component matching and batch feature tables
+  remain.
+- **Phase E has not started.** Siloxane, hydrocarbon and production quantification continue
+  through their existing paths.
+
+The original focused benchmark contained six chained groups and 14 proposed components; it
+established the persistence and review workflow but did not validate 14 compounds. The fixed
+complete-link grouping now gives 13 smaller regions in the same 14–16 min, t2 0.6–2.0 s
+window and the automatic count screen retains about 19 components. These remain mathematical
+proposals: most fail the 80% explained-variation gate, and no known mixture supplies chemical
+identities.
+
 ### Phase A — durable component result
 
 1. Add `Component`, `ComponentGroup`, `ComponentSet` and settings.
@@ -568,17 +607,19 @@ remains available for reproducibility.
 
 ## 15. Immediate implementation order
 
-The next coding work should be Phase A, in this order:
+The next work should improve scientific reliability before connecting estimated amounts to
+more consumers:
 
-1. Create the Qt-free component dataclasses and conversion from `OverlapFit`.
-2. Add component/group storage to peak-detection state without changing current legacy
-   behaviour.
-3. Add a deliberate **Accept fit** action to the component-group window.
-4. Replace the selected region's crosses/rectangle with stored overlapping component
-   contours after acceptance.
-5. Save and reload accepted component results and manual decisions.
-6. Only then automate fitting every region, because automatic output needs a stable result
-   format, visual review and persistence before it can be scientifically audited.
-
-This sequence makes the desired data product concrete early and prevents temporary analysis
-rectangles from becoming an accidental permanent interface.
+1. Compare Gaussian automatic fits with measured or locally learned peak profiles on the
+   six real focus groups, using the same quality metrics and runtime benchmark.
+2. Record component stability across repeated fits and small background/window changes;
+   include those results in the unresolved decision.
+3. Add spatially held-out prediction to the automatic acceptance gate.
+4. Reconcile duplicate components across neighbouring groups, then perform one conservative
+   residual search for peaks hidden below stronger ones.
+5. Cache completed groups and add cancellation within expensive group fits before attempting
+   a complete acquisition.
+6. Annotate held-out isolated, crowded and background windows. Use those annotations to set
+   thresholds and establish a declared detection/recovery limit.
+7. Only after those gates pass, build cross-run component matching and an explicitly enabled
+   component-based quantification experiment.

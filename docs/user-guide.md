@@ -10,7 +10,7 @@ Install and quick start are in the [README](../README.md).
 ### Layout
 
 - **Left:** one panel, "Workspace", with three tabs. **Runs** is the run list, **Tool** shows the open step's settings and its Go button (its tab is named after the step), and **Layers** shows which runs are cleaned or aligned. Opening a step from the toolbar switches to the Tool tab.
-- **Top toolbar:** 📂 Open, the eight numbered steps, then ✂️ Resolve overlap, 🗂️ Batch, 📤 Figure and the panel buttons.
+- **Top toolbar:** 📂 Open, the ten numbered steps, then ✂️ Resolve overlap, 🗂️ Batch, 📤 Figure and the panel buttons.
 - **Centre:** the 2D and 1D views, the 🧪 Review gallery and the Calibration curves.
 - **Right:** the spectrum.
 - **Bottom:** four tabs, 🧪 Results, Jobs, History (undo) and Log.
@@ -21,7 +21,7 @@ Every panel can be moved, floated onto a second screen or hidden. To bring one b
 
 ### Workflow panel
 
-The eight numbered buttons on the top toolbar are the steps, in working order. The left-hand panel shows only the open step: its settings, then one Go button.
+The ten numbered buttons on the top toolbar are the steps, in working order. The left-hand panel shows only the open step: its settings, then one Go button.
 
 1. Press a step on the toolbar. Its settings appear on the left; nothing runs yet.
 2. Set what you want.
@@ -36,19 +36,23 @@ The eight numbered buttons on the top toolbar are the steps, in working order. T
 | 4 🔍 Peaks | MS-aware regions or legacy blob table | runs the selected detection method on every run |
 | 5 🫧 Siloxane | reference spectrum, certainty slider | blocks out (or fits) siloxane blobs on every run |
 | 6 ⛓️ Hydrocarbons | qualifier ratios, stencils, series | starts the two-click alkane flow |
-| 7 🏷️ Identify | notes | opens the identifier window |
-| 8 🧪 Quantify | what is loaded, load buttons, settings | quantifies (disabled, with the reason, until a target table is loaded) |
+| 7 🧬 Classify | 14 eV switch, rule file, class list, results | assigns a compound class to every blob of the open 70 eV run |
+| 8 🏷️ Identify | notes | opens the identifier window |
+| 9 🧪 Quantify | what is loaded, load buttons, settings | quantifies (disabled, with the reason, until a target table is loaded) |
+| 10 🧩 Cluster | scope, method, thresholds | groups peaks by spectrum, within or across runs |
 
-**Why this order.** Each step's panel shows a "Why here" line, the toolbar tooltips repeat it, and Help → Workflow guide lists all eight. In short:
+**Why this order.** Each step's panel shows a "Why here" line, the toolbar tooltips repeat it, and Help → Workflow guide lists all ten. In short:
 
 1. **Fold first.** Every later step works on the folded image, and a wrong phase splits peaks across its top and bottom edges.
 2. **Align second.** Retention drifts between runs. Aligning early puts every run on the reference run's coordinates, so a blank can be subtracted through the alignment in step 3. With a single run, skip it.
 3. **Background third.** It removes bleed, the repeating t₂ stripes and spikes, and builds the noise map that peak detection uses for signal-to-noise.
-4. **Blobs fourth.** Detection needs the flat baseline from step 3. Steps 5 to 8 all start from these blobs.
+4. **Blobs fourth.** Detection needs the flat baseline from step 3. Steps 5 to 10 all start from these blobs.
 5. **Siloxane fifth.** It blocks out whole blobs, so it needs step 4. It runs before the ladder and identification so contaminants do not enter them.
 6. **Hydrocarbons sixth.** The n-alkane ladder gives the retention index that identification uses.
-7. **Identify seventh.** It searches the blobs from step 4 and uses the retention index from step 6 when there is one.
-8. **Quantify last.** It needs the phase and the cleaned data; everything before it makes its peaks clean and correctly placed.
+7. **Classify seventh.** It reads each blob's class from its spectrum and uses the ladder from step 6 for retention evidence, so it follows both. It comes before Identify because a class says what a peak is without a library.
+8. **Identify eighth.** It searches the blobs from step 4 and uses the retention index from step 6 when there is one.
+9. **Quantify ninth.** It needs the phase and the cleaned data; everything before it makes its peaks clean and correctly placed.
+10. **Cluster last.** It groups peaks by spectral shape and can compare them with the classes from step 7.
 
 The order is a recommendation. Nothing stops you running a step early or again after changing something upstream, but results from later steps are not rerun for you: rerun them.
 
@@ -106,7 +110,7 @@ When runs open and no period has been set by hand or by `method.json`, the perio
 - The period is the frequency at which the total signal repeats, so it needs no anchors. A solvent front is detected and left out.
 - **Confidence** says whether a period is established at all. If it is low, the period is left unchanged.
 - **Drift** says how well it is pinned down: the standard error times the number of modulations, i.e. how far peaks at the end of the run could sit from where they should. Compounds alone constrain the period only to a few milliseconds; column bleed and other structure locked to the modulator do better. If the drift exceeds a quarter of a second the line turns amber, and the period should be checked with **Check period** against internal standards.
-- Without anchors, the phase puts the cut just inside the far edge of the longest quiet stretch of the second dimension, so signal starts near the bottom of the image. This is a place to cut, not the modulator's true start. Its confidence is low when wrap-around leaves no quiet stretch. Internal standards, when found, give the true phase and take priority; a table with a single anchor is enough.
+- Without anchors, the phase puts the cut 0.2 s before the start of the column bleed. The bleed (the siloxanes) is released with every modulation and is present in every column, so a low percentile across columns, row by row, keeps it and discards the analytes. The cut goes just before that baseline leaves its floor, so the siloxanes sit at the bottom of the image. If a run has no such baseline, the cut goes just inside the far edge of the longest quiet stretch of the second dimension instead; its confidence is low when wrap-around leaves no quiet stretch. Either way this is a place to cut, not the modulator's proven start. Internal standards, when found, give the true phase and take priority; a table with a single anchor is enough.
 - On the command line, `pygcgc fold`, `phase`, `clean` and `quant` estimate the period when `--period` is omitted (and no `method.json`), print the estimate, and stop if none can be found reliably. `pygcgc batch` does the same and records `modulation_period_estimated` in `provenance.json`.
 
 ### 🧹 Background
@@ -243,6 +247,14 @@ Step 4 offers two peer detection methods in a saved selector. **MS-aware separat
 
 **Legacy blob borders** combines ion evidence into one surface and uses watershed to assign every pixel to one blob. On the supplied busy real file, small positive residuals across hundreds of ions accumulate and make this route over-detect broad background and join peaks. It remains useful for compatibility and controlled comparison, but should not be treated as the preferred scientific representation of overlap.
 
+How many peaks a calculation window holds is decided from the data, not from how many apexes the candidate finder placed there. Each window starts from one peak and gains another only if the fit improves (BIC and held-out reconstruction), the new peak carries a mass spectrum different from its neighbours or is resolved from them, and it holds at least 2% of the signal. Two peaks with near-identical spectra that are not resolved are reported as one peak with a warning, because their spectra cannot separate them. The same peak found by several windows is kept once. Calculation windows are internal and are never drawn.
+
+Three further points apply to MS-aware peaks:
+
+- **📊 Signal accounting** reports how much of the run's total signal the fitted peaks explain, how much lies outside every fitted peak, how that splits between a broad smooth hump and discrete peak-like leftovers, and where the largest leftovers are. It also breaks the signal down by pixel intensity. Use it to judge what the finder is missing.
+- **Sensitivity.** Faint peaks are limited by `tic_prominence_snr` in the candidate settings (default 2). Lowering it to 1 raised detection of peaks with apex TIC 4e4 to 1e5 from 50% to 81% on planted test peaks, at the cost of more components and some in background-only regions. `seed_snr` made no difference.
+- **Downstream.** 🧬 Classify and 🧩 Cluster use the fitted peaks, with each spectrum re-solved on every ion, and no longer run the legacy detector. Siloxane blocking, hydrocarbon mapping, batch and the 14 eV path of Classify still need legacy blobs. Amounts remain estimates and do not feed quantification.
+
 In legacy mode, **🔍 Find peaks** detects blobs on every loaded run: the sum of every ion's own signal-to-noise image combined with plain total-ion S/N. A watershed grows each seed into a footprint, trimmed to 1% of its own apex.
 
 In legacy mode, the table lists every blob on the current run: position, volume, S/N, width in t1 and t2, how many modulations it spans, a co-elution flag, and whether it looks like siloxane (see 🫧 below).
@@ -315,6 +327,45 @@ A hydrocarbon chromatogram is usually a big diagonal smudge: every homologous se
 
 **Not built:** a homologous-series finder is in `core/hydrocarbons.find_homologous_series` (used from Python; not yet wired into the panel) rather than a GUI tool of its own. It works in carbon-equivalent space with one member per carbon, and its diagnostic ion pairs (91/105, 82/83, 142/156, 58/59) are not validated: the real run gave no series for any of them, although the (57, 71) pair recovers the alkane ladder as a positive control. There's no way to edit a saved stencil's shape after the fact (delete and redraw instead). Only the qualifier ratios, tolerance and gate of `HydrocarbonSettings` have controls.
 
+### 🧬 Classify
+
+Step 7 on the toolbar. It gives every blob of the open run a compound class (alkane, alkene, cycloalkane, alkylbenzene, indane, naphthalene, PAH, N-heteroaromatic, aliphatic amine, alcohol or ether, ketone or aldehyde, carboxylic acid, ester, aromatic oxygenate, siloxane, phthalate) from its mass spectrum, its retention relative to the n-alkane ladder and, when available, its 14 eV spectrum. It needs no library. It replaces the rule language of commercial packages (GC Image's CLIC) with a plain text file you can read and edit.
+
+**Running it.** Open a 70 eV run, press step 7 and then **▶ Go**. It uses the blobs from 🔍 if they exist. If you have run only the MS-aware detector, the legacy detector is run here on the same cleaned run, because classification needs whole-peak spectra; the notes line says so. The ladder from ⛓️ is optional: without it the retention evidence is skipped, not counted against a blob. The 14 eV channel of a tandem acquisition is found automatically when it is loaded alongside (same acquisition, lower energy) and is switched on by the checkbox at the top; its background is removed here if you have not done it. Selecting the 14 eV run itself is refused with the reason, since classes are read from the 70 eV spectrum.
+
+**What a call is.** Each blob gets a class, a score from 0 to 1, a tier and a plain-language reason.
+
+- **Tier:** confident (score 0.75 or more), probable (0.5), possible (0.3), otherwise unclassified. The tier is lowered one step when a rival class in another group scores within 0.15, or when the blob is flagged as co-eluting.
+- **Reason:** select a row and the pane below shows every criterion that was tested, its value, and whether it helped, was skipped (unknown for this blob) or failed. This is the tool for finding out why a blob was called what it was.
+- **Unclassified is an answer.** A blob that fits nothing is left blank, not forced into the nearest class.
+
+**Panel.**
+
+- **Use the 14 eV channel:** corroborates the molecular ion and fixes its parity (the nitrogen rule). Every rule also works without it.
+- **Rule file:** *Load rules…* reads your own file, *Save an editable copy…* writes a copy of the shipped rules to start from, *Reload* rereads the file after you edit it, *Shipped* returns to the defaults. A mistake in a rule file is refused with the class and criterion it is in and, for a mistyped feature name, the closest valid names; the previous rules stay in force.
+- **Class list:** each class can be switched off with its checkbox (saved with the project). Hover for the note on what the class is and where it is weak. Colours match the overlay.
+- **Tables:** a summary of blobs and volume per class, and the blob table (sortable; *Hide unclassified* filters it). Selecting a blob moves the 2D view to it, and double-clicking centres it.
+- **Overlay:** *Colour blob outlines by group in the 2D view* outlines classified blobs in their group's colour while this step is open.
+- **Export CSV…:** one row per blob: position (t1 in minutes, t2 in seconds), volume, class, group, tier, score, runner-up and its score, margin, what held the score back, co-elution flag, `dt2` and the molecular-ion candidate at 70 and 14 eV.
+
+**Rules.** The shipped rules are `src/pygcgc/presets/chemical_classes.toml`; the header of that file documents every feature and the syntax, and it is meant to be read. A class is a list of `need` criteria (all must hold; the class scores as its weakest) and `prefer` criteria (raise the score from 0.5 to 1.0, never block). A criterion is `name: a -> b`, a ramp from not satisfied at `a` to fully satisfied at `b`, or a hard cut such as `M_odd <= 0`. Names are ion-set shares you define in `[ions]`, or built-in features: the molecular-ion candidate (`M_mass`, `M_rel`, `M_share`, `M_odd`, `M_plus2`), neutral losses (`loss_X`), `siloxane`, `dt2` (t2 above the alkane line, a polarity axis) and their `soft_*` 14 eV versions, including `soft_M_mod14`, which names the hydrocarbon series. Settings such as the molecular-ion threshold and the tier cut-offs are in `ClassSettings` (Python).
+
+**What was checked.** On the supplied run the ladder recovers as alkanes, and 1-octanol, indole, carbazole, phthalates, chrysene-d12 and column bleed were checked one by one and the rules corrected where they failed (`real_data/CLASS_VALIDATION.md`). With the 14 eV channel, 9 of 10 n-alkane molecular masses are recovered and 86% of alkylbenzene calls have M ≡ 8 (mod 14), but only about 25 of 4068 calls changed: it corroborates rather than reclassifies. Nothing was tuned to the class volumes. There is no reference library of class labels for this run, so the calls are checked for chromatographic sense, not against a ground truth beyond the ladder.
+
+**Limits.**
+
+- **Alkenes and cycloalkanes** cannot be separated at unit mass, even at 14 eV (both have M ≡ 0 mod 14).
+- **Ketones and aliphatic amines** share m/z 58, 72 and 86. Only m/z 44 and an odd M separate them, so both can score and the tier is lowered.
+- **Primary alcohols** look like alkenes without m/z 31, which is below this instrument's range; polarity is the only handle.
+- **Saturated peaks** distort the isotope ratios and can move the molecular-ion candidate by a mass; such blobs are usually left unclassified rather than misclassified.
+- **Sulfur heteroaromatics** are disabled. M+2 over M is inflated on intense or co-eluting peaks, so the sulfur signature is unreliable here.
+- **Polarity** (`dt2`) is tuned to the supplied column set and is only ever a `prefer` term.
+- **Alkylbenzene volume.** About half of the alkylbenzene volume lies at t2 above 4 s and t1 7 to 19 min; the spectra fit but whether it is real wrapped-around aromatics or solvent tail cannot be told from this run.
+
+The settings are saved with the project; results are not, so classify again after reopening. Changing the rules, the blobs or the fold marks the results stale. In Python: `load_rules`, `classify_blobs`, `soft_spectra_for_blobs`, `write_classes_csv` (`pygcgc.core`); `examples/classify_real_data.py` runs it on the supplied run.
+
+**Not built:** a settings dialog for `ClassSettings`; a rule editor in the panel (edit the file and reload); saving results in the project; a command-line `--classify`; feeding the class into 🏷️ Identify to narrow the library search.
+
 ### 🏷️ Identify
 
 Search every 🔍 blob on the current run against an MSP library (toolbar, or Process menu). Opens on whichever run is open when it's shown; reopening it is how it picks up a run switch, but the loaded library stays put since it isn't tied to any one run. Read-only in the sense that nothing here is saved or undoable, the same as ✂️ and 🗂️ -- but "Promote to target…" and "Add to in-house library…" do write files.
@@ -325,6 +376,36 @@ Search every 🔍 blob on the current run against an MSP library (toolbar, or Pr
 - **Add to in-house library…** writes the selected blob's own apex spectrum as a new MSP entry (typing a name, since a blob without a confident hit has none of its own), building a real, reusable library from standards run on this instrument over time.
 
 **Not built:** a settings dialog (defaults apply: `IdentifySettings`'s RI window, score weights and thresholds); a way to browse or edit a loaded library's own entries; genuine Schymanski level 1 (needs a co-injected reference standard) or level 4 (needs an exact-mass molecular formula) confidence -- only 2a/2b/3 are reachable from a unit-mass EI spectrum plus RI. See [Known limitations](known-limitations.md) for what else is provisional.
+
+### 🧩 Peak clusters
+
+Step 10 on the toolbar. It groups peaks by the shape of their mass spectra, with no rules and no library, so a chromatogram divides into chemically similar regions and, when several runs are pooled, the runs can be compared cluster by cluster. Where 🧬 says what kind of compound a peak is from rules you write, this asks which peaks look alike; the "Made of" column compares the two once a run has been classified.
+
+**Method.** Each peak's spectrum is weighted (intensity^0.5 × m/z^1, m/z ≥ 35) and scaled to unit length; peaks with fewer than five ions are left unassigned. The largest 5000 peaks are grouped by average-linkage hierarchical clustering of the cosine distance, cut at a merge distance (default 0.3, i.e. a mean similarity of 0.7 within a merged group), and groups of fewer than three peaks are not called clusters. Every other peak joins the cluster with the nearest centroid if that is within 0.4, otherwise it stays unassigned. Clusters are numbered by total volume, largest first. Retention time is not part of the distance: two runs never line up exactly, so using position would turn drift into false differences, and it means no alignment is needed to compare runs.
+
+**Two ways to divide a chromatogram.** *Detected peaks* (above) groups the blobs from 🔍. *Pixel regions* needs no peak detection at all: every bright scan is a pixel with a spectrum, the spectra are reduced by truncated SVD and grouped by k-means into the number of regions you ask for (default 12), each pixel takes the commonest region among its scans, and a small majority filter removes speckle. Regions cover what blob detection handles badly (an unresolved hump, a saturated solvent front, overlapping peaks) and come out as coherent bands: on the fuel run they separate the C3 and C4 alkylbenzene bands along the front, the aromatic roof-tile band, the aliphatics and the siloxane bleed, in about 12 s. Needs scikit-learn (`pip install "pygcgc[cluster]"`, included in the `gui` extra). Regions are numbered by the signal they hold, and a region model fitted on all runs at once labels every run the same way, so each run's share of its signal per region can be compared (percent, or PQN).
+
+**A retention-aware variant of peak clustering.** *Method → Spectra and retention (density)* uses HDBSCAN on the ten main spectral directions plus retention time (120 s of t1 or 1 s of t2 counts as one unit of spectral distance, times the retention weight), so peaks must be near each other as well as similar, which finds bands and series that spectra alone cannot tell apart. It needs no cluster count and leaves what belongs to nothing as noise. On the fuel run it gives about 77 clusters and leaves about 30% of the volume unassigned, against 2% for the tree, because peak density is continuous across a GC×GC plane: treat it as a way to explore retention structure, and prefer the tree for class assignment and for comparing runs. Retention is compared as recorded, so pooled runs should be aligned first (📍), and a new peak is placed by its spectrum alone.
+
+**On the panel.**
+
+- **Cluster:** this run, or every 70 eV run pooled. Pool to compare runs: one clustering of all the peaks, so "cluster 3" means the same thing in every run.
+- **Group / Regions / Method / Retention weight:** detected peaks or pixel regions, how many regions, tree or density, and how much retention counts (density only). Controls that do not apply to the choice are greyed out.
+- **Merge up to distance / Cut at a set number / Smallest cluster:** how fine the grouping is. Lower distances give tighter clusters (carbon numbers and isomers apart); higher give broader ones (compound classes).
+- **Leave out siloxane ions:** drops the polydimethylsiloxane ions so column bleed does not form a cluster of its own.
+- **Add the 14 eV spectrum:** when the 14 eV file of the same acquisition is loaded alongside (as for 🧬), each peak is also compared on its 14 eV spectrum at half the weight. The molecular ion survives there, so it can separate peaks whose 70 eV spectra look alike. When pooling, every run needs a partner or the 14 eV block is dropped (the notes line says which).
+- **Fill / outline peaks in the 2D view:** the chromatogram coloured by cluster while this step is open. Select rows in the table (Ctrl or Shift for several) to colour just those; with none selected, the seven largest are coloured (Okabe-Ito, colour-blind safe) and the rest are light grey. The fill only shows on the plain folded view, not on an aligned or extended one.
+- **Cluster table:** peaks (pixels for regions), runs, share of the volume, median retention, the ions with the largest share of each cluster's ion current, silhouette, what 🧬 called most of its peaks, and a **Name** column (double-click) whose text is used in the figure key and the peaks CSV. Names are lost when you cluster again or merge, because the numbers change. **Merge selected** joins a family the tree split; clusters are renumbered by volume. Peak clusters only.
+- **Check stability:** reclusters random 80% samples of the peaks and reports the adjusted Rand index against the full result (1 means the same clusters every time). **Scan distances** reports the number of clusters, the unassigned volume and the mean silhouette at merge distances 0.1 to 0.5.
+- **Run table (pooled):** each run's share of its own peak volume (or signal, for regions) in each cluster. *Percent, then PQN* also divides each run by its median quotient against the median run (probabilistic quotient normalisation), so one large cluster changing does not make every other appear to change the other way. Type a group name in the Group column (double-click) for each run, then **Test groups** runs PERMANOVA (Bray-Curtis, 999 permutations) on those shares and, for exactly two groups, a Welch t-test per cluster with Benjamini-Hochberg correction. **Run PCA figure…** saves a PCA of the runs with a caption.
+- **Save coloured chromatogram…:** a publication figure of the current run (89 or 183 mm, 300 dpi) with a sibling caption `.txt`: hue is the cluster, brightness the signal, with a key of the coloured clusters' top ions. It uses the 2D view's window and scale if this run is on show.
+- **Export peaks CSV… / Export run table CSV…:** every peak with its cluster, and every cluster's percent share in every run (the input to PCA, volcano and PERMANOVA elsewhere).
+
+**From the command line.** `pygcgc batch <folder> --cluster` pools the blobs of every run after the pipeline and writes `peak_clusters.csv` and `cluster_run_table.csv` to the output folder (plus a "Clusters" sheet with `--report xlsx`). If the saved pipeline (`--config`) names two run groups, it also prints the PERMANOVA of the two groups. `--cluster-threshold` sets the merge distance. `--regions N` divides every run into N pixel regions (fitted on all runs at once, on the cleaned data) and writes `region_run_table.csv` and one `region_labels_<run>.npy` label image per run. In Python: `PeakTable.from_blobs`, `cluster_peaks`, `cluster_features`, `permanova` (`pygcgc.core.cluster`) and `fit_regions`, `segment_pixels`, `region_shares` (`pygcgc.core.segment`).
+
+**Limits.** Peaks come from the legacy detector's blobs (found privately if 🔍 has not been run), or from the fitted MS-aware components when that detector is in use, so a cluster is only as good as the peak boundaries under it: on a run with saturated peaks the legacy footprints are wide bands, and they are coloured as such. The settings are saved with the project; results are not, so cluster again after reopening. The defaults are not tuned to your samples; use **Scan distances** and **Check stability** on a real sample set before trusting a threshold.
+
+**Not built:** normalisation of the run table to an internal standard or by centred log-ratio (CLR is negative, which the existing PCA's log transform cannot take) and QC-based drift correction; saving cluster results and names in the project file; pooled pixel regions that align retention first (regions are spectral only, so they do not need it, but the label images are per run); a spatially aware region method (each pixel is grouped on its own spectrum, then smoothed, rather than with its neighbours in the model); choosing the number of regions automatically (k-means needs it given); a peak-clustering method that fits the largest peaks of a big pool by density rather than a tree.
 
 ### 🗂️ Batch
 
@@ -440,7 +521,7 @@ Before this, single-scan spikes are removed. Afterwards, an optional cleaned bla
 
 **Peaks** (`core/peaks.py`). Blobs are found on the pixel-wise maximum of the smoothed total-ion S/N and the sum of every ion's own S/N image (which catches a compound spread thinly but consistently across many ions that the total-ion signal alone wouldn't flag), and local maxima well above the noise become seeds. A watershed grows each seed downhill until it meets a neighbour or the noise, and each footprint is trimmed to 1% of its own total-ion apex; a long run is split into overlapping stretches of t1 for this step, run across a thread pool, one peak processed by whichever stretch owns its seed. Every stored point is assigned to the footprint it falls in, which gives each peak a spectrum, a volume, a width in each dimension and a co-elution flag (its ions' own local apexes clustered into more than one group). Targets are measured the same way on their own quantifier ion, with a local baseline taken from the footprint's rim. Wrapped peaks are handled by working on an image extended by half a second. Blobs can also be deleted, merged (an exact combination: volume and spectrum sum, position and width via the parallel-axis theorem) or added by hand from a clicked pixel.
 
-**Candidates, components and overlap** (`core/candidates.py`, `core/components.py`, `core/overlap.py`). The MS-aware path finds local maxima ion by ion, groups agreeing ions and requires local TIC prominence. Padded rectangles only bound each calculation. `detect_components` screens component count on a small ion set, refits the chosen model on a wider ion set, and stores overlapping shapes, spectra, estimated intensities and quality warnings in a serialisable `ComponentSet`. Workflow step 4 displays those components and can accept a manual refit. `blob_cube` retains the legacy route. `fit_overlap` jointly fits k analytic shapes times spectra by weighted variable projection; `fit_template_overlap` shifts copies of a measured peak. Both fit signed local background while keeping compound spectra non-negative. Weak estimates are retained and marked low confidence. Known-area software-copy tests using n-C16 pass all nine signal-only cases and 6 of 9 cases in the chosen real background. Every 10%-minor case fails, so components are not yet used for production quantification.
+**Candidates, components and overlap** (`core/candidates.py`, `core/components.py`, `core/overlap.py`). The MS-aware path finds local maxima ion by ion, groups agreeing ions and requires local TIC prominence. Padded rectangles only bound each calculation. `detect_components` screens component count and fits peak positions and shapes on a small ion set, then solves spectra and estimated intensities on a wider ion set. It stores overlapping shapes and quality warnings in a serialisable `ComponentSet`; workflow step 4 displays them and can accept a slower manual refit. Single-candidate regions use their observed local widths and solve their spectrum and background directly. Overlapping Gaussian fits share widths to keep weak peaks from spreading into the background; any fit that reaches a width limit is marked unresolved. `blob_cube` retains the legacy route. `fit_overlap` jointly fits k analytic shapes times spectra by weighted variable projection; `fit_template_overlap` shifts copies of a measured peak. Both fit signed local background while keeping compound spectra non-negative. Weak estimates are retained and marked low confidence. The fast Gaussian fit recovers both software-injected peak areas within 10% in 5 of 9 real-background cases; the measured n-C16 template passes 6 of 9. Every 10%-minor case fails, so components are not yet used for production quantification.
 
 The planned end state is one durable result per overlapping component—shape, spectrum,
 intensity and confidence—with analysis rectangles hidden as an implementation detail. The

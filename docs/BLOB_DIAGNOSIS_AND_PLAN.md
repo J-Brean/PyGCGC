@@ -1,4 +1,4 @@
-# Real-data blob diagnosis and development plan
+﻿# Real-data blob diagnosis and development plan
 
 20 September 2026. This is a measured baseline and proposed development sequence.
 The new route is now a first-class, saved choice in the main Peak detection step;
@@ -45,9 +45,9 @@ Recovery tests provide a known answer. In these tests, "injection" means adding
 a software copy of a peak to a real quiet part of the chromatogram at an amount
 chosen in advance. Nothing is injected into the instrument. The program is then
 asked to separate the copies and report their amounts. With ideal bell-shaped
-peaks, both amounts are within 10% in 4 of 9 combinations of spacing and relative
-size. Equal-sized peaks work well, but a peak only 10% as large as its neighbour
-does not.
+peaks, the current fast shared-width fit puts both amounts within 10% in 5 of 9
+combinations of spacing and relative size (the older unrestricted fit passed 4).
+Equal-sized peaks work well, but a peak only 10% as large as its neighbour does not.
 
 A newer control uses the confirmed n-C16 peak from the full acquisition instead
 of a perfect bell curve. The existing bell, tailing, tilted and narrow-cell
@@ -78,12 +78,12 @@ This establishes a useful initial operating limit rather than universal success.
 
 Step 4 is now **Peak detection and separation**, with a saved method selector:
 **MS-aware separation** or **Legacy blob borders**. MS-aware detection runs over
-every loaded run from the same Go action as legacy detection. Its table lists
-analysis regions and the number of candidate centres and supporting ions in each.
-The 2D view draws candidate centres as crosses and analysis rectangles as cyan
-dashed lines. A rectangle is only the area sent to the model and does not claim
-ownership of its pixels. Selecting a row highlights the rectangle; **Resolve
-selected region…** opens that exact region in the overlap/component view.
+every loaded run from the same Go action as legacy detection. Its normal table
+has one row per fitted component, with position, estimated intensity, diagnostic
+ions and confidence. The 2D view draws overlapping 10% and 50% contours for each
+component. Candidate rectangles remain calculation windows and are only shown
+when no fit is available or a group is opened for review. **Resolve selected
+region…** opens that group's calculation window.
 
 The old yellow borders and add/merge/delete tools appear when Legacy blob borders
 is selected. Existing siloxane blocking, hydrocarbon feature totals and library
@@ -102,10 +102,10 @@ low confidence, and the whole set is described as an unresolved group.
 
 When an alkane ladder has been found for the run, the fit model menu also offers
 "measured alkane template". It builds a reference profile from n-C16 (or the
-nearest usable confirmed alkane) in that run. These fitted results are currently a
-read-only analysis in the overlap dialog. Persisting component
-groups and feeding their estimates into identification, export and quantification
-still waits on held-out validation and a stable component data model.
+nearest usable confirmed alkane) in that run. Component groups now persist in the
+project, can be replaced by an accepted manual fit with undo/redo, feed component
+spectra to identification, and export to CSV with their warnings. They do not yet
+feed siloxane handling, batch matching or production quantification.
 
 ## Reproduction and scope
 
@@ -422,8 +422,9 @@ the two real MCR spectra into an actual background-only patch. Equal-area pairs
 recover within 10% at 0.06, 0.12 and 0.20 s separation. A 30%-abundance minor
 component passes at 0.20 s, is borderline at 0.12 s (major error -10.8%), and
 fails at 0.06 s. A 10%-abundance minor component fails at every separation; even
-at 0.20 s its area is 31.5% high. Overall, 4 of 9 cases meet the 10% target for
-both components. Spectral cosines remain high in the successful cases, confirming
+at 0.20 s its area is 31.5% high. That unrestricted fit met the 10% target in
+4 of 9 cases; the current shared-width fast fit meets it in 5 of 9. Spectral
+cosines remain high in the successful cases, confirming
 that the failure is area attribution rather than simple non-convergence.
 
 A second diagnostic uses the confirmed n-C16 profile from the full run. All
@@ -439,8 +440,34 @@ candidate-free windows at t2 5, 7 and 9 s, but fails at t2 3 s; no candidate-fre
 window of the tested size exists near t2 1.2 s. Background suitability must
 therefore be part of the acceptance decision.
 
+The run-wide route now uses complete-link candidate grouping, shared local Gaussian widths,
+eight-ion component-count/shape screening, and one 30-ion production spectrum solve. The
+cached ten-minute segment contains 231 candidate centres in 120 bounded regions and takes
+about 13 s after startup. On the complete supplied 70 eV acquisition (215,015 scans), file
+reading took about 27 s, threaded background correction 60 s, and four-process
+detection/separation 68 s, for 154 s total. One-process separation took 118 to 131 s in
+separate runs. The same end-to-end benchmark took 344 s before the performance pass.
+Most crowded 14–16 min groups remain unresolved because the Gaussian reconstruction
+explains too little local variation; faster execution has not been treated as evidence of
+chemical correctness.
+
+On the cached ten-minute segment, raising the fast optimizer's step limit from 12 to 24
+reduced non-convergence flags from 37 to 10 with less than a second of extra fitting time,
+but left 110 of 120 regions unresolved. Widening the second-dimension width limit from
+three to six scan rows barely changed the median explained fraction (0.610 to 0.619)
+and reduced known-area copy recovery from 5/9 to 1/9. The width cap remains three rows.
+
+The rapid overlapping-Gaussian fit currently limits the second-dimension width to three
+scan rows by default. That helps prevent a weak factor from expanding into background in
+the known-area copy test, but isolated real peaks have a wider range of observed widths
+(median about three rows; the upper quartile is substantially wider). Single-candidate
+groups use their own observed width. Any overlapping fit that reaches the rapid width
+limit is marked unresolved, and the limit is exposed in MS-aware settings. A library of
+measured isolated shapes is needed to replace this conservative global bound.
+
 See `component_metrics.json`, `component_fit.png`, `mcr_components.png`,
 `injection_metrics.json`, `measured_profile_metrics.json` and
-`measured_profile_recovery.png` under `real_data/blob_diagnosis/`. GUI and quantification
-integration remains blocked until measured isolated profiles and held-out peak
-annotations define signal-dependent acceptance limits.
+`measured_profile_recovery.png` under `real_data/blob_diagnosis/`. The automatic audit is
+`automatic_component_metrics.json`. GUI persistence, contours, identification and CSV
+export are implemented. Production quantification remains blocked until measured isolated
+profiles and held-out peak annotations define signal-dependent acceptance limits.

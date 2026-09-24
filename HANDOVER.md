@@ -2,7 +2,14 @@
 
 Notes for whoever picks this up next, most likely Claude Code working with James and his first real data. Read this file and `README.md` first; every core module also opens with a plain-English docstring explaining its method. The detail that used to live here has moved (see the map below). **`ROADMAP.md`** is the short version: every provisional threshold, missing GUI wire-up and open question in this file and README's Known limitations, pulled into one prioritised list with a suggested starting order -- read it first if the question is just "what should I work on."
 
+For the immediate MS-aware overlapping-blob work, read
+[`docs/CLAUDE_CODE_HANDOVER.md`](docs/CLAUDE_CODE_HANDOVER.md) first. It records
+the current design mismatch, the latest experimental code and a concrete next
+iteration plan without overstating its validation.
+
 **This file exists so a brand-new conversation can pick this project up cold.** James's preferred workflow is to clear the conversation between milestones rather than compress it: a compress keeps a lossy summary of a lot of exploratory back-and-forth (scratch scripts, debugging dead ends) that isn't useful going forward, at real token cost on every later turn, whereas a clear plus a fresh read of this file and `README.md` gets equivalent or better context for less — provided this file stays genuinely complete. So: keep it that way. Update it as you go, not just at the end (state of play, decisions, gotchas, open questions), the same way it's been kept up to date through milestone 9.
+
+**Model selection, 2026-09-21:** the number of fitted peaks per window is now chosen by core/modelselect.py, not by the number of candidate apexes; benchmark and limits are in [docs/CLAUDE_CODE_HANDOVER.md](docs/CLAUDE_CODE_HANDOVER.md) (run examples/benchmark_blob_finder.py).
 
 **Current component architecture, 2026-09-20:** the MS-aware result is now a sequence of
 overlapping peak shapes, each with its own mass spectrum and estimated intensity. Candidate
@@ -12,14 +19,30 @@ overlapping contours, the component table, component-spectrum identification and
 are implemented. The full specification and remaining stages are in
 [`docs/MS_AWARE_COMPONENT_IMPLEMENTATION_PLAN.md`](docs/MS_AWARE_COMPONENT_IMPLEMENTATION_PLAN.md).
 
-The automatic real-data audit uses the cached 14–16 minute segment at a 10 s modulation
-period and 1.81 s phase. Six crowded groups produce 14 proposed components. All six are
-correctly marked unresolved: their Gaussian fits explain 33–78% of the locally weighted
-signal and four groups contain weak components. Screening model order on 20 ions and then
-refitting the chosen model on 60 ions reduced this benchmark from about 266 s to 152 s
-without changing the component counts. This is useful review output, but it is not yet a
-validated measurement of 14 compounds. See
-`real_data/blob_diagnosis/automatic_component_metrics.json`.
+The current automatic audit uses a cached ten-minute segment at a 10 s modulation period
+and 1.81 s phase. Complete-link grouping gives 120 bounded local regions from 231 candidate
+centres; fast component-count screening retains about 185 overlapping components. The strict
+quality gates still mark most regions unresolved because a shared-width Gaussian often
+explains less than 80% of local variation. This is useful review output, not a validated count
+of compounds. Ideal Gaussian copies carrying real spectra and added to real background recover
+both areas within 10% in 5 of 9 conditions; 10%-minor peaks remain unreliable.
+
+**Performance revision, 2026-09-21:** local ion cubes now fold only relevant scans and ions,
+nearby candidates cannot chain into enormous regions, Gaussian widths are shared locally,
+component counts are screened on eight ions, and production spectra are solved once on 30.
+The cached ten-minute segment takes about 13 s after startup. On the complete supplied 70 eV
+file (215,015 scans), a four-process run took 27 s to read, 60 s for background correction,
+and 68 s for MS-aware detection/separation: 154 s total, down from 344 s before this pass.
+One-process separation took 118 to 131 s in separate runs. The process queue now holds only a
+few regions at a time to limit memory use; four workers are the default on machines with
+enough CPUs. The long independent mass-channel filters use four threads. Rapid proposals
+and slower repeated-start refinement remain available as explicit alternatives.
+Doubling the fast shape solver's step limit from 12 to 24 cut premature non-convergence
+flags from 37 to 10 on the cached segment, but did not reduce its 110 unresolved regions.
+Widening the second-dimension Gaussian limit from three to six scan rows worsened
+known-area recovery from 5/9 to 1/9, so the narrower limit remains the default.
+Eight worker processes saved only about two more seconds of separation (66 s versus
+68 s), so four remains the default to limit memory and process overhead.
 
 ## Where things live
 

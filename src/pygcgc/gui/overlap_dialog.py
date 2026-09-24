@@ -1,15 +1,8 @@
-"""✂️ Overlap dialog.
+"""Inspect and refit one legacy blob or one MS-aware component group.
 
-Pick one blob on the current run (co-eluting ones, per 🔍's own flag,
-listed first) and resolve what's sharing its footprint: where each of
-its own ions actually peaks, a one-click watershed split at those
-apexes, a joint peak-shape fit with automatic model-order choice, or a
-free-form MCR-ALS decomposition. A one-shot, read-only analysis of
-whichever run is open when it's shown -- like 🗂️ batch, there's nothing
-here to undo or save (see HANDOVER.md section 5), so it's a dialog, not
-a docked panel or its own Project state. The main window feeds it the
-current run via `set_run`; reopening it (the toolbar button) is how it
-picks up a run switch, there's no live tracking while it's open.
+The joint fit displays overlapping contribution maps rather than exclusive
+pixel ownership. Fits made from an MS-aware analysis region can be accepted
+into project state; acceptance is persistent and undoable.
 """
 
 from __future__ import annotations

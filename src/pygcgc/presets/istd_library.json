@@ -1,0 +1,9 @@
+[
+  {"name": "Acenaphthene-d10", "cas": "15067-26-2", "product_code": "1524.12", "custom": false},
+  {"name": "Phenanthrene-d10", "cas": "1517-22-2", "product_code": "0389.14", "custom": false},
+  {"name": "Chrysene-d12", "cas": "1719-03-5", "product_code": "1024.18", "custom": false},
+  {"name": "Perylene-d12", "cas": "1520-96-3", "product_code": "1534.20", "custom": false},
+  {"name": "n-Tetracosane-d50", "cas": "16416-32-3", "product_code": "1022.24", "custom": false},
+  {"name": "n-Dotriacontane-d66", "cas": "62369-68-0", "product_code": "1308.32", "custom": false},
+  {"name": "Di-n-octylphthalate-3,4,5,6-d4", "cas": "93952-13-7", "product_code": "2361.24", "custom": false}
+]

@@ -3,6 +3,7 @@ import pytest
 
 from pygcgc import (Anchor, PhaseEstimationError, auto_phase, fold, locate_anchor,
                     phase_for_sequence, phase_from_anchors, phase_from_void)
+from pygcgc.core.phase import phase_from_bleed, phase_unanchored
 from pygcgc.core import circstats as cs
 from tests.conftest import PERIOD, TRUE_PHASE, make_run
 
@@ -69,6 +70,22 @@ def test_void_cut_sits_just_before_the_signal():
     assert est.confidence == "high" and est.contrast > 0.8
     # Signal starts soon after the cut, not half a period away.
     assert 0.05 < _first_signal_row(run, est.phase) < 0.9
+
+
+def test_bleed_onset_puts_the_bleed_at_the_bottom_of_the_image():
+    from tests.test_period import _run
+    run = _run(4.0, phase=0.6, duration=500.0)         # compounds plus a bleed pulse at t2 = 1.5 s
+    est = phase_unanchored(run, 4.0)
+    assert est.method == "bleed" and est.confidence in ("high", "medium")
+    apex = (1.5 + 0.6 - est.phase) % 4.0               # where the bleed lands in the folded image
+    assert 0.1 < apex < 0.7
+
+
+def test_no_bleed_means_no_bleed_estimate():
+    run = make_run(PEAKS, phase=0.73, rate=50.0)
+    with pytest.raises(PhaseEstimationError):
+        phase_from_bleed(run, 4.0)
+    assert phase_unanchored(run, 4.0).method == "void"
 
 
 def test_void_confidence_is_low_when_wraparound_leaves_no_gap():

@@ -18,11 +18,14 @@ a = Analysis(  # noqa: F821
     [str(root / "packaging" / "pyinstaller_entry.py")],
     pathex=[str(root / "src")],
     binaries=[],
-    datas=[],
+    datas=[(str(root / "src" / "pygcgc" / "presets"), "pygcgc/presets")],   # chemical_classes.toml
     hiddenimports=[
         "netCDF4", "netCDF4.utils", "netCDF4._netCDF4", "cftime",
         "scipy.special._cdflib",
         "pyqtgraph.imageview",
+        # scikit-learn's compiled helpers are imported dynamically (HDBSCAN, k-means, SVD in 🧩)
+        "sklearn.cluster._hdbscan._tree", "sklearn.cluster._hdbscan._linkage", "sklearn.cluster._hdbscan._reachability",
+        "sklearn.utils._typedefs", "sklearn.neighbors._partition_nodes",
     ],
     hookspath=[],
     runtime_hooks=[],

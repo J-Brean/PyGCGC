@@ -342,13 +342,54 @@ def test_component_maps_overlap_and_weak_amount_is_retained_with_warning(overlap
     assert assessments[1].relative_to_largest == pytest.approx(0.1)
 
 
+def test_fixed_shape_spectrum_refit_keeps_positions_and_recovers_signal(overlap_scene):
+    from pygcgc.core.overlap import refit_spectra
+
+    _run, _fold, _blobs, cube = overlap_scene
+    screened = fit_overlap(cube, 2, include_background=True, background_order=1)
+    refitted = refit_spectra(screened, cube, include_background=True, background_order=1)
+    assert [(c.row0, c.col0) for c in refitted.components] == pytest.approx(
+        [(c.row0, c.col0) for c in screened.components])
+    assert all(component.spectrum.shape == cube.ions.shape
+               for component in refitted.components)
+    assert refitted.weighted_rss <= screened.weighted_rss * 1.001
+
+
+def test_fast_shared_width_fit_recovers_two_known_overlapping_areas():
+    from types import SimpleNamespace
+    from pygcgc.core.overlap import fit_shapes_fast, refit_spectra
+
+    rr, cc = np.indices((29, 7), dtype=float)
+    centres = [(12.0, 2.2), (17.0, 2.8)]
+    spectra = np.asarray([[5000., 1500., 200., 50.],
+                          [100., 800., 3700., 400.]])
+    profiles = [np.exp(-0.5 * (((rr-r)/3.0)**2 + ((cc-c)/0.8)**2))
+                for r, c in centres]
+    background = 20.0 + rr * 0.2 + cc * 0.4
+    data = sum(profile[:, :, None] * spectrum[None, None, :]
+               for profile, spectrum in zip(profiles, spectra))
+    data += background[:, :, None]
+    cube = BlobCube(data, np.ones(rr.shape, bool), np.array([50, 51, 52, 53]),
+                    0, 0, 0.02, 10.0, 0.0)
+    hints = [SimpleNamespace(row=r, col=c) for r, c in centres]
+    shaped = fit_shapes_fast(cube, 2, apex_hint=hints, max_nfev=30)
+    fit = refit_spectra(shaped, cube, background_order=1)
+    truth = [profile.sum() * spectrum.sum()
+             for profile, spectrum in zip(profiles, spectra)]
+    assert shaped.n_shape_parameters == 6
+    assert fit.components[0].sigma_row == pytest.approx(fit.components[1].sigma_row)
+    assert [component.volume for component in fit.components] == pytest.approx(truth, rel=0.1)
+
+
 def test_fitted_component_group_round_trips_and_reconstructs_contours(overlap_scene):
-    from pygcgc.core.components import ComponentGroup, ComponentSet, group_from_fit
+    from pygcgc.core.components import (ComponentGroup, ComponentSet, component_rows,
+                                        group_from_fit, write_components_csv)
 
     _run, _fold, _blobs, cube = overlap_scene
     fit = fit_overlap(cube, 2, model="gaussian", include_background=True,
                       background_order=1, n_starts=3)
     group = group_from_fit("RUN", 4, fit, cube)
+    assert np.isfinite(group.restart_position_spread)
     restored = ComponentGroup.from_dict(group.to_dict())
     assert restored.id == "RUN:region:4"
     assert len(restored.components) == 2
@@ -362,6 +403,31 @@ def test_fitted_component_group_round_trips_and_reconstructs_contours(overlap_sc
     component_set = ComponentSet.from_dict(ComponentSet([group]).to_dict())
     assert component_set.group_for_region(4) is not None
     assert len(component_set.components) == 2
+
+    rows = component_rows(component_set, "RUN")
+    assert len(rows) == 2
+    assert rows[0]["estimated_intensity"] > 0
+    assert rows[0]["group_unresolved"] == group.unresolved
+
+    fit.restart_position_spread = 2.5
+    unstable = group_from_fit("RUN", 5, fit, cube, max_restart_position_spread=1.0)
+    assert unstable.unresolved
+    assert "repeated fits move" in unstable.warning
+
+
+def test_component_csv_includes_quality_warnings(overlap_scene, tmp_path):
+    import csv
+    from pygcgc.core.components import ComponentSet, group_from_fit, write_components_csv
+
+    _run, _fold, _blobs, cube = overlap_scene
+    fit = fit_overlap(cube, 2)
+    group = group_from_fit("RUN", 2, fit, cube, min_explained_fraction=2.0)
+    path = write_components_csv(ComponentSet([group]), tmp_path / "components.csv", "RUN")
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    assert len(rows) == 2
+    assert rows[0]["run"] == "RUN"
+    assert rows[0]["group_unresolved"] == "True"
+    assert "fit explains only" in rows[0]["group_warning"]
 
 
 # ------------------------------------------------------------- 4. MCR-ALS

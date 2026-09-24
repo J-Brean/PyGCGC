@@ -1,6 +1,13 @@
 """Finding the modulation phase.
 
-Two methods, which answer slightly different questions.
+Three methods, which answer slightly different questions.
+
+The bleed method is tried first when there are no anchors. Column bleed
+(the siloxanes) is released with every modulation, so it is present in every
+column, unlike analytes. A low percentile across columns, row by row, keeps
+only that. The cut goes 0.2 s before the baseline leaves its floor, so the
+siloxanes sit at the bottom of the image. If there is no such baseline it
+raises, and the void method takes over.
 
 The void method finds a good place to cut. It folds the run with no phase
 correction, adds up all the columns to get the typical second-dimension
@@ -84,8 +91,9 @@ class PhaseEstimate:
         if self.method == "anchors":
             used = sum(h.used for h in self.hits)
             s += f", {used}/{len(self.hits)} anchors, spread {self.spread * 1e3:.1f} ms"
-        elif self.method == "void":
-            s += f", quiet band {self.quiet_width:.2f} s wide, {self.confidence} confidence"
+        elif self.method in ("void", "bleed"):
+            what = "quiet band" if self.method == "void" else "bleed baseline starts after a floor"
+            s += f", {what} {self.quiet_width:.2f} s wide, {self.confidence} confidence"
             if self.solvent:
                 s += f", solvent front {self.solvent[0]:.0f}-{self.solvent[1]:.0f} s excluded"
         elif self.method == "fallback":
@@ -167,6 +175,58 @@ def phase_from_void(run: Run, period: float, t0: float | None = None,
                          contrast=contrast, confidence=confidence, solvent=solvent)
 
 
+def phase_from_bleed(run: Run, period: float, t0: float | None = None, n_rows: int | None = None,
+                     smooth_s: float = 0.05, margin_s: float = 0.2, floor_fraction: float = 0.04,
+                     skip_solvent: bool = True) -> PhaseEstimate:
+    """Put the cut just before the modulator-locked baseline starts.
+
+    Column bleed (the siloxanes) is released with every modulation and is
+    present in every column. A low percentile taken across columns, row by
+    row, keeps that and discards the analytes, which occupy a few columns
+    each. Its rise out of the flat floor marks the start of the modulation
+    cycle as the detector sees it. The cut goes `margin_s` before the rise,
+    so the bleed sits at the bottom of the image and nothing is split.
+
+    Raises PhaseEstimationError if there is no such structure (a clean run
+    with no bleed): the profile has to rise far above its own noise."""
+    fold0 = Fold(run.times, FoldSpec(period=period, phase=0.0, t0=t0, n_rows=n_rows))
+    img = fold0.tic_image(run)
+    solvent = find_solvent_front(run.times, run.tic) if skip_solvent else None
+    use = fold0.complete & (img.sum(axis=0) > 0)
+    if solvent:
+        use &= ~((fold0.t1 + period > solvent[0]) & (fold0.t1 < solvent[1]))
+    if use.sum() < 10:
+        raise PhaseEstimationError("too few modulations with signal to find the bleed")
+    base = np.percentile(img[:, use], 20, axis=1)
+    base = gaussian_filter1d(base, max(1.0, smooth_s / fold0.row_pitch), mode="wrap")
+
+    lo, hi = float(np.percentile(base, 10)), float(base.max())
+    rise = hi - lo
+    settled = base <= lo + 0.05 * rise
+    noise = float(base[settled].std()) if settled.sum() > 3 else 0.0
+    if rise <= 0 or rise < 20 * noise or rise < 0.25 * lo:
+        raise PhaseEstimationError("no modulator-locked baseline to find the phase from")
+
+    # Onset: where the profile first leaves the floor, after the longest stretch on it.
+    threshold = lo + max(6 * noise, floor_fraction * rise)
+    start, length = _longest_circular_run(base <= threshold)
+    onset = (start + length) % fold0.n_rows
+    cut_row = (onset - margin_s / fold0.row_pitch) % fold0.n_rows
+    confidence = "high" if rise >= 50 * noise else "medium"
+    return PhaseEstimate(phase=float(cut_row * fold0.row_pitch) % period, method="bleed",
+                         quiet_width=length * fold0.row_pitch, profile=base,
+                         contrast=float(rise / hi), confidence=confidence, solvent=solvent)
+
+
+def phase_unanchored(run: Run, period: float, **kw) -> PhaseEstimate:
+    """The phase with no anchors: the start of the modulator-locked baseline
+    if there is one, otherwise the quietest place to cut."""
+    try:
+        return phase_from_bleed(run, period, **kw)
+    except PhaseEstimationError:
+        return phase_from_void(run, period, **kw)
+
+
 # ------------------------------------------------------------------ anchors
 def locate_anchor(run: Run, anchor: Anchor, min_height: float = 50.0) -> tuple[float | None, float]:
     """Apex time and height of the brightest pulse of an anchor's ion(s)
@@ -234,7 +294,7 @@ def auto_phase(run: Run, period: float, anchors: list[Anchor] | None = None,
             pass
     if fallback is not None:
         return PhaseEstimate(phase=float(fallback) % period, method="fallback")
-    return phase_from_void(run, period, **kw)
+    return phase_unanchored(run, period, **kw)
 
 
 def phase_for_sequence(runs: list[Run], period: float, anchors: list[Anchor] | None = None,
@@ -252,7 +312,7 @@ def phase_for_sequence(runs: list[Run], period: float, anchors: list[Anchor] | N
         voids = []
         for r in runs:
             try:
-                voids.append(phase_from_void(r, period))
+                voids.append(phase_unanchored(r, period))
             except PhaseEstimationError:
                 voids.append(None)     # e.g. a run with no signal
         solid = [v.phase for v in voids if v is not None and v.confidence != "low"]

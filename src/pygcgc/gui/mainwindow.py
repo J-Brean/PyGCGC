@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -11,9 +13,15 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .. import __version__
 from ..core import (IonExpressionError, chromatogram_caption, find_homologous_series,
                     parse_ion_expr, plot_chromatogram, qualifier_ratios_at, reference_from_spectrum,
-                    save_figure, siloxane_scores, spectrum_at)
+                    save_figure, siloxane_scores, spectrum_at, write_components_csv)
+from ..core.cluster import CLUSTER_COLOURS, OTHER_COLOUR
 from ..core.peaks import make_frame
+from ..core.report import cluster_caption, plot_cluster_chromatogram, region_caption
+from ..core.segment import SegmentSettings
+from ..core.components import ComponentSet
+from ..core.peaktable import format_accounting, respectrum_components, signal_accounting
 from ..core.io import file_filter
+from ..core.istd import write_istd_report_csv
 from .blob_state import LEGACY, MS_AWARE
 from .batch_dialog import BatchDialog
 from .commands import (ApplyBackground, ApplySiloxane, EditAlignment, EditBlobs, EditComponents, EditDecisions,
@@ -27,10 +35,13 @@ from .panels.align import AlignPanel
 from .panels.background import BackgroundPanel
 from .panels.blobs import BlobsPanel
 from .panels.calibration import CalibrationPanel
+from .panels.classes import ClassesPanel, group_colour
+from .panels.clusters import ClustersPanel
 from .panels.hydrocarbons import HydrocarbonsPanel
+from .panels.istd import IstdPanel
 from .panels.results import ResultsPanel
 from .panels.siloxane import SiloxanePanel
-from .project import Project
+from .project import Project, SIDECAR_NAME
 from .render import Renderer
 from .theme import apply_theme
 from .workflow import IdentifyStepPanel, QuantStepPanel, WorkflowPanel
@@ -66,6 +77,16 @@ SHORTCUTS = [
 ]
 
 
+def _format_processed_at(iso: str | None) -> str | None:
+    """Render a project's `processed_at` timestamp for display, or None if unset/unparsable."""
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso).strftime("%d %B %Y at %H:%M")
+    except ValueError:
+        return None
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, dark: bool = False):
         super().__init__()
@@ -89,9 +110,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.blobs = self.project.blobs
         self._blob_add_pending = False
         self.hydrocarbons = self.project.hydrocarbons
+        self.classes = self.project.classes
+        self._class_overlay_cache: tuple | None = None
+        self.clusters = self.project.clusters
+        self._cluster_overlay_cache: tuple | None = None
+        self._cluster_overlay_on = False
+        self._cluster_fill_cache: tuple | None = None
         self._alkane_seed_pending: list | None = None
         self._siloxane_pick_pending = False
         self._qual_pick_pending = False
+        self.istd = self.project.istd
+        self._istd_label_pending: str | None = None
         self._reintegrate: tuple[str, str] | None = None     # (run, compound) whose footprint is being redrawn
 
         # ---- centre: 2D and 1D tabs
@@ -136,6 +165,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.align_panel.set_align(self.align)
         self.blobs_panel = BlobsPanel()
         self.hydro_panel = HydrocarbonsPanel()
+        self.class_panel = ClassesPanel()
+        self.cluster_panel = ClustersPanel()
+        self.cluster_panel.set_values(self.clusters.settings, self.clusters.skip_siloxane, self.clusters.scope,
+                                      self.clusters.use_soft, self.clusters.unit, self.clusters.n_regions,
+                                      self.clusters.normalise)
+        self.istd_panel = IstdPanel()
+        self.istd_panel.set_istd(self.istd)
+        self.istd_panel.refresh()
         self.spectrum = SpectrumView()
         self.jobs_panel = JobsPanel(self.jobs)
         self.results = ResultsPanel()
@@ -148,7 +185,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # replace the last, with a single Go button underneath (see gui/workflow.py).
         # The old panels keep their own primary buttons but hide them; Go does that job.
         for w in (self.bg_panel.apply_all_btn, self.sil_panel.apply_btn, self.blobs_panel.find_btn,
-                  self.hydro_panel.find_btn, self.align_panel.propagate_btn, self.fold_panel.fix_btn):
+                  self.hydro_panel.find_btn, self.align_panel.propagate_btn, self.fold_panel.fix_btn,
+                  self.istd_panel.find_btn):
             w.setVisible(False)
         self.quant_step = QuantStepPanel()
         self.identify_step = IdentifyStepPanel()
@@ -174,8 +212,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "alignment so that a blank can be subtracted through it.",
             self.bg_panel, "Remove background")
         add("blobs", "🔍 Peaks", "Peak detection and separation",
-            "Choose MS-aware separation or the older hard-border blob detector, then find peaks on "
-            "every run. MS-aware regions can contain several overlapping compounds.",
+            "Find overlapping blobs automatically from intensity and mass spectra on every run. "
+            "The older hard-border detector remains available for comparison.",
             "Detection uses the cleaned baseline from the background step. Existing siloxane, ladder "
             "and library-search tools still use legacy blobs while their component-aware paths are built.",
             self.blobs_panel, "Find peaks", scrolled=False)
@@ -189,9 +227,17 @@ class MainWindow(QtWidgets.QMainWindow):
             "Anchors the n-alkane ladder to give retention indices, and draws group-type stencils "
             "(lumped classes) that transfer between runs. Go starts a two-click flow: click two "
             "n-alkanes on the 2D view and type their carbon numbers.",
-            "The ladder is searched for on clean data and gives the retention index that identification "
-            "(step 7) uses.",
+            "The ladder is searched for on clean data. It gives the retention index that identification "
+            "(step 8) uses, and the t2-above-the-alkane-line axis that classification (step 7) uses.",
             self.hydro_panel, "Find alkane series")
+        add("classify", "🧬 Classify", "Compound classes",
+            "Says what kind of compound each blob is (alkane, alkylbenzene, PAH, N-heteroaromatic, siloxane, "
+            "and so on) from its mass spectrum, with no library. Rules live in an editable file. If the 14 eV "
+            "run of a tandem acquisition is loaded too, its molecular ions add evidence.",
+            "It classifies the blobs from step 4 after siloxanes are flagged (5), and uses the ladder from "
+            "step 6 for a polarity axis when there is one. It comes before library identification because "
+            "it needs no library and can tell you what to expect.",
+            self.class_panel, "Classify blobs")
         add("identify", "🏷️ Identify", "Identify blobs",
             "Matches each blob's spectrum to a mass spectral library (MSP) and reports a confidence "
             "tier. Go opens the identifier window.",
@@ -204,6 +250,19 @@ class MainWindow(QtWidgets.QMainWindow):
             "Last: it needs the phase (step 1) and works on the cleaned data (step 3). Everything before "
             "it is there to make its peaks clean and correctly placed.",
             self.quant_step, "Quantify")
+        add("cluster", "🧩 Cluster", "Peak clusters",
+            "Groups peaks by the shape of their mass spectra, with no rules and no library, so the chromatogram "
+            "divides into chemically similar regions. Cluster the selected run, or pool every 70 eV run so each "
+            "cluster means the same thing everywhere and runs can be compared cluster by cluster.",
+            "It groups the blobs from step 4. Spectra do not drift between runs, so no alignment is needed to "
+            "compare runs. It sits last because it is analysis, not preparation: nothing else depends on it.",
+            self.cluster_panel, "Cluster peaks")
+        add("istd", "🏷️ Internal standards", "Internal standards",
+            "Select an internal standard, click its peak on whichever run is open, then find it on every "
+            "other run by position and mass spectrum together, with a confidence score per run.",
+            "It needs the blobs from step 4 on whichever runs it searches. Independent of everything after "
+            "step 4, so it can run any time once peaks are detected.",
+            self.istd_panel, "Find on all other chromatograms")
         # One left-hand dock with three tabs, so the run list, the layers and the open
         # step's settings share the space instead of competing for it.
         self.left_tabs = QtWidgets.QTabWidget()
@@ -287,8 +346,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 ("blobs", "4 🔍 Peaks", "Peak detection and separation"),
                 ("siloxane", "5 🫧 Siloxane", "Siloxane removal settings"),
                 ("hydro", "6 ⛓️ Hydrocarbons", "n-Alkane ladder and stencils"),
-                ("identify", "7 🏷️ Identify", "Library search"),
-                ("quant", "8 🧪 Quantify", "Targets, calibration and quantification")]):
+                ("classify", "7 🧬 Classify", "Compound classes from the spectrum"),
+                ("identify", "8 🏷️ Identify", "Library search"),
+                ("quant", "9 🧪 Quantify", "Targets, calibration and quantification"),
+                ("cluster", "10 🧩 Cluster", "Unsupervised peak clusters, within and between runs"),
+                ("istd", "11 🏷️ IS", "Internal standards: click-labelled, matched by position and spectrum")]):
             info = self.workflow.step_info(key)
             act = A(text, lambda _checked=False, k=key: self.workflow.show_step(k), None,
                     f"{tip}. Opens its settings on the left; press Go there to run it.\n"
@@ -318,11 +380,11 @@ class MainWindow(QtWidgets.QMainWindow):
                              "Show 🧪 peak outlines and labels", checkable=True)
         self.act_overlay.setChecked(True)
         self.act_blobs_panel = A("🔍 Peaks", self.show_blobs_panel, None,
-                                 "Choose and inspect either MS-aware peak regions or legacy blobs")
+                                 "Choose and inspect overlapping MS-aware blobs or legacy blobs")
         self.act_find_blobs = A("🔍 Find peaks", self.run_blobs, None,
                                 "Run the selected peak-detection method on every loaded run")
         self.act_blob_overlay = A("🔍 Peak detections", self.view2d.set_blob_overlay_visible, None,
-                                  "Show detected centres and regions or legacy outlines", checkable=True)
+                                  "Show overlapping MS-aware contours or legacy outlines", checkable=True)
         self.act_add_blob = A("➕ Add blob", self.start_add_blob, None,
                               "Click a peak in the 2D view that automatic detection missed")
         self.act_merge_blobs = A("Merge selected blobs", self.merge_selected_blobs, "G",
@@ -338,11 +400,19 @@ class MainWindow(QtWidgets.QMainWindow):
                                      "Show every stencil, lifted onto this run's own alkane series",
                                      checkable=True)
         self.act_stencil_overlay.setChecked(True)
+        self.act_classify = A("🧬 Classify blobs", self.start_classify, None,
+                              "Compound class of every blob from its spectrum (uses the 14 eV run if one is loaded)")
+        self.act_cluster = A("🧩 Cluster peaks", self.start_cluster, None,
+                             "Group peaks by mass spectrum: this run, or every 70 eV run pooled (see step 10)")
         self.act_identify = A("🏷️ Identify", self.show_identify_dialog, None,
                              "Search 🔍 blobs against an MSP library: retention index, weighted dot "
                              "product, target-decoy confidence")
         self.act_batch = A("🗂️ Batch", self.show_batch_dialog, None,
                           "Process a whole folder: cached, parallel pipeline, feature table, QC, PCA and volcano")
+        self.act_istd_panel = A("🏷️ Internal standards", self.show_istd_panel, None,
+                                "Label internal standards and match them across every run")
+        self.act_label_istd = A("🏷️ Label internal standard", self.start_label_istd, None,
+                                "Click the peak for the selected internal standard on this run")
         self.act_blob_settings = A("🔍 Peak detection settings…", self.edit_blob_settings, None,
                                    "Settings for the detection method currently selected in step 4")
         self.act_hydro_settings = A("⛓️ Hydrocarbon settings…", self.edit_hydro_settings, None,
@@ -403,7 +473,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # numbered steps (each opens its settings on the left), then the extras.
         tb.addAction(self.act_open)
         tb.addSeparator()
-        for key in ("fold", "align", "background", "blobs", "siloxane", "hydro", "identify", "quant"):
+        for key in ("fold", "align", "background", "blobs", "siloxane", "hydro", "classify", "identify", "quant",
+                    "cluster"):
             tb.addAction(self.step_actions[key])
         tb.addSeparator()
         tb.addAction(self.act_overlap)
@@ -511,9 +582,11 @@ class MainWindow(QtWidgets.QMainWindow):
         p.addAction(self.act_find_alkanes)
         p.addAction(QtGui.QAction("⛓️ Propagate alkanes to all runs", self, triggered=self.propagate_alkanes))
         p.addAction(self.act_hydro_settings)
-        p.addSection("7  Identify")
+        p.addSection("7  Classify")
+        p.addAction(self.act_classify)
+        p.addSection("8  Identify")
         p.addAction(self.act_identify)
-        p.addSection("8  Quantify")
+        p.addSection("9  Quantify")
         p.addAction(self.act_quant)
         p.addAction(self.act_quant_settings)
         p.addAction(self.act_review)
@@ -522,6 +595,12 @@ class MainWindow(QtWidgets.QMainWindow):
         p.addAction(self.act_reset_footprint)
         p.addAction(self.act_calib)
         p.addAction(self.act_export)
+        p.addSection("10  Cluster")
+        p.addAction(self.act_cluster)
+        p.addSection("11  Internal standards")
+        p.addAction(self.act_istd_panel)
+        p.addAction(self.act_label_istd)
+        p.addAction(QtGui.QAction("🔎 Find internal standards on all runs", self, triggered=self.propagate_istd))
         p.addSection("Whole folder")
         p.addAction(self.act_batch)
         h = m.addMenu("&Help")
@@ -546,8 +625,10 @@ class MainWindow(QtWidgets.QMainWindow):
          "align": self.propagate_anchors,
          "blobs": self.run_blobs,
          "hydro": self.start_find_alkanes,
+         "classify": self.start_classify,
          "identify": self._go_identify,
-         "quant": self.run_quant}[key]()
+         "quant": self.run_quant,
+         "cluster": self.start_cluster}[key]()
 
     def reset_layout(self):
         self.restoreState(self._default_layout)
@@ -588,6 +669,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _connect(self):
         self.project.runsChanged.connect(self._runs_changed)
         self.project.message.connect(self.say)
+        self.project.autosaved.connect(self.undo.setClean)
+        self.undo.indexChanged.connect(lambda _i: self.project.request_autosave())   # every edit, undo and redo
         self.renderer.ready.connect(self._rendered)
         self.renderer.failed.connect(lambda t: self.say(f"Drawing failed: {t}"))
         self.runs_panel.currentChanged.connect(self.set_run)
@@ -660,6 +743,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.blobs_panel.mergeRequested.connect(self.merge_blobs)
         self.blobs_panel.selectionChanged.connect(self._blob_selection_changed)
         self.blobs_panel.rowActivated.connect(self.goto_blob)
+        self.blobs_panel.exportRequested.connect(self.export_components)
+        self.blobs_panel.accountingRequested.connect(self.run_signal_accounting)
         # ⛓️
         self.hydrocarbons.changed.connect(self._hydrocarbons_changed)
         self.hydrocarbons.runningChanged.connect(self._hydrocarbons_running)
@@ -677,6 +762,64 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hydro_panel.qualifiersChanged.connect(self._qualifiers_edited)
         self.hydro_panel.pickQualifiersToggled.connect(self._qual_pick_toggled)
         self.hydro_panel.set_qualifiers(self.hydrocarbons.settings)
+        self.classes.changed.connect(self._classes_changed)
+        self.classes.runningChanged.connect(self._classes_running)
+        cp = self.class_panel
+        cp.classifyRequested.connect(self.start_classify)
+        cp.softToggled.connect(self.classes.set_use_soft)
+        cp.loadRulesRequested.connect(self.load_class_rules)
+        cp.copyRulesRequested.connect(self.copy_class_rules)
+        cp.reloadRulesRequested.connect(self.reload_class_rules)
+        cp.shippedRulesRequested.connect(self.classes.reset_rules)
+        cp.classToggled.connect(self.classes.set_enabled)
+        cp.overlayToggled.connect(lambda _on: self._update_blob_overlay())
+        cp.blobActivated.connect(self._class_blob_activated)
+        cp.exportRequested.connect(self.export_classes)
+        self.project.runsChanged.connect(self._classes_changed)
+        # 🧩
+        self.clusters.changed.connect(self._clusters_changed)
+        self.clusters.runningChanged.connect(self._clusters_running)
+        self.cluster_panel.settingsEdited.connect(self._cluster_settings_edited)
+        self.cluster_panel.overlayToggled.connect(lambda _on: self._refresh_cluster_display())
+        self.cluster_panel.clusterSelected.connect(self._cluster_selection_changed)
+        self.cluster_panel.table.itemSelectionChanged.connect(self._cluster_selection_changed)
+        self.cluster_panel.figureRequested.connect(self.export_cluster_figure)
+        self.cluster_panel.mergeRequested.connect(self.merge_selected_clusters)
+        self.cluster_panel.checkRequested.connect(lambda kind: self.clusters.run_check(kind))
+        self.cluster_panel.groupEdited.connect(self.clusters.set_group)
+        self.cluster_panel.nameEdited.connect(self.clusters.set_name)
+        self.cluster_panel.testGroupsRequested.connect(self.test_cluster_groups)
+        self.cluster_panel.pcaFigureRequested.connect(self.export_cluster_pca)
+        self.classes.changed.connect(self._clusters_changed)          # "Made of" follows 🧬
+        self.cluster_panel.exportPeaksRequested.connect(self.export_cluster_peaks)
+        self.cluster_panel.exportRunsRequested.connect(self.export_cluster_runs)
+        self.workflow.stepChanged.connect(self._cluster_step_changed)
+        self.project.runsChanged.connect(self._clusters_changed)
+        # 🏷️
+        self.istd.changed.connect(self._istd_changed)
+        self.istd_panel.labelRequested.connect(self.start_label_istd)
+        self.istd_panel.findAllRequested.connect(self.propagate_istd)
+        self.istd_panel.removeReferenceRequested.connect(self.istd.remove_reference)
+        self.istd_panel.addCustomRequested.connect(self.istd.add_custom)
+        self.istd_panel.removeFromLibraryRequested.connect(self.istd.remove_from_library)
+        self.istd_panel.exportRequested.connect(self.export_istd_report)
+        self.istd_panel.rowActivated.connect(self.relabel_istd)
+        # Layers tab: raw image visibility/alpha, and mirrors of the blob, stencil and
+        # cluster overlay toggles that live in the top bar and the Cluster panel.
+        self.layers_panel.raw.toggled.connect(self.view2d.set_image_visible)
+        self.layers_panel.raw_alpha.valueChanged.connect(lambda v: self.view2d.set_image_opacity(v / 100.0))
+        self.layers_panel.blob_overlay.setChecked(self.act_blob_overlay.isChecked())
+        self.layers_panel.blob_overlay.toggled.connect(self.act_blob_overlay.setChecked)
+        self.act_blob_overlay.toggled.connect(self.layers_panel.blob_overlay.setChecked)
+        self.layers_panel.stencil_overlay.setChecked(self.act_stencil_overlay.isChecked())
+        self.layers_panel.stencil_overlay.toggled.connect(self.act_stencil_overlay.setChecked)
+        self.act_stencil_overlay.toggled.connect(self.layers_panel.stencil_overlay.setChecked)
+        self.layers_panel.cluster_fill.setChecked(self.cluster_panel.fill_box.isChecked())
+        self.layers_panel.cluster_fill.toggled.connect(self.cluster_panel.fill_box.setChecked)
+        self.cluster_panel.fill_box.toggled.connect(self.layers_panel.cluster_fill.setChecked)
+        self.layers_panel.cluster_outline.setChecked(self.cluster_panel.overlay_box.isChecked())
+        self.layers_panel.cluster_outline.toggled.connect(self.cluster_panel.overlay_box.setChecked)
+        self.cluster_panel.overlay_box.toggled.connect(self.layers_panel.cluster_outline.setChecked)
         # workflow
         self.workflow.goRequested.connect(self.go)
         self.workflow.stepChanged.connect(self._step_opened)
@@ -697,6 +840,33 @@ class MainWindow(QtWidgets.QMainWindow):
             self.open_folder(folder)
 
     def open_folder(self, folder, on_loaded=None):
+        folder = Path(folder)
+        sidecar = folder / SIDECAR_NAME
+        if sidecar.exists() and self.project.path is not None and sidecar.resolve() == self.project.path.resolve():
+            self.say(f"{folder.name} is already open")
+            return
+        if sidecar.exists():
+            try:
+                processed_at = json.loads(sidecar.read_text()).get("processed_at")
+            except (OSError, ValueError):
+                processed_at = None
+            when = _format_processed_at(processed_at) or "an earlier session"
+            box = QtWidgets.QMessageBox(self)
+            box.setWindowTitle("Saved processing found")
+            box.setText(f"This chromatogram was processed on {when}.")
+            box.setInformativeText("Resume the saved processing, or start fresh from the raw data? "
+                                   f"Starting fresh overwrites {SIDECAR_NAME} at the next processing step.")
+            resume_btn = box.addButton("Resume processing", QtWidgets.QMessageBox.ButtonRole.AcceptRole)
+            fresh_btn = box.addButton("Start fresh", QtWidgets.QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton(QtWidgets.QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(resume_btn)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is resume_btn:
+                self.open_project(sidecar, on_loaded)
+                return
+            if clicked is not fresh_btn:
+                return
         self.say(f"Opening {folder}")
         self.project.open_folder(folder, on_loaded)
 
@@ -748,6 +918,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._align_changed()
         self._blobs_changed()
         self._hydrocarbons_changed()
+        self._classes_changed()
+        self._clusters_changed()
+        self._istd_changed()
         if self.bg_panel.preview.isChecked():
             self.start_preview()
         if self._last_click is not None:
@@ -1366,6 +1539,9 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self._picking is not None:
             self._picking = None
             self.say("Picking cancelled")
+        elif self._istd_label_pending is not None:
+            self._istd_label_pending = None
+            self.say("Labelling an internal standard cancelled")
 
     def _point_clicked(self, col: int, t2: float):
         if self._anchor_stage is not None and self.index >= 0:
@@ -1409,6 +1585,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._edit(f"🧪 Pick {compound} in {run} by hand", change, requantify=(run,))
             self.say(f"Re-measuring {compound} in {run}")
             return
+        if self._istd_label_pending is not None and self.index >= 0:
+            self._finish_label_istd(col, t2)
+            return
         self._select_blob_at(col, t2)
 
     def _select_blob_at(self, col: int, t2: float):
@@ -1426,8 +1605,12 @@ class MainWindow(QtWidgets.QMainWindow):
                     for component in components])
                 nearest = int(np.argmin(distance))
                 if distance[nearest] < 1.5:
+                    # select_component/select_row suppress their own selectionChanged signal
+                    # (it exists for genuine table clicks), so the overlay and spectrum are
+                    # refreshed here explicitly.
                     self.blobs_panel.select_component(components[nearest].id)
                     self._update_blob_overlay()
+                    self._show_blob_spectrum(self.blobs_panel.selected_indices())
                 return
             candidates = self.blobs.candidates_for(self.index)
             regions = self.blobs.regions_for(self.index)
@@ -1454,6 +1637,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if d[i] < 1.5:      # close enough that this was probably meant for it
             self.blobs_panel.select_row(i)
             self._update_blob_overlay()
+            self._show_blob_spectrum(self.blobs_panel.selected_indices())
 
     def _review_image(self, run: str, ion: int):
         """Extended quantifier-ion image and frame for the review gallery."""
@@ -1611,7 +1795,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.blobs.method == MS_AWARE:
                 self.say("🔍 MS-aware peak detection finished")
                 self.workflow.mark_done(
-                    "blobs", "MS-aware peak regions found. Select a region to inspect or resolve it.")
+                    "blobs", "Overlapping peaks found automatically. Select a peak to inspect its fit.")
             else:
                 self.say("🔍 Legacy blob detection finished")
                 self.workflow.mark_done("blobs", "Legacy blobs found on every run. Check the table.")
@@ -1646,89 +1830,75 @@ class MainWindow(QtWidgets.QMainWindow):
                                       0 if scores is None else len(scores))
         self._update_blob_overlay()
 
+    def _cached_contour(self, group, component_index: int, fraction: float, used: set):
+        """A component contour, computed once per fitted group and reused across redraws."""
+        cache = getattr(self, "_contour_cache", None)
+        if cache is None:
+            cache = self._contour_cache = {}
+        key = (id(group), component_index, fraction)
+        used.add(key)
+        hit = cache.get(key)
+        if hit is None or hit[0] is not group:          # id() can be recycled: keep the group too
+            hit = (group, group.contour(component_index, fraction))
+            cache[key] = hit
+        return hit[1]
     def _update_blob_overlay(self):
         if self.blobs.method == MS_AWARE:
-            candidates = self.blobs.candidates_for(self.index) if self.index >= 0 else None
-            regions = self.blobs.regions_for(self.index) if self.index >= 0 else None
-            if candidates is None or regions is None:
-                self.view2d.set_candidate_overlay(
-                    (np.array([]), np.array([])), (np.array([]), np.array([])))
-                self.view2d.set_component_overlay([])
-                return
             component_set = self.blobs.components_for(self.index)
-            accepted_regions = ({group.region_index for group in component_set.groups}
-                                if component_set is not None else set())
-            outlines = {i: self._candidate_region_outline(candidates, region)
-                        for i, region in enumerate(regions) if i not in accepted_regions}
-            outline = (np.concatenate([x for x, _ in outlines.values()]),
-                       np.concatenate([y for _, y in outlines.values()])) if outlines else (
-                           np.array([]), np.array([]))
-            selected = [outlines[i] for i in self.blobs_panel.selected_region_indices()
-                        if i in outlines]
-            highlight = (np.concatenate([x for x, _ in selected]),
-                         np.concatenate([y for _, y in selected])) if selected else (
-                             np.array([]), np.array([]))
-            accepted_candidate_indices = {
-                candidate_index for i, region in enumerate(regions) if i in accepted_regions
-                for candidate_index in region.candidate_indices}
-            keep = np.asarray([i not in accepted_candidate_indices for i in range(len(candidates))])
+            # Candidate rectangles are implementation details, not found blobs.
+            # Only the independently fitted, potentially overlapping contours
+            # belong on the normal peak-detection image.
             self.view2d.set_candidate_overlay(
-                outline, (candidates.t1[keep], candidates.t2[keep]), highlight)
+                (np.array([]), np.array([])), (np.array([]), np.array([])))
             colours = ((0, 220, 255), (255, 105, 180), (255, 205, 60),
                        (120, 235, 120), (190, 130, 255), (255, 140, 70))
             selected_regions = set(self.blobs_panel.selected_region_indices())
-            component_overlays = []
+            component_overlays, used = [], set()
             if component_set is not None:
                 for group in component_set.groups:
                     for component_index, _component in enumerate(group.components):
                         colour = colours[component_index % len(colours)]
                         for fraction, style in ((0.10, QtCore.Qt.PenStyle.SolidLine),
                                                 (0.50, QtCore.Qt.PenStyle.DotLine)):
-                            contour = group.contour(component_index, fraction)
+                            contour = self._cached_contour(group, component_index, fraction, used)
                             component_overlays.append({
                                 "outline": contour, "colour": colour, "style": style,
-                                "width": 3.0 if group.region_index in selected_regions else 1.8})
-            self.view2d.set_component_overlay(component_overlays)
+                                # Any width above 1 sends Qt down its slow wide-line stroker:
+                                # ~1,600 contours at 1.8 cost 0.1-1.7 s per pan frame, at 1 about
+                                # 8 ms. Only the few selected contours are drawn wide.
+                                "width": 3.0 if group.region_index in selected_regions else 1.0})
+            # forget contours of groups that no longer exist (re-fits replace group objects)
+            self._contour_cache = {k: v for k, v in getattr(self, '_contour_cache', {}).items() if k in used}
+            self.view2d.set_component_overlay(component_overlays + self._class_overlays() + self._cluster_overlays())
             return
         blobs = self.blobs.blobs_for(self.index) if self.index >= 0 else None
         if blobs is None or len(blobs) == 0:
             self.view2d.set_blob_overlay((np.array([]), np.array([])), (np.array([]), np.array([])))
+            self.view2d.set_component_overlay(self._cluster_overlays())    # peaks clustered without 🔍 blobs
             return
-        xs, ys = [], []
-        for i in range(len(blobs)):
-            x, y = blobs.outline_times(i)
-            xs.append(x)
-            ys.append(y)
-        outline = (np.concatenate(xs), np.concatenate(ys))
-        sel = self.blobs_panel.selected_indices()
-        if sel:
-            xs, ys = [], []
-            for i in sel:
-                if 0 <= i < len(blobs):
-                    x, y = blobs.outline_times(i)
-                    xs.append(x)
-                    ys.append(y)
-            highlight = (np.concatenate(xs), np.concatenate(ys)) if xs else (np.array([]), np.array([]))
-        else:
-            highlight = (np.array([]), np.array([]))
-        flagged = np.flatnonzero(siloxane_scores(blobs, self.project.siloxane_settings)
-                                 >= self.project.siloxane_settings.score_threshold)
-        xs, ys = [], []
-        for i in flagged:
-            x, y = blobs.outline_times(int(i))
-            xs.append(x)
-            ys.append(y)
-        siloxane = (np.concatenate(xs), np.concatenate(ys)) if xs else (np.array([]), np.array([]))
+        cache = getattr(self, "_legacy_outlines", None)
+        key = (id(blobs), id(blobs.labels), len(blobs))
+        if cache is None or cache[0] != key:
+            # Outlines are pure functions of the labels: build them once per BlobSet,
+            # not on every selection change (4,000 blobs took ~3 s per redraw).
+            per_blob = [blobs.outline_times(i) for i in range(len(blobs))]
+            cache = (key, per_blob, (np.concatenate([x for x, _ in per_blob]),
+                                     np.concatenate([y for _, y in per_blob])), {})
+            self._legacy_outlines = cache
+        _key, per_blob, outline, flagged_cache = cache
+        empty = (np.array([]), np.array([]))
+        sel = [i for i in self.blobs_panel.selected_indices() if 0 <= i < len(blobs)]
+        highlight = ((np.concatenate([per_blob[i][0] for i in sel]),
+                      np.concatenate([per_blob[i][1] for i in sel])) if sel else empty)
+        sil = self.project.siloxane_settings
+        if sil not in flagged_cache:
+            flagged = np.flatnonzero(siloxane_scores(blobs, sil) >= sil.score_threshold)
+            flagged_cache[sil] = ((np.concatenate([per_blob[int(i)][0] for i in flagged]),
+                                   np.concatenate([per_blob[int(i)][1] for i in flagged]))
+                                  if len(flagged) else empty)
+        siloxane = flagged_cache[sil]
         self.view2d.set_blob_overlay(outline, highlight, siloxane)
-
-    @staticmethod
-    def _candidate_region_outline(candidates, region):
-        x0 = candidates.t1_start + region.col0 * candidates.period
-        x1 = candidates.t1_start + region.col1 * candidates.period
-        y0, y1 = region.row0 * candidates.pitch, region.row1 * candidates.pitch
-        x = np.array([x0, x1, np.nan, x1, x1, np.nan, x1, x0, np.nan, x0, x0, np.nan])
-        y = np.array([y0, y0, np.nan, y0, y1, np.nan, y1, y1, np.nan, y1, y0, np.nan])
-        return x, y
+        self.view2d.set_component_overlay(self._class_overlays() + self._cluster_overlays())
 
     def start_add_blob(self):
         if self.index < 0 or self.project.entries[self.index].run is None:
@@ -1781,6 +1951,51 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _blob_selection_changed(self, indices: list[int]):
         self._update_blob_overlay()
+        self._show_blob_spectrum(indices)
+
+    def _show_blob_spectrum(self, indices: list[int]) -> None:
+        """The selected blob's own mass spectrum, not just whatever pixel was clicked."""
+        if len(indices) != 1 or self.index < 0:
+            return
+        row = indices[0]
+        name = self.project.entries[self.index].name
+        if self.blobs.method == MS_AWARE:
+            group = self.blobs_panel.group_for_row(row)
+            component = self.blobs_panel.component_for_row(row)
+            if group is None or component is None or component not in group.components:
+                return
+            fold = self.project.fold(self.index)
+            base_run = self.project.base_run(self.index)
+            if base_run is None:
+                return
+            try:
+                # The stored component spectrum covers only its window's ~30 diagnostic
+                # ions and can miss the molecular ion; re-solve this one window on every
+                # ion instead (a single small linear solve, not a new peak search).
+                peaks, _model, _footprint = respectrum_components(
+                    base_run, fold, ComponentSet(groups=[group]))
+            except Exception as exc:
+                self.say(f"Couldn't fit this peak's full spectrum: {exc}")
+                return
+            j = group.components.index(component)
+            if j >= len(peaks):
+                return
+            warning = " (unresolved group)" if group.unresolved else ""
+            self.spectrum.set_spectrum(
+                peaks.mz, peaks.spectra[j],
+                f"{name}: fitted peak at t₁ {component.t1 / 60:.3f} min, t₂ {component.t2:.3f} s"
+                f"{warning}, spectrum solved on all {peaks.mz.size} ions")
+            return
+        blobs = self.blobs.blobs_for(self.index)
+        if blobs is None or not (0 <= row < len(blobs)):
+            return
+        use_apex = (blobs.apex_spectra.shape[0] == len(blobs)
+                   and int((blobs.apex_spectra[row] > 0).sum()) >= 5)
+        spectrum = blobs.apex_spectra[row] if use_apex else blobs.spectra[row]
+        kind = "apex" if use_apex else "footprint-summed (apex too thin)"
+        self.spectrum.set_spectrum(
+            blobs.mz, spectrum,
+            f"{name}: blob at t₁ {blobs.t1[row] / 60:.3f} min, t₂ {blobs.t2[row]:.3f} s ({kind} spectrum)")
 
     def goto_blob(self, row: int):
         if self.blobs.method == MS_AWARE:
@@ -1822,6 +2037,55 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{'s' if len(group.components) != 1 else ''}"))
         state = "unresolved" if group.unresolved else "provisionally resolved"
         self.say(f"🔍 Accepted {len(group.components)} overlapping components ({state})")
+
+    def run_signal_accounting(self):
+        """How much of the total signal the fitted peaks explain, and where the rest is."""
+        if self.index < 0:
+            self.say("Select a loaded run first")
+            return
+        component_set = self.blobs.components_for(self.index)
+        if component_set is None or not component_set.groups:
+            self.say("Find peaks on this run first")
+            return
+        entry = self.project.entries[self.index]
+        fold, base_run = self.project.fold(self.index), self.project.base_run(self.index)
+        wrap = self.blobs.component_settings.candidates.wrap_below_s
+
+        def work(token, progress):
+            _peaks, model, footprint = respectrum_components(
+                base_run, fold, component_set, wrap_below_s=wrap,
+                progress=lambda done, total: progress(done, total, "Fitting full spectra"),
+                cancel=token.check)
+            return signal_accounting(fold.tic_image(base_run), model, footprint, fold.row_pitch,
+                                     fold.spec.period, float(fold.t1[0]))
+
+        def done(report):
+            self._accounting = getattr(self, "_accounting", {})
+            self._accounting[entry.name] = report
+            text = format_accounting(report)
+            self.blobs_panel.show_accounting(text)
+            self.say("📊 " + text)
+
+        self.project.jobs.submit(f"📊 Signal accounting: {entry.name}", work, done,
+                                 lambda message: self.say(f"📊 {entry.name}: {message}"))
+    def export_components(self, path=None) -> None:
+        """Export the current run's component estimates and their warnings."""
+        if self.index < 0:
+            self.say("Select a loaded run first")
+            return
+        component_set = self.blobs.components_for(self.index)
+        if component_set is None or not component_set.components:
+            self.say("There are no MS-aware peaks to export on this run")
+            return
+        run_name = self.project.entries[self.index].name
+        if path is None or isinstance(path, bool):
+            suggested = f"{Path(run_name).stem}_components.csv"
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Export MS-aware peaks", suggested, "CSV (*.csv)")
+        if not path:
+            return
+        written = write_components_csv(component_set, path, run_name)
+        self.say(f"Exported {len(component_set.components)} MS-aware peaks to {written}")
 
     # ================================================================ ⛓️
     def show_hydrocarbons_panel(self):
@@ -1941,7 +2205,21 @@ class MainWindow(QtWidgets.QMainWindow):
         ms_aware = self.blobs.method == MS_AWARE
         settings = self.blobs.component_settings if ms_aware else self.blobs.settings
         title = "🔍 MS-aware detection settings" if ms_aware else "🔍 Legacy blob settings"
-        dlg = SettingsDialog(title, settings, parent=self)
+        tips = ({
+            "fast_max_sigma_row": "Maximum rapid-fit width in second-dimension scan rows. "
+                                  "A fitted peak at this limit is marked unresolved.",
+            "fast_max_sigma_col": "Maximum rapid-fit width in modulation columns. "
+                                  "A fitted peak at this limit is marked unresolved.",
+            "fast_max_nfev": "Maximum shape-fitting steps per candidate peak count. "
+                             "More steps reduce premature non-convergence but take longer.",
+            "screen_component_counts": "Compare plausible numbers of overlapping peaks "
+                                       "using diagnostic mass channels.",
+            "refine_selected": "Run the slower repeated-start fit on every region.",
+            "fast_proposals": "Show approximate candidates without joint spectral fitting.",
+            "workers": "Regional process workers. Four cut full-run separation from "
+                       "118 to 68 seconds on the supplied Windows file.",
+        } if ms_aware else None)
+        dlg = SettingsDialog(title, settings, tips=tips, parent=self)
         if dlg.exec():
             if ms_aware:
                 self.blobs.set_component_settings(dlg.settings())
@@ -2040,6 +2318,389 @@ class MainWindow(QtWidgets.QMainWindow):
         except ValueError:
             self.view2d.set_stencil_overlay({})
 
+    # ================================================================ 🧬
+    def start_classify(self):
+        if self.index < 0 or self.project.entries[self.index].run is None:
+            self.say("Select a loaded run first")
+            return
+
+        def done(result):
+            n = sum(c.cls is not None for c in result.calls)
+            self.say(f"🧬 {n} of {len(result.calls)} blobs classified")
+            self.workflow.mark_done("classify", f"{n} of {len(result.calls)} blobs classified. Select a row to see "
+                                                "why, then identify or quantify.")
+
+        self.classes.classify(self.index, on_done=done)
+
+    def _classes_running(self, on: bool):
+        self.act_classify.setEnabled(not on)
+        self.workflow.set_busy("classify", on)
+        self._classes_changed()
+
+    def _class_rules_label(self) -> str:
+        path = self.classes.rules_path
+        return "shipped (chemical_classes.toml)" if path is None else str(path)
+
+    def _classes_changed(self):
+        cs, idx = self.classes, self.index
+        key = (id(cs.rules), tuple(sorted(cs.enabled.items())), str(cs.rules_path))
+        if getattr(self, "_class_rules_key", None) != key:
+            self._class_rules_key = key
+            self.class_panel.set_rules(cs.rules, cs.enabled, self._class_rules_label())
+        have = 0 <= idx < len(self.project.entries)
+        reason = cs.why_not(idx) if have else "Open runs, then select one."
+        result = cs.result_for(idx) if have and not reason else None
+        blobs = cs.blobs_classified(idx) if result is not None else None
+        entry = self.project.entries[idx] if have else None
+        if reason:
+            status = reason
+        elif result is None:
+            status = f"{entry.name}: not classified yet. Press Go."
+        else:
+            n = sum(c.cls is not None for c in result.calls)
+            status = f"{entry.name}: {n} of {len(result.calls)} blobs classified."
+        soft = ""
+        if have and not reason:
+            if not cs.use_soft:
+                soft = "14 eV channel not used."
+            elif cs.soft_partner(idx) is not None:
+                soft = f"✓ 14 eV partner loaded: {self.project.entries[cs.soft_partner(idx)].name}"
+            else:
+                soft = ("○ No 14 eV run loaded. Open the 14 eV file with File → Open files… to add molecular-ion "
+                        "evidence. Classes use the 70 eV spectrum alone.")
+        self.class_panel.set_soft(cs.use_soft, soft)
+        self.class_panel.set_current(status, cs.notes.get(entry, "") if entry is not None and result is not None else "",
+                                     result, blobs, None if blobs is None else blobs.volume,
+                                     bool(have and cs.is_stale(idx)))
+        self.workflow.set_go_enabled("classify", not reason and not cs.running, reason)
+        self._update_blob_overlay()
+
+    def _class_overlays(self) -> list[dict]:
+        """Blob outlines coloured by group, for the 2D view. Cached per result: 4000 outlines take a moment."""
+        if self.index < 0 or not self.class_panel.overlay_box.isChecked():
+            return []
+        result, blobs = self.classes.result_for(self.index), self.classes.blobs_classified(self.index)
+        if result is None or blobs is None or self.classes.why_not(self.index):
+            return []
+        key = (id(result), self.index)
+        if self._class_overlay_cache is not None and self._class_overlay_cache[0] == key:
+            return self._class_overlay_cache[1]
+        by_group: dict = {}
+        for i, call in enumerate(result.calls):
+            if call.group is None:
+                continue
+            x, y = blobs.outline_times(i)
+            xs, ys = by_group.setdefault(call.group, ([], []))
+            xs.append(x)
+            ys.append(y)
+        overlays = [{"outline": (np.concatenate(xs), np.concatenate(ys)), "colour": group_colour(g), "width": 1.0}
+                    for g, (xs, ys) in by_group.items()]
+        self._class_overlay_cache = (key, overlays)
+        return overlays
+
+    def _class_blob_activated(self, i: int):
+        blobs = self.classes.blobs_classified(self.index) if self.index >= 0 else None
+        if blobs is not None and 0 <= i < len(blobs):
+            self.tabs.setCurrentIndex(0)
+            self.view2d.centre_on(float(blobs.t1[i]), float(blobs.t2[i]))
+
+    def _class_rules_error(self, exc: Exception):
+        QtWidgets.QMessageBox.warning(self, "🧬 Rule file", f"The rules could not be used:\n\n{exc}")
+
+    def load_class_rules(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load class rules", "", "TOML rules (*.toml)")
+        if path:
+            try:
+                self.classes.set_rules_path(path)
+            except (ValueError, OSError) as exc:
+                self._class_rules_error(exc)
+                return
+            self.say(f"🧬 Using rules from {Path(path).name}. Press Go to classify again.")
+
+    def copy_class_rules(self):
+        import shutil
+        from ..core.chemclass import DEFAULT_RULES
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save an editable copy of the rules",
+                                                         "my_chemical_classes.toml", "TOML rules (*.toml)")
+        if not path:
+            return
+        shutil.copyfile(DEFAULT_RULES, path)
+        try:
+            self.classes.set_rules_path(path)
+        except (ValueError, OSError) as exc:
+            self._class_rules_error(exc)
+            return
+        self.say(f"🧬 Editing {Path(path).name}: change it in any text editor, then press Reload.")
+
+    def reload_class_rules(self):
+        try:
+            self.classes.reload_rules()
+        except (ValueError, OSError) as exc:
+            self._class_rules_error(exc)
+            return
+        self.say("🧬 Rules reloaded. Press Go to classify again.")
+
+    def export_classes(self):
+        from ..core.chemclass import write_classes_csv
+        result = self.classes.result_for(self.index) if self.index >= 0 else None
+        blobs = self.classes.blobs_classified(self.index) if result is not None else None
+        if result is None or blobs is None:
+            self.say("Classify this run first")
+            return
+        suggested = f"{Path(self.project.entries[self.index].name).stem}_classes.csv"
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export blob classes", suggested, "CSV (*.csv)")
+        if path:
+            write_classes_csv(result, blobs, path)
+            self.say(f"🧬 Wrote {Path(path).name}")
+
+    # ================================================================ 🧩
+    def start_cluster(self):
+        noun = "regions" if self.clusters.unit == "regions" else "clusters"
+
+        def done(result):
+            self.say(f"🧩 {len(result)} {noun}")
+            self.workflow.mark_done("cluster", f"{len(result)} {noun}. Select rows to colour just those on the 2D "
+                                               "view; pool every run to compare them.")
+
+        self.clusters.cluster(self.index, on_done=done)
+
+    def _clusters_running(self, on: bool):
+        self.act_cluster.setEnabled(not on)
+        self.workflow.set_busy("cluster", on)
+        self._clusters_changed()
+
+    def _cluster_settings_edited(self):
+        self.clusters.set_settings(*self.cluster_panel.values())
+        self.clusters.set_unit(*self.cluster_panel.unit_values())
+
+    def _clusters_changed(self):
+        cs = self.clusters
+        reason = cs.why_not(self.index)
+        runs = cs.active_runs()
+        if reason:
+            status = reason
+        elif not cs.has_result():
+            status = "Not clustered yet. Press Go."
+        else:
+            shown = ", ".join(runs[:3]) + (" …" if len(runs) > 3 else "")
+            status = (f"{cs.n_groups()} regions ({shown})." if cs.unit == "regions"
+                      else f"{cs.n_groups()} clusters from {len(cs.table)} peaks ({shown}).")
+        fingerprint = cs.fingerprint() if len(runs) > 1 else None
+        self.cluster_panel.set_current(status, (cs.region_notes if cs.unit == "regions" else cs.notes) if cs.has_result() else "",
+                                       cs.current_summary(self.index), cs.stale,
+                                       (runs, fingerprint) if fingerprint is not None else None,
+                                       composition=cs.composition_for(self.index) if cs.has_result() else {},
+                                       check=cs.check_text, groups=cs.groups, names=cs.name_map())
+        self.workflow.set_go_enabled("cluster", not reason and not cs.running, reason)
+        self.cluster_panel.set_colours(self._cluster_colours())
+        self._refresh_cluster_display()
+
+    def _cluster_step_changed(self, _key: str):
+        if self.clusters.has_result():
+            self._refresh_cluster_display()
+
+    def _cluster_selection_changed(self, _k: int = -1):
+        self.cluster_panel.set_colours(self._cluster_colours())
+        self._refresh_cluster_display()
+
+    def _refresh_cluster_display(self):
+        """Redraw the fill layer, and the outlines only when they are or were on screen (drawing every
+        outline is slow)."""
+        self._update_cluster_layer()
+        shown_now = bool(self._cluster_overlays())
+        if shown_now or self._cluster_overlay_on:
+            self._update_blob_overlay()
+        self._cluster_overlay_on = shown_now
+
+    def _cluster_colours(self) -> dict:
+        """cluster -> RGB for the clusters to colour: the ones selected in the table, else the largest few.
+        Everything else clustered is light grey."""
+        n = self.clusters.n_groups()
+        chosen = self.cluster_panel.selected_clusters() or list(range(min(len(CLUSTER_COLOURS), n)))
+        return {k: CLUSTER_COLOURS[i] for i, k in enumerate(chosen[:len(CLUSTER_COLOURS)])}
+
+    def _cluster_active(self) -> bool:
+        """Whether cluster fill/outline may be shown: a result exists, regardless of which
+        step is open, so the Layers tab can control it like any other layer."""
+        return self.index >= 0 and self.clusters.has_result()
+
+    def _update_cluster_layer(self):
+        """The chromatogram coloured by cluster: an RGBA layer over the 2D image, one colour per peak footprint."""
+        cs, rgba = self.clusters, None
+        if self._cluster_active() and self.cluster_panel.fill_box.isChecked():
+            labels = cs.label_image(self.index)
+            if labels is not None:
+                colours = self._cluster_colours()
+                key = (cs.unit, id(cs.regions if cs.unit == "regions" else cs.result), self.index,
+                       tuple(sorted(colours.items())))
+                if self._cluster_fill_cache is not None and self._cluster_fill_cache[0] == key:
+                    rgba = self._cluster_fill_cache[1]
+                else:
+                    palette = np.zeros((int(max(labels.max(), 0)) + 2, 3), dtype=np.uint8)
+                    palette[:] = OTHER_COLOUR
+                    for k, c in colours.items():
+                        if k < palette.shape[0] - 1:
+                            palette[k] = c
+                    rgba = np.zeros(labels.shape + (4,), dtype=np.uint8)
+                    rgba[..., :3] = palette[np.where(labels >= 0, labels, palette.shape[0] - 1)]
+                    rgba[..., 3] = np.where(labels >= 0, 150, 0)
+                    self._cluster_fill_cache = (key, rgba)
+        self.view2d.set_cluster_layer(rgba)
+
+    def _cluster_overlays(self) -> list[dict]:
+        """Peak outlines of the current run coloured by cluster, whenever a cluster result exists: the clusters
+        `_cluster_colours` picks get a colour each and the rest share a grey."""
+        cs, panel = self.clusters, self.cluster_panel
+        if not self._cluster_active() or not panel.overlay_box.isChecked() or cs.unit != "peaks":
+            return []
+        rows, blobs = cs.rows_for(self.index), cs.blobs_for(self.index)
+        if rows is None or blobs is None:
+            return []
+        colours = self._cluster_colours()
+        key = (id(cs.result), self.index, tuple(sorted(colours.items())))
+        if self._cluster_overlay_cache is not None and self._cluster_overlay_cache[0] == key:
+            return self._cluster_overlay_cache[1]
+        groups: dict = {}
+        for i, k in zip(*rows):
+            if k < 0:
+                continue
+            x, y = blobs.outline_times(int(i))
+            xs, ys = groups.setdefault(int(k) if int(k) in colours else -2, ([], []))
+            xs.append(x)
+            ys.append(y)
+        overlays = [{"outline": (np.concatenate(xs), np.concatenate(ys)), "colour": colours.get(k, OTHER_COLOUR),
+                     "width": 1.0} for k, (xs, ys) in groups.items()]   # >1 px is slow to pan; colour carries the emphasis
+        self._cluster_overlay_cache = (key, overlays)
+        return overlays
+
+    def export_cluster_figure(self):
+        cs, idx = self.clusters, self.index
+        if cs.label_image(idx) is None:
+            self.say("Cluster this run first (the figure shows the run that is selected)")
+            return
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            self, "Figure width", "Column width:", ["Single column (89 mm)", "Double column (183 mm)"], 0, False)
+        if not ok:
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save the coloured chromatogram", f"fig_{self.project.entries[idx].name}_clusters.png",
+            "PNG (*.png);;TIFF (*.tif *.tiff)")
+        if path:
+            self.save_cluster_figure(Path(path), 89.0 if choice.startswith("Single") else 183.0)
+
+    def save_cluster_figure(self, path: Path, width_mm: float) -> None:
+        """Write the current run coloured by cluster (the view's window and scale if this run is on show) at
+        300 dpi, with a sibling caption `.txt`. Separate from the file dialogs so it can be driven directly."""
+        cs, idx, p = self.clusters, self.index, self.project
+        entry, fold, run = p.entries[idx], p.fold(idx), p.base_run(idx)
+        image = fold.tic_image(run)
+        labels = cs.label_image(idx)
+        if labels is None or labels.shape != image.shape:
+            self.say("🧩 The clusters do not match this run's folded image: cluster again")
+            return
+        colours = self._cluster_colours()
+        letter, given = ("r" if cs.unit == "regions" else "c"), cs.name_map()
+        keys = {k: f"{letter}{k}: " + (given.get(k) or " ".join(map(str, cs.top_ions(k, 3)))) for k in colours}
+        r = self.view2d.result
+        on_show = r is not None and r.name == entry.name
+        xr, yr = self.view2d.plot.vb.viewRange() if on_show else ((fold.t1[0] / 60.0, (fold.t1[-1] + fold.spec.period) / 60.0),
+                                                                  (0.0, fold.spec.period))
+        scale = self.view2d.scale
+        fig = plot_cluster_chromatogram(image, labels, fold.t1, fold.t2, list(colours), keys, t1_range_min=tuple(xr),
+                                        t2_range_s=(max(yr[0], 0.0), yr[1]), scale=scale, width_mm=width_mm)
+        save_figure(fig, path, dpi=300)
+        state = "cleaned" if p.show_processed and entry.background is not None else "raw"
+        window = (tuple(xr), (max(yr[0], 0.0), yr[1]))
+        if cs.unit == "regions":
+            caption = region_caption(entry.name, list(colours), keys, cs.n_groups(), float((labels >= 0).mean() * 100.0),
+                                     len(cs.region_runs), SegmentSettings(n_regions=cs.n_regions), scale, *window,
+                                     fold.spec.period, fold.spec.phase, f"{state} data, 70 eV")
+        else:
+            n_clustered = int((cs.result.labels >= 0).sum())
+            unassigned = 100.0 * float(cs.table.volume[cs.result.labels < 0].sum()) / (float(cs.table.volume.sum()) or 1.0)
+            caption = cluster_caption(entry.name, list(colours), keys, len(cs.table), n_clustered, unassigned,
+                                      cs.effective_settings(), scale, *window, fold.spec.period, fold.spec.phase,
+                                      f"{state} data, 70 eV")
+        path.with_suffix(".txt").write_text(caption, encoding="utf-8")
+        self.say(f"Saved {path.name} and its caption")
+
+    def merge_selected_clusters(self):
+        chosen = self.cluster_panel.selected_clusters()
+        try:
+            self.clusters.merge(chosen)
+        except (ValueError, AttributeError):
+            self.say("🧩 Select at least two clusters in the table (Ctrl or Shift), then merge")
+            return
+        self.say(f"🧩 Merged clusters {', '.join(map(str, chosen))}; clusters are renumbered by volume")
+
+    def test_cluster_groups(self):
+        try:
+            r = self.clusters.compare_groups()
+        except ValueError as exc:
+            self.cluster_panel.set_group_text(str(exc))
+            return
+        first, second = r["groups"][0], r["groups"][-1]
+        text = (f"PERMANOVA (Bray-Curtis on the % shares, 999 permutations): pseudo-F = {r['f']:.2f}, p = {r['p']:.3f}; "
+                + " vs ".join(f"{g} (n = {r['counts'][g]})" for g in r["groups"]) + ".")
+        if len(r["groups"]) == 2:
+            sig = sorted((pt for pt in r["points"] if pt.q_value < 0.05), key=lambda pt: pt.q_value)[:6]
+            text += ("\nClusters differing at q < 0.05 (log2 fold change of " f"{first} over {second}): " + "; ".join(
+                f"c{pt.feature_id} {pt.log2_fold_change:+.1f} (q = {pt.q_value:.3f})" for pt in sig)
+                if sig else f"\nNo cluster differs between {first} and {second} at q < 0.05.")
+        self.cluster_panel.set_group_text(text)
+
+    def export_cluster_pca(self):
+        from ..core import pca
+        from ..core.report import plot_pca
+        cs = self.clusters
+        fingerprint = cs.fingerprint()
+        if fingerprint is None or len(cs.active_runs()) < 3:
+            self.say("Pool at least three runs first (scope: every 70 eV run)")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save the PCA figure", "fig_cluster_pca.png",
+                                                        "PNG (*.png);;TIFF (*.tif *.tiff)")
+        if not path:
+            return
+        path = Path(path)
+        runs = cs.active_runs()
+        save_figure(plot_pca(pca(fingerprint[0], runs, n_components=2), width_mm=89.0), path, dpi=300)
+        s = cs.effective_settings()
+        common = (f"Principal component analysis of {len(runs)} GC×GC–EI-ToF-MS runs described by the share of each run's "
+                  f"{'signal in {} pixel regions'.format(len(fingerprint[0])) if cs.unit == 'regions' else 'summed peak volume in {} spectral clusters'.format(len(fingerprint[0]))}. "
+                  "Points show runs and the axes give the first two principal components with the variance each explains. "
+                  "Shares were log(1 + x) transformed and autoscaled before the analysis. ")
+        how = (f"The regions were found by fitting k-means ({cs.n_regions} regions) to the truncated-SVD-reduced, weighted mass "
+               "spectra of the brightest scans of all runs, with no peak detection. " if cs.unit == "regions" else
+               f"The clusters were found by pooling the peaks of all runs and grouping them from their mass spectra alone by "
+               f"average-linkage hierarchical clustering of the cosine distance (cut at {s.distance_threshold:g}; groups of "
+               f"fewer than {s.min_cluster_size} peaks were not called clusters). n = {len(cs.table)} peaks. ")
+        path.with_suffix(".txt").write_text(common + how + "[Add sample groups and colours before submission.]\n",
+                                            encoding="utf-8")
+        self.say(f"Saved {path.name} and its caption")
+
+    def export_cluster_peaks(self):
+        from ..core.cluster import write_clusters_csv
+        cs = self.clusters
+        if cs.unit != "peaks" or cs.result is None:
+            self.say("Cluster the detected peaks first: pixel regions have no peak table (export the run table instead)")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export peak clusters", "peak_clusters.csv", "CSV (*.csv)")
+        if path:
+            write_clusters_csv(cs.table, cs.result, path, names=cs.name_map())
+            self.say(f"🧩 Wrote {Path(path).name}")
+
+    def export_cluster_runs(self):
+        from ..core.report import write_feature_table_csv
+        cs = self.clusters
+        fingerprint = cs.fingerprint()
+        if fingerprint is None:
+            self.say("Cluster the peaks first")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export the run table", "cluster_run_table.csv",
+                                                        "CSV (*.csv)")
+        if path:
+            write_feature_table_csv(fingerprint[0], cs.active_runs(), path)
+            self.say(f"🧩 Wrote {Path(path).name} (one row per cluster, one column per run, % of the run's peak volume)")
     # ================================================================ ✂️
     def show_overlap_dialog(self, candidate_region: int | None = None):
         if getattr(self, "overlap_dialog", None) is None:
@@ -2100,6 +2761,111 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.setCurrentIndex(0)
         self.view2d.centre_on(t1, t2)
 
+    # ================================================================ IS
+    def show_istd_panel(self):
+        self.workflow.show_step("istd")
+
+    def _has_detected_peaks(self, index: int) -> bool:
+        if self.blobs.blobs_for(index) is not None:
+            return True
+        if self.blobs.method == MS_AWARE:
+            component_set = self.blobs.components_for(index)
+            return component_set is not None and bool(component_set.components)
+        return False
+
+    def start_label_istd(self, name: str | None = None):
+        name = name or self.istd_panel.selected_name()
+        if not name:
+            self.say("Select an internal standard first")
+            return
+        if self.index < 0:
+            self.say("Open and select a run first")
+            return
+        if not self._has_detected_peaks(self.index):
+            self.say("Run peak detection on this chromatogram first")
+            return
+        self._istd_label_pending = name
+        self.say(f"Click the peak for {name} on {self.project.entries[self.index].name} (Esc cancels)")
+
+    def _finish_label_istd(self, col: int, t2: float):
+        name = self._istd_label_pending
+        self._istd_label_pending = None
+        fold = self.project.fold(self.index)
+        t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
+        peak_ref = self._nearest_peak_ref(self.index, t1, t2)
+        if peak_ref is None:
+            self.say("No peak close enough to that click")
+            return
+        self.istd.label(name, self.index, peak_ref)
+
+    def _nearest_peak_ref(self, index: int, t1: float, t2: float):
+        """The nearest detected peak to (t1, t2) on run `index`: a stable
+        component id (MS-aware) or a positional blob index (legacy), or
+        None if nothing is close -- the same snap distance `_select_blob_at`
+        uses to pick a peak from a click."""
+        if self.blobs.method == MS_AWARE:
+            component_set = self.blobs.components_for(index)
+            if component_set is not None and component_set.components:
+                components = component_set.components
+                distance = np.asarray([
+                    np.hypot((c.t1 - t1) / 60.0, (c.t2 - t2) / 0.5) for c in components])
+                nearest = int(np.argmin(distance))
+                return components[nearest].id if distance[nearest] < 1.5 else None
+            return None
+        blobs = self.blobs.blobs_for(index)
+        if blobs is None or len(blobs) == 0:
+            return None
+        d = np.hypot((blobs.t1 - t1) / 60.0, (blobs.t2 - t2) / 0.5)
+        i = int(np.argmin(d))
+        return i if d[i] < 1.5 else None
+
+    def relabel_istd(self, run: str, name: str):
+        index = self.project.index_of(run)
+        if index is None:
+            return
+        self.set_run(index)
+        self._istd_label_pending = name
+        self.say(f"Click the peak for {name} on {run} (Esc cancels)")
+
+    def propagate_istd(self):
+        loaded = self.project.loaded()
+        if not loaded:
+            self.say("Open some runs first")
+            return
+        if not self.istd.references:
+            self.say("Label at least one internal standard first")
+            return
+        self.istd.propagate_to(loaded, on_done=lambda: self.workflow.mark_done(
+            "istd", "Internal standards searched on every run. Check the confidence report."))
+
+    def export_istd_report(self):
+        matches = self.istd.all_matches()
+        if not matches:
+            self.say("Nothing to export yet")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Export internal-standard report", "istd_report.csv", "CSV (*.csv)")
+        if path:
+            write_istd_report_csv(matches, path)
+            self.say(f"Saved {Path(path).name}")
+
+    def _istd_changed(self):
+        self.istd_panel.set_current_run(self.project.entries[self.index].name if self.index >= 0 else None)
+        self.istd_panel.refresh()
+        self._update_istd_overlay()
+
+    def _update_istd_overlay(self):
+        markers = []
+        if self.index >= 0:
+            run = self.project.entries[self.index].name
+            for name, ref in self.istd.references.items():
+                if ref.run == run:
+                    markers.append(dict(t1=ref.t1, t2=ref.t2, label=name, tier="high"))
+            for m in self.istd.matches_for(self.index).values():
+                if m.tier != "not found":
+                    markers.append(dict(t1=m.t1, t2=m.t2, label=f"{m.name} {m.combined_score:.0%}", tier=m.tier))
+        self.view2d.set_istd_overlay(markers)
+
     def _layers_changed(self):
         p = self.project
         self.act_processed.setEnabled(p.any_background() or p.any_siloxane() or p.preview is not None)
@@ -2147,7 +2913,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.undo.setClean()
 
     def save_project_as(self):
-        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save project", "project.pygcgc.json",
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save project", SIDECAR_NAME,
                                                         "PyGCGC project (*.json)")
         if path:
             self.project.path = Path(path)
@@ -2159,9 +2925,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.open_project(path)
 
     def open_project(self, path, on_loaded=None):
+        def loaded():
+            self._restore_view_state()
+            when = _format_processed_at(self.project.processed_at)
+            if when:
+                self.say(f"This chromatogram was processed on {when}")
+            if on_loaded:
+                on_loaded()
         try:
             self.index = -1
-            self.project.load(path, on_loaded=lambda: (self._restore_view_state(), on_loaded and on_loaded()))
+            self.project.load(path, on_loaded=loaded)
         except (ValueError, KeyError, OSError) as exc:
             self.error("Couldn't open the project", str(exc))
             return
@@ -2223,6 +2996,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                     f"PyGCGC {__version__}\nGC×GC-EI-ToF-MS processing and viewing.")
 
     def closeEvent(self, event):
+        self.project.flush_autosave()
         if not self.undo.isClean() and self.project.entries and self.project.path is not None:
             answer = QtWidgets.QMessageBox.question(
                 self, "Unsaved changes", "Save the project before closing?",

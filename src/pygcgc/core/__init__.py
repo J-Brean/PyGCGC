@@ -21,7 +21,8 @@ from .peaks import (BlobSet, PeakSettings, add_blob_at, delete_blobs, detect_cei
 from .candidates import (CandidateRegion, CandidateSet, CandidateSettings, candidate_cube,
                          candidate_regions, find_candidates)
 from .components import (Component, ComponentDetectionSettings, ComponentGroup, ComponentSet,
-                         detect_components, fit_candidate_region, group_from_fit)
+                         component_rows, detect_components, fit_candidate_region, group_from_fit,
+                         propose_candidate_group, write_components_csv)
 from .pixelspec import ratios_to, spectrum_at
 from .siloxane import (BLEED_REFERENCE, CYCLIC_REFERENCE, PRESETS as SILOXANE_PRESETS, SILOXANE_IONS,
                        SILOXANE_REFERENCE, SiloxaneResult, SiloxaneSettings, flag_siloxane_blobs,
@@ -46,13 +47,20 @@ from .report import (Provenance, build_provenance, chromatogram_caption, plot_ch
                      write_pdf_report)
 from .overlap import (BlobCube, ComponentAssessment, IonApex, MCRResult, MCRStability, OverlapComponent, OverlapCV, OverlapFit, OverlapSettings,
                       PARAFACResult, UniqueIonMap, blob_cube, build_run_tensor, choose_k,
-                      assess_components, component_maps, core_consistency, cross_validate_overlap, fit_overlap, fit_template_overlap, mcr_als, mcr_restarts, parafac, predict_overlap, split_by_line,
+                      assess_components, component_maps, core_consistency, cross_validate_overlap, fit_overlap, fit_shapes_fast, fit_template_overlap, initialise_overlap, mcr_als, mcr_restarts, parafac, predict_overlap, refit_spectra, split_by_line,
                       split_by_valley, split_by_watershed, split_half_stability, split_volumes,
                       unique_ion_apexes)
 from .identify import (Identification, IdentifySettings, Library, LibraryEntry, SearchHit,
                        assign_qvalues, build_inhouse_entry, build_library, classify,
                        generate_decoys, identify_blobs, identify_components, load_msp, promote_to_target,
                        retention_index, search, write_msp)
+from .chemclass import (ChemClass, ClassCall, ClassResult, ClassSettings, RuleSet, classify_blobs,
+                        classify_spectra, compute_features, load_rules, soft_spectra_for_blobs, write_classes_csv)
+from .cluster import (ClusterResult, ClusterSettings, ClusterSummary, PeakTable, apply_pqn, cluster_features,
+                      cluster_label_image, cluster_peaks, clusters_of_run, merge_clusters, permanova, stability,
+                      threshold_scan, write_clusters_csv)
+from .segment import (RegionSummary, SegmentResult, SegmentSettings, fit_regions, region_shares,
+                      segment_pixels)
 
 __all__ = [
     "Run", "read_run", "read_many", "register_reader", "write_andi", "crop_run",
@@ -72,7 +80,8 @@ __all__ = [
     "CandidateSettings", "CandidateSet", "CandidateRegion", "find_candidates",
     "candidate_regions", "candidate_cube",
     "Component", "ComponentDetectionSettings", "ComponentGroup", "ComponentSet",
-    "detect_components", "fit_candidate_region", "group_from_fit",
+    "component_rows", "write_components_csv", "detect_components", "fit_candidate_region",
+    "group_from_fit", "propose_candidate_group",
     "SILOXANE_IONS", "SILOXANE_REFERENCE", "BLEED_REFERENCE", "CYCLIC_REFERENCE", "SILOXANE_PRESETS",
     "SiloxaneSettings", "SiloxaneResult", "reference_from_spectrum", "spectrum_at", "ratios_to",
     "siloxane_score", "siloxane_scores", "flag_siloxane_blobs", "remove_siloxanes", "remove_siloxane_blobs",
@@ -94,7 +103,7 @@ __all__ = [
     "OverlapSettings", "BlobCube", "blob_cube", "IonApex", "UniqueIonMap", "unique_ion_apexes",
     "split_by_line", "split_by_watershed", "split_by_valley", "split_volumes",
     "OverlapComponent", "OverlapFit", "OverlapCV", "ComponentAssessment",
-    "fit_overlap", "fit_template_overlap", "predict_overlap", "component_maps", "assess_components",
+    "fit_overlap", "fit_shapes_fast", "fit_template_overlap", "initialise_overlap", "predict_overlap", "refit_spectra", "component_maps", "assess_components",
     "cross_validate_overlap", "choose_k",
     "MCRResult", "MCRStability", "mcr_als", "mcr_restarts", "PARAFACResult", "parafac", "core_consistency", "split_half_stability",
     "build_run_tensor",
@@ -103,4 +112,10 @@ __all__ = [
     "SearchHit", "search", "assign_qvalues", "classify", "Identification", "identify_blobs",
     "identify_components",
     "promote_to_target",
+    "ChemClass", "ClassCall", "ClassResult", "ClassSettings", "RuleSet", "load_rules", "classify_spectra",
+    "classify_blobs", "compute_features", "soft_spectra_for_blobs", "write_classes_csv",
+    "PeakTable", "ClusterSettings", "ClusterResult", "ClusterSummary", "cluster_peaks", "cluster_features",
+    "permanova", "write_clusters_csv", "apply_pqn", "cluster_label_image", "clusters_of_run", "merge_clusters",
+    "stability", "threshold_scan",
+    "SegmentSettings", "SegmentResult", "RegionSummary", "fit_regions", "segment_pixels", "region_shares",
 ]

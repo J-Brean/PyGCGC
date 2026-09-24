@@ -72,7 +72,7 @@ docs/BLOB_DIAGNOSIS_AND_PLAN.md.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -454,9 +454,11 @@ class OverlapFit:
     converged: bool
     weighted_rss: float = np.nan
     n_parameters: int = 0
+    n_shape_parameters: int = 0
     background: np.ndarray = field(default_factory=lambda: np.array([]))
     background_surface: np.ndarray = field(default_factory=lambda: np.array([]))
     n_starts: int = 1
+    restart_position_spread: float = np.nan
     profiles: np.ndarray = field(default_factory=lambda: np.array([]))
 
 
@@ -520,6 +522,188 @@ def component_profiles(model: str, components: list[OverlapComponent],
     return maps
 
 
+def initialise_overlap(cube: BlobCube, k: int, model: str = "gaussian",
+                       apex_hint=None) -> OverlapFit:
+    """Build peak shapes from candidate positions and local half-height widths."""
+    theta = _initial_guess(cube, k, model, apex_hint)
+    p = _n_shape_params(model)
+    components = []
+    for index in range(k):
+        params = theta[index * p:(index + 1) * p]
+        row0, col0, sigma_row, sigma_col = params[:4]
+        tau = float(params[4]) if model in ("emg", "emg2") else None
+        tau_row = (float(params[4]) if model in ("emg_t2", "emg_t2_tilt", "emg_t2_cell")
+                   else float(params[5]) if model == "emg2" else None)
+        rho = (float(params[4]) if model == "tilt"
+               else float(params[5]) if model == "emg_t2_tilt" else None)
+        components.append(OverlapComponent(
+            row0=float(row0), col0=float(col0), sigma_row=float(sigma_row),
+            sigma_col=float(sigma_col), tau=tau, tau_row=tau_row, rho=rho,
+            t1=float(cube.t1_of(col0)), t2=float(cube.t2_of(row0)), volume=0.0,
+            spectrum=np.zeros(cube.data.shape[2]), row0_se=np.nan, col0_se=np.nan))
+    return OverlapFit(k=k, model=model, components=components, bic=np.nan, rss=np.nan,
+                      converged=True, weighted_rss=np.nan,
+                      n_parameters=k * p, n_starts=0,
+                      restart_position_spread=np.nan)
+
+
+def fit_shapes_fast(cube: BlobCube, k: int, model: str = "gaussian",
+                    apex_hint=None, background_order: int = 0,
+                    max_nfev: int = 12, position_rows: float = 1.0,
+                    position_cols: float = 0.6, max_sigma_row: float = 3.0,
+                    max_sigma_col: float = 1.2,
+                    shared_widths: bool = True) -> OverlapFit:
+    """Fit positions and widths with a vectorised approximate spectral solve.
+
+    The production spectrum is solved later by :func:`refit_spectra`.  Here a
+    shared pixel weight and one matrix solve replace an NNLS call per ion at
+    every nonlinear iteration, making run-wide shape refinement practical.
+    """
+    rows, cols = np.nonzero(cube.mask)
+    rr, cc = rows.astype(float), cols.astype(float)
+    data = cube.data[rows, cols].astype(float)
+    pixel_weight = 1.0 / np.sqrt(np.clip(data.mean(axis=1), 1.0, None))
+    if background_order == 1:
+        rn = rr / max(cube.mask.shape[0] - 1, 1)
+        cn = cc / max(cube.mask.shape[1] - 1, 1)
+        background = np.column_stack(((1-rn)*(1-cn), (1-rn)*cn,
+                                       rn*(1-cn), rn*cn))
+    elif background_order == 0:
+        background = np.ones((rows.size, 1))
+    else:
+        raise ValueError("background_order must be 0 or 1")
+    initial = _initial_guess(cube, k, model, apex_hint)
+    lo, hi = _bounds(k, model, cube.mask.shape)
+    p = _n_shape_params(model)
+    initial_matrix = initial.reshape(k, p)
+    lo_matrix, hi_matrix = lo.reshape(k, p), hi.reshape(k, p)
+    lo_matrix[:, 0] = np.maximum(lo_matrix[:, 0], initial_matrix[:, 0] - position_rows)
+    hi_matrix[:, 0] = np.minimum(hi_matrix[:, 0], initial_matrix[:, 0] + position_rows)
+    lo_matrix[:, 1] = np.maximum(lo_matrix[:, 1], initial_matrix[:, 1] - position_cols)
+    hi_matrix[:, 1] = np.minimum(hi_matrix[:, 1], initial_matrix[:, 1] + position_cols)
+    hi_matrix[:, 2] = np.minimum(hi_matrix[:, 2], max_sigma_row)
+    hi_matrix[:, 3] = np.minimum(hi_matrix[:, 3], max_sigma_col)
+    initial = np.clip(initial, lo, hi)
+
+    # Nearby GCxGC peaks normally pass through the same column system and have
+    # similar widths.  Sharing the two Gaussian widths gives a weak component
+    # far less freedom to absorb background by becoming a very broad peak.  It
+    # also removes two nonlinear parameters for every component after the
+    # first.  More flexible peak models retain their independent parameters.
+    share = bool(shared_widths and model == "gaussian" and k > 1)
+    if share:
+        initial_matrix = initial.reshape(k, p)
+        reduced_initial = np.r_[initial_matrix[:, :2].ravel(),
+                                np.median(initial_matrix[:, 2], axis=0),
+                                np.median(initial_matrix[:, 3], axis=0)]
+        reduced_lo = np.r_[lo_matrix[:, :2].ravel(),
+                           np.max(lo_matrix[:, 2]), np.max(lo_matrix[:, 3])]
+        reduced_hi = np.r_[hi_matrix[:, :2].ravel(),
+                           np.min(hi_matrix[:, 2]), np.min(hi_matrix[:, 3])]
+        reduced_initial = np.clip(reduced_initial, reduced_lo, reduced_hi)
+
+        def expand(theta):
+            matrix = np.empty((k, p), dtype=float)
+            matrix[:, :2] = theta[:2*k].reshape(k, 2)
+            matrix[:, 2] = theta[-2]
+            matrix[:, 3] = theta[-1]
+            return matrix.ravel()
+    else:
+        reduced_initial, reduced_lo, reduced_hi = initial, lo, hi
+
+        def expand(theta):
+            return theta
+
+    def solve(theta, return_coefficients=False):
+        peaks = _shapes_from_theta(theta, k, model, rr, cc)
+        design = np.column_stack((peaks, background))
+        weighted_design = design * pixel_weight[:, None]
+        weighted_data = data * pixel_weight[:, None]
+        coefficients, *_ = np.linalg.lstsq(weighted_design, weighted_data, rcond=None)
+        peak_coefficients = np.maximum(coefficients[:k], 0.0)
+        remainder = weighted_data - (peaks * pixel_weight[:, None]) @ peak_coefficients
+        background_coefficients, *_ = np.linalg.lstsq(
+            background * pixel_weight[:, None], remainder, rcond=None)
+        coefficients = np.vstack((peak_coefficients, background_coefficients))
+        prediction = design @ coefficients
+        return (prediction, peak_coefficients) if return_coefficients else prediction
+
+    def residual(theta):
+        return ((solve(expand(theta)) - data) * pixel_weight[:, None]).ravel()
+
+    def gaussian_jacobian(theta):
+        """Variable-projection Jacobian with the linear spectra held fixed.
+
+        The spectra are re-solved at every trial point.  Holding their current
+        values while differentiating the Gaussian profiles is the standard
+        separable-least-squares approximation and avoids two extra complete
+        spectral solves for every nonlinear parameter.
+        """
+        full = expand(theta).reshape(k, p)
+        _prediction, coefficients = solve(full.ravel(), return_coefficients=True)
+        peaks = _shapes_from_theta(full.ravel(), k, model, rr, cc)
+        if share:
+            derivatives = []
+            for j in range(k):
+                r0, c0, sr, sc = full[j, :4]
+                dr = peaks[:, j] * (rr - r0) / max(sr, 1e-6) ** 2
+                dc = peaks[:, j] * (cc - c0) / max(sc, 1e-6) ** 2
+                derivatives.extend((dr[:, None] * coefficients[j][None, :],
+                                    dc[:, None] * coefficients[j][None, :]))
+            width_row = np.zeros_like(data)
+            width_col = np.zeros_like(data)
+            for j in range(k):
+                r0, c0, sr, sc = full[j, :4]
+                dsr = peaks[:, j] * (rr - r0) ** 2 / max(sr, 1e-6) ** 3
+                dsc = peaks[:, j] * (cc - c0) ** 2 / max(sc, 1e-6) ** 3
+                width_row += dsr[:, None] * coefficients[j][None, :]
+                width_col += dsc[:, None] * coefficients[j][None, :]
+            derivatives.extend((width_row, width_col))
+        else:
+            derivatives = []
+            for j in range(k):
+                r0, c0, sr, sc = full[j, :4]
+                dr = peaks[:, j] * (rr - r0) / max(sr, 1e-6) ** 2
+                dc = peaks[:, j] * (cc - c0) / max(sc, 1e-6) ** 2
+                dsr = peaks[:, j] * (rr - r0) ** 2 / max(sr, 1e-6) ** 3
+                dsc = peaks[:, j] * (cc - c0) ** 2 / max(sc, 1e-6) ** 3
+                derivatives.extend((dr[:, None] * coefficients[j][None, :],
+                                    dc[:, None] * coefficients[j][None, :],
+                                    dsr[:, None] * coefficients[j][None, :],
+                                    dsc[:, None] * coefficients[j][None, :]))
+        return np.column_stack([
+            (derivative * pixel_weight[:, None]).ravel()
+            for derivative in derivatives])
+
+    jacobian = gaussian_jacobian if model == "gaussian" else "2-point"
+    result = least_squares(residual, reduced_initial,
+                           bounds=(reduced_lo, reduced_hi), max_nfev=max_nfev,
+                           ftol=1e-5, xtol=1e-5, gtol=1e-5, jac=jacobian)
+    result_theta = expand(result.x)
+    fitted = initialise_overlap(cube, k, model, apex_hint)
+    for index, component in enumerate(fitted.components):
+        params = result_theta[index * p:(index + 1) * p]
+        component.row0, component.col0 = map(float, params[:2])
+        component.sigma_row, component.sigma_col = map(float, params[2:4])
+        component.t1 = float(cube.t1_of(component.col0))
+        component.t2 = float(cube.t2_of(component.row0))
+        if model in ("emg", "emg2"):
+            component.tau = float(params[4])
+        if model in ("emg_t2", "emg_t2_tilt", "emg_t2_cell"):
+            component.tau_row = float(params[4])
+        elif model == "emg2":
+            component.tau_row = float(params[5])
+        if model == "tilt":
+            component.rho = float(params[4])
+        elif model == "emg_t2_tilt":
+            component.rho = float(params[5])
+    fitted.converged = bool(result.success)
+    fitted.n_shape_parameters = int(2 * k + 2 if share else k * p)
+    fitted.n_starts = 1
+    fitted.restart_position_spread = np.nan  # one start cannot establish stability
+    return fitted
+
+
 def component_maps(fit: OverlapFit, cube: BlobCube) -> np.ndarray:
     """Return each fitted component's TIC contribution without hard ownership.
 
@@ -533,6 +717,67 @@ def component_maps(fit: OverlapFit, cube: BlobCube) -> np.ndarray:
         maps[:, :, j] = profiles[:, :, j] * component.spectrum.sum()
     maps[~cube.mask] = 0.0
     return maps
+
+
+def refit_spectra(fit: OverlapFit, cube: BlobCube,
+                  include_background: bool = True, background_order: int = 1) -> OverlapFit:
+    """Keep fitted shapes fixed and solve spectra/background on another ion cube.
+
+    This is the inexpensive second half of automatic detection: diagnostic ions
+    locate and shape the peaks, then a wider ion set supplies their final spectra
+    without repeating the nonlinear optimisation.
+    """
+    if background_order not in (0, 1):
+        raise ValueError("background_order must be 0 (constant) or 1 (bilinear)")
+    rows, cols = np.nonzero(cube.mask)
+    data = cube.data[rows, cols].astype(float)
+    weights = 1.0 / np.sqrt(np.clip(data, 1.0, None))
+    profiles = component_profiles(fit.model, fit.components, cube.mask.shape, fit.profiles)
+    peak_design = profiles[rows, cols]
+    rr, cc = rows.astype(float), cols.astype(float)
+    if include_background and background_order == 1:
+        rn = rr / max(cube.mask.shape[0] - 1, 1)
+        cn = cc / max(cube.mask.shape[1] - 1, 1)
+        background_basis = np.column_stack(((1-rn)*(1-cn), (1-rn)*cn,
+                                             rn*(1-cn), rn*cn))
+    elif include_background:
+        background_basis = np.ones((rows.size, 1))
+    else:
+        background_basis = np.zeros((rows.size, 0))
+    design = (np.column_stack((peak_design, background_basis))
+              if include_background else peak_design)
+    coefficients = _solve_linear(
+        design, data, True, weights,
+        n_nonnegative=fit.k if include_background else None)
+    prediction = design @ coefficients
+    rss = float(np.sum((prediction - data) ** 2))
+    weighted_rss = float(np.sum(((prediction - data) * weights) ** 2))
+    components = [replace(
+        component, spectrum=coefficients[index].copy(),
+        volume=float(profiles[:, :, index].sum() * coefficients[index].sum()))
+        for index, component in enumerate(fit.components)]
+    n_background = background_basis.shape[1]
+    n_shape_parameters = (fit.n_shape_parameters or
+                          fit.k * _n_shape_params(fit.model))
+    n_parameters = int(n_shape_parameters
+                       + (fit.k + n_background) * data.shape[1])
+    n_obs = data.size
+    bic = (n_obs * np.log(max(weighted_rss / max(n_obs, 1), 1.0))
+           + n_parameters * np.log(max(n_obs, 1)))
+    background_coefficients = coefficients[fit.k:]
+    background_surface = np.zeros(cube.data.shape, dtype=float)
+    if n_background:
+        background_surface[rows, cols] = background_basis @ background_coefficients
+    return OverlapFit(
+        k=fit.k, model=fit.model, components=components, bic=float(bic), rss=rss,
+        converged=fit.converged, weighted_rss=weighted_rss,
+        n_parameters=n_parameters,
+        n_shape_parameters=int(n_shape_parameters),
+        background=(background_coefficients[0].copy() if n_background == 1
+                    else background_coefficients.copy()),
+        background_surface=background_surface if n_background else np.array([]),
+        n_starts=fit.n_starts, restart_position_spread=fit.restart_position_spread,
+        profiles=profiles if fit.model == "template" else np.array([]))
 
 
 def predict_overlap(fit: OverlapFit, cube: BlobCube) -> np.ndarray:
@@ -727,7 +972,8 @@ def cross_validate_overlap(cube: BlobCube, k: int, folds: int = 4,
 
 def fit_overlap(cube: BlobCube, k: int, model: str = "gaussian", non_negative: bool = True,
                 apex_hint=None, include_background: bool = False, n_starts: int = 1,
-                seed: int = 0, background_order: int = 0) -> OverlapFit:
+                seed: int = 0, background_order: int = 0,
+                tolerance: float | None = None, max_nfev: int | None = None) -> OverlapFit:
     """A joint fit of k two-dimensional peak shapes times mass spectra
     to the cube (see the module docstring: variable projection, only
     the shape parameters are the nonlinear unknowns). Weights
@@ -782,9 +1028,27 @@ def fit_overlap(cube: BlobCube, k: int, model: str = "gaussian", non_negative: b
             else:
                 trial[:, 4 + e] += rng.normal(0.0, 0.15, size=k)
         starts.append(np.clip(trial.ravel(), lo, hi))
-    results = [least_squares(residuals, start, bounds=(lo, hi)) for start in starts]
+    solver_options = {}
+    if tolerance is not None:
+        solver_options.update(ftol=float(tolerance), xtol=float(tolerance),
+                              gtol=float(tolerance))
+    if max_nfev is not None:
+        solver_options["max_nfev"] = int(max_nfev)
+    results = [least_squares(residuals, start, bounds=(lo, hi), **solver_options)
+               for start in starts]
     result = min(results, key=lambda r: float(np.sum(r.fun ** 2)))
     theta = result.x
+    best_positions = theta.reshape(k, p_shape)[:, :2]
+    aligned_positions = []
+    for candidate in results:
+        positions = candidate.x.reshape(k, p_shape)[:, :2]
+        distance = np.linalg.norm(best_positions[:, None, :] - positions[None, :, :], axis=2)
+        best_index, candidate_index = linear_sum_assignment(distance)
+        aligned = np.empty_like(positions)
+        aligned[best_index] = positions[candidate_index]
+        aligned_positions.append(aligned)
+    position_stack = np.stack(aligned_positions)
+    restart_position_spread = float(np.max(np.sqrt(np.var(position_stack, axis=0).sum(axis=1))))
     X = design(theta)
     coef = _solve_linear(X, D, non_negative, weights,
                          n_nonnegative=k if include_background and non_negative else None)
@@ -842,7 +1106,7 @@ def fit_overlap(cube: BlobCube, k: int, model: str = "gaussian", non_negative: b
                       background=(background_coefficients[0].copy() if n_background == 1
                                   else background_coefficients.copy()),
                       background_surface=background_surface if n_background else np.array([]),
-                      n_starts=len(starts))
+                      n_starts=len(starts), restart_position_spread=restart_position_spread)
 
 
 def choose_k(cube: BlobCube, max_k: int = 4, model: str = "gaussian", apex_hint=None,

@@ -8,7 +8,7 @@ from ...core import period_from_anchors
 from ...core.phase import PhaseEstimationError
 from ..project import Project
 
-METHOD_TEXT = {"anchors": "anchors", "void": "quiet band", "fallback": "borrowed",
+METHOD_TEXT = {"anchors": "anchors", "void": "quiet band", "bleed": "bleed onset", "fallback": "borrowed",
                "manual": "by hand", "unset": "not set"}
 
 
@@ -207,10 +207,11 @@ class FoldPanel(QtWidgets.QWidget):
             self.phase.setValue(entry.phase)
             self.slider.setValue(int(round(entry.phase * 100)))
             text = {"anchors": "From internal standards", "void": "From the quiet band (no anchors found)",
+                    "bleed": "From the start of the column bleed (no anchors found)",
                     "fallback": "Borrowed from the other runs (no anchors found)",
                     "manual": "Set by hand", "unset": "Not estimated yet"}.get(entry.phase_method, "")
             self.method.setText(text + (f"\n{entry.phase_detail}" if entry.phase_detail and
-                                        entry.phase_method in ("anchors", "void") else ""))
+                                        entry.phase_method in ("anchors", "void", "bleed") else ""))
         else:
             self.method.setText("")
         for w in widgets:
@@ -262,9 +263,11 @@ class FoldPanel(QtWidgets.QWidget):
 
 
 class LayersPanel(QtWidgets.QWidget):
-    """Processing layers. Raw data is always there; 🧹 background removal is
-    switched on and off here (or with Space). Later layers are listed so it's
-    clear where they will appear."""
+    """Processing layers, plus every other on/off overlay the 2D view can draw,
+    gathered in one place. 🧹 background removal is switched on and off here (or
+    with Space). The blob, stencil and cluster checkboxes mirror the toggles in
+    the top bar and the Cluster panel: either one moves the other.
+    Later layers are listed so it's clear where they will appear."""
 
     FUTURE = []
 
@@ -276,10 +279,20 @@ class LayersPanel(QtWidgets.QWidget):
         self.aligned_action = aligned_action
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
-        raw = QtWidgets.QCheckBox("Raw data")
-        raw.setChecked(True)
-        raw.setEnabled(False)
-        lay.addWidget(raw)
+        self.raw = QtWidgets.QCheckBox("Raw data")
+        self.raw.setChecked(True)
+        self.raw.setToolTip("The base chromatogram image (raw or 🧹 cleaned, per the toggle below). "
+                            "Hiding it leaves any overlays on show.")
+        lay.addWidget(self.raw)
+        alpha_row = QtWidgets.QHBoxLayout()
+        alpha_row.setContentsMargins(22, 0, 0, 0)
+        alpha_row.addWidget(QtWidgets.QLabel("Alpha"))
+        self.raw_alpha = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.raw_alpha.setRange(0, 100)
+        self.raw_alpha.setValue(100)
+        self.raw_alpha.setToolTip("Opacity of the chromatogram image")
+        alpha_row.addWidget(self.raw_alpha)
+        lay.addLayout(alpha_row)
         self.background = QtWidgets.QCheckBox("🧹 Background removed   (Space)")
         self.background.setToolTip("Show the cleaned data. Apply 🧹 first.")
         self.background.toggled.connect(processed_action.setChecked)
@@ -301,6 +314,19 @@ class LayersPanel(QtWidgets.QWidget):
         self.siloxane_count = QtWidgets.QLabel("")
         self.siloxane_count.setStyleSheet("color: palette(mid); margin-left: 22px;")
         lay.addWidget(self.siloxane_count)
+        self.blob_overlay = QtWidgets.QCheckBox("🔍 Peak detections")
+        self.blob_overlay.setToolTip("Outline every detected peak (also the top-bar 🔍 toggle)")
+        lay.addWidget(self.blob_overlay)
+        self.stencil_overlay = QtWidgets.QCheckBox("⛓️ Stencil outlines")
+        self.stencil_overlay.setToolTip("Every hydrocarbon stencil, lifted onto this run's own alkane series "
+                                        "(also the top-bar ⛓️ toggle)")
+        lay.addWidget(self.stencil_overlay)
+        self.cluster_fill = QtWidgets.QCheckBox("🧩 Cluster fill")
+        self.cluster_fill.setToolTip("Fill peaks with their cluster colour (also in the Cluster panel)")
+        lay.addWidget(self.cluster_fill)
+        self.cluster_outline = QtWidgets.QCheckBox("🧩 Cluster outline")
+        self.cluster_outline.setToolTip("Outline peaks by cluster colour (also in the Cluster panel)")
+        lay.addWidget(self.cluster_outline)
         for name, when in self.FUTURE:
             box = QtWidgets.QCheckBox(name)
             box.setEnabled(False)

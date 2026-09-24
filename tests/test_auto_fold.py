@@ -56,10 +56,9 @@ def test_period_and_phase_estimated_on_open_without_a_method_file(qtbot, tmp_pat
         assert "estimated from the run" in p.period_detail
         assert any("Modulation period estimated" in m for m in messages)
         e = p.entries[0]
-        assert e.phase_method == "void"
-        # The cut lies in the quiet stretch, so it is not near a peak's t2 (1.1 to 3.4 s, shifted by the true phase).
-        t2_unshifted = [(t2 + TRUE_PHASE) % TRUE_PERIOD for t2 in (0.6, 3.4)]
-        assert min(abs(cs.circ_diff(e.phase, t, TRUE_PERIOD)) for t in t2_unshifted) > 0.1
+        assert e.phase_method == "bleed"
+        # The bleed pulse (t2 = 1.5 s in the modulator's frame) lands just above the bottom of the image.
+        assert 0.1 < (1.5 + TRUE_PHASE - e.phase) % TRUE_PERIOD < 0.8
         assert "estimated from the run" in w.fold_panel.period_status.text()
     finally:
         _close(w)

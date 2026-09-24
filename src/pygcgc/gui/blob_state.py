@@ -41,7 +41,7 @@ class BlobState(QtCore.QObject):
     def __init__(self, project, parent=None):
         super().__init__(parent)
         self.project = project
-        self.method = LEGACY
+        self.method = MS_AWARE
         self.settings = PeakSettings()
         self.component_settings = ComponentDetectionSettings()
         self.candidate_settings = self.component_settings.candidates
@@ -171,7 +171,8 @@ class BlobState(QtCore.QObject):
                     def report(done, total):
                         progress(done, total, "Separating overlapping components")
                     return detect_components(run, fold, run_name, component_settings,
-                                             floor=raw_floor, progress=report)
+                                             floor=raw_floor, progress=report,
+                                             cancel=token.check)
                 blobs = find_blobs(run, fold, settings, floor=raw_floor)
                 return _replay(blobs, run, fold, edits)
 
@@ -180,8 +181,21 @@ class BlobState(QtCore.QObject):
                     candidates, regions, automatic = result
                     self.candidates_by_run[e], self.regions_by_run[e] = candidates, regions
                     if component_settings.automatically_separate:
+                        skipped = 0
                         for accepted in self.accepted_groups_by_name.get(e.name, {}).values():
-                            automatic.replace_group(accepted)
+                            index = accepted.region_index
+                            if (0 <= index < len(regions) and
+                                    accepted.row0 == regions[index].row0 and
+                                    accepted.col0 == regions[index].col0 and
+                                    accepted.n_rows == regions[index].row1 - regions[index].row0 and
+                                    accepted.n_cols == regions[index].col1 - regions[index].col0):
+                                automatic.replace_group(accepted)
+                            else:
+                                skipped += 1
+                        if skipped:
+                            self.project.message.emit(
+                                f"🔍 {e.name}: {skipped} saved manual fit(s) refer to changed "
+                                "candidate regions and were not applied; review them again")
                         self.component_sets_by_name[e.name] = automatic
                         self.component_stale_names.discard(e.name)
                     self.candidate_stale.discard(e)
@@ -311,7 +325,7 @@ class BlobState(QtCore.QObject):
 
     def from_dict(self, d: dict) -> None:
         d = d or {}
-        self.method = d.get("method", LEGACY)
+        self.method = d.get("method", MS_AWARE)
         if self.method not in (LEGACY, MS_AWARE):
             self.method = LEGACY
         self.settings = PeakSettings.from_dict(d.get("settings", {}))

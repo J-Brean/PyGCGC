@@ -14,15 +14,37 @@ co-elution and is why this module deliberately does not return hard borders.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
+import os
 
 import numpy as np
 from scipy import ndimage as ndi
+from scipy.cluster.hierarchy import fcluster, linkage
 
 from .background import storage_threshold
 from .fold import Fold
 from .peaks import Frame, make_frame, PeakSettings
 from .run import Run
+
+
+def _gaussian_filter_ions(cube: np.ndarray, sigma: tuple[float, float, float]) -> np.ndarray:
+    """Filter independent ion planes concurrently without changing results."""
+    n_ions = cube.shape[2]
+    workers = min(4, max(1, os.cpu_count() or 1), max(n_ions, 1))
+    if workers == 1 or n_ions < 8:
+        return ndi.gaussian_filter(cube, sigma, mode="nearest")
+    chunks = [chunk for chunk in np.array_split(np.arange(n_ions), workers) if chunk.size]
+
+    def filtered(indices):
+        return indices, ndi.gaussian_filter(
+            cube[:, :, indices], sigma, mode="nearest")
+
+    out = np.empty_like(cube)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for indices, values in executor.map(filtered, chunks):
+            out[:, :, indices] = values
+    return out
 
 
 @dataclass(frozen=True)
@@ -133,12 +155,12 @@ def find_candidates(run: Run, fold: Fold,
 
     fine = (max(s.smooth_t2_s / frame.pitch, 0.0),
             max(s.smooth_modulations, 0.0), 0.0)
-    smoothed = ndi.gaussian_filter(cube, fine, mode="nearest") if fine[:2] != (0.0, 0.0) else cube
+    smoothed = _gaussian_filter_ions(cube, fine) if fine[:2] != (0.0, 0.0) else cube
     centre, scale = _block_location_scale(smoothed, frame, s.noise_block, floor)
 
     broad = (max(s.broad_t2_s / frame.pitch, fine[0] + 1e-6),
              max(s.broad_modulations, fine[1] + 1e-6), 0.0)
-    local_background = ndi.gaussian_filter(smoothed, broad, mode="nearest")
+    local_background = _gaussian_filter_ions(smoothed, broad)
     denominator = scale[None, :, :]
     if s.poisson_noise:
         # A fixed storage floor badly overstates significance on an abundant
@@ -248,29 +270,23 @@ def candidate_regions(candidates: CandidateSet, image_shape: tuple[int, int],
     n = len(candidates)
     if n == 0:
         return []
-    parent = np.arange(n)
-
-    def root(i):
-        while parent[i] != i:
-            parent[i] = parent[parent[i]]
-            i = parent[i]
-        return i
-
-    def union(i, j):
-        a, b = root(i), root(j)
-        if a != b:
-            parent[b] = a
-
     link_rows = max(int(np.ceil(link_t2_s / candidates.pitch)), 0)
-    for i in range(n):
-        close = np.flatnonzero(
-            (np.abs(candidates.col[i+1:] - candidates.col[i]) <= link_modulations) &
-            (np.abs(candidates.row[i+1:] - candidates.row[i]) <= link_rows)) + i + 1
-        for j in close:
-            union(i, int(j))
+    # Complete linkage prevents a long chain of individually-near candidates
+    # from becoming one enormous region.  Such chains previously produced, for
+    # example, a 365-row/64-candidate window and were both slow and scientifically
+    # incompatible with a local-background model.  Chebyshev distance preserves
+    # the old rectangular t1/t2 limits while requiring the whole group to fit.
+    if n == 1:
+        labels = np.ones(1, dtype=int)
+    else:
+        scaled = np.column_stack((
+            candidates.col / max(int(link_modulations), 1),
+            candidates.row / max(int(link_rows), 1)))
+        tree = linkage(scaled, method="complete", metric="chebyshev")
+        labels = fcluster(tree, t=1.0, criterion="distance")
     groups = {}
-    for i in range(n):
-        groups.setdefault(root(i), []).append(i)
+    for i, label in enumerate(labels):
+        groups.setdefault(int(label), []).append(i)
     pad_rows = max(int(np.ceil(pad_t2_s / candidates.pitch)), 0)
     n_rows, n_cols = image_shape[:2]
     out = []
@@ -295,9 +311,6 @@ def candidate_cube(run: Run, fold: Fold, candidates: CandidateSet,
     """
     from .overlap import BlobCube
 
-    frame = Frame(fold=fold, wrap_rows=candidates.wrap_rows)
-    full = frame.extend(fold.cube(run, dtype=np.float32))
-    data_all = full[region.row0:region.row1, region.col0:region.col1]
     supported_mz = {}
     for i in region.candidate_indices:
         for mz, snr in zip(candidates.support_ions[i], candidates.support_snr[i]):
@@ -305,16 +318,94 @@ def candidate_cube(run: Run, fold: Fold, candidates: CandidateSet,
     ranked_support = sorted(supported_mz, key=supported_mz.get, reverse=True)
     supported_idx = [int(m - run.mz[0]) for m in ranked_support
                      if run.mz[0] <= m <= run.mz[-1]]
-    variation = np.ptp(data_all, axis=(0, 1))
-    order = np.argsort(variation)[::-1]
+    # Rank supplemental ions from the sparse scans in these modulation columns.
+    # The old implementation folded every ion over the entire acquisition for
+    # every region, then discarded all but 60.  That repeated dense allocation
+    # dominated full-run time and memory.  Summing the local sparse scan block
+    # selects useful abundant ions without constructing the all-ion cube.
+    t1_lo = candidates.t1_start + region.col0 * candidates.period
+    t1_hi = candidates.t1_start + region.col1 * candidates.period
+    scan0, scan1 = np.searchsorted(run.times, (t1_lo, t1_hi))
+    if scan1 > scan0:
+        local_total = np.asarray(run.data[scan0:scan1].sum(axis=0)).ravel()
+    else:
+        local_total = np.zeros(run.n_mz, dtype=float)
+    order = np.argsort(local_total)[::-1]
     chosen = list(dict.fromkeys(supported_idx + order.tolist()))
-    positive = [i for i in chosen if variation[i] > 0]
+    positive = [i for i in chosen if local_total[i] > 0 or i in supported_idx]
     limit = max(int(max_ions), int(min_ions))
     chosen = np.asarray(positive[:limit], dtype=np.int64)
-    if chosen.size < min(min_ions, int(np.count_nonzero(variation > 0))):
-        chosen = order[variation[order] > 0][:min_ions]
-    data = data_all[:, :, chosen].astype(np.float64, copy=False)
+    if chosen.size < min(min_ions, int(np.count_nonzero(local_total > 0))):
+        chosen = order[local_total[order] > 0][:min_ions]
+    data = _fold_region(run, fold, chosen, region, candidates.wrap_rows).astype(
+        np.float64, copy=False)
     mask = np.ones(data.shape[:2], dtype=bool)
     return BlobCube(data=data, mask=mask, ions=run.mz[chosen],
                     row0=region.row0, col0=region.col0, pitch=candidates.pitch,
                     period=candidates.period, t1_start=candidates.t1_start)
+
+
+def _fold_region(run: Run, fold: Fold, chosen: np.ndarray, region: CandidateRegion,
+                 wrap_rows: int) -> np.ndarray:
+    """Fold selected ions directly into one extended local region."""
+    n_rows = fold.n_rows
+    out_rows = region.row1 - region.row0
+    out_cols = region.col1 - region.col0
+    out = np.zeros((out_rows, out_cols, len(chosen)), dtype=np.float32)
+    if not len(chosen):
+        return out
+
+    def scan_hits(flat_pixels: np.ndarray) -> np.ndarray:
+        valid = flat_pixels >= 0
+        rows = np.where(valid, flat_pixels % n_rows, -1)
+        cols = np.where(valid, flat_pixels // n_rows, -1)
+        regular = (valid & (cols >= region.col0) & (cols < region.col1) &
+                   (rows >= region.row0) & (rows < min(region.row1, n_rows)))
+        extended = (valid & (rows < wrap_rows) &
+                    (cols - 1 >= region.col0) & (cols - 1 < region.col1) &
+                    (n_rows + rows >= region.row0) &
+                    (n_rows + rows < region.row1))
+        return regular | extended
+
+    # Only scans in these modulation columns can land in the local rectangle.
+    # Testing every scan in the acquisition for every region made run-wide
+    # fitting scale roughly as regions x acquisition length.  Keep one extra
+    # modulation on either side for interpolation and the extended wrap rows.
+    period = fold.spec.period
+    time_lo = fold.t1[0] + (region.col0 - 1) * period
+    time_hi = fold.t1[0] + (region.col1 + 1) * period
+    scan0, scan1 = np.searchsorted(run.times, (time_lo, time_hi))
+    nearby_scans = np.arange(max(int(scan0), 0), min(int(scan1), run.n_scans))
+    scan_mask = (scan_hits(fold._lo[nearby_scans]) |
+                 scan_hits(fold._up[nearby_scans]))
+    scan_indices = nearby_scans[scan_mask]
+    if not scan_indices.size:
+        return out
+    sub = run.data[scan_indices][:, chosen].tocoo()
+    scans = scan_indices[sub.row]
+    values = sub.data.astype(np.float64)
+
+    def add(flat_pixels: np.ndarray, weights: np.ndarray) -> None:
+        flat = flat_pixels[scans]
+        valid = flat >= 0
+        rows = flat % n_rows
+        cols = flat // n_rows
+        regular = (valid & (cols >= region.col0) & (cols < region.col1) &
+                   (rows >= region.row0) & (rows < min(region.row1, n_rows)))
+        if regular.any():
+            np.add.at(out, (rows[regular] - region.row0,
+                            cols[regular] - region.col0, sub.col[regular]),
+                      (values[regular] * weights[scans[regular]]).astype(np.float32))
+        extended_rows = n_rows + rows
+        extended_cols = cols - 1
+        extended = (valid & (rows < wrap_rows) &
+                    (extended_cols >= region.col0) & (extended_cols < region.col1) &
+                    (extended_rows >= region.row0) & (extended_rows < region.row1))
+        if extended.any():
+            np.add.at(out, (extended_rows[extended] - region.row0,
+                            extended_cols[extended] - region.col0, sub.col[extended]),
+                      (values[extended] * weights[scans[extended]]).astype(np.float32))
+
+    add(fold._lo, 1.0 - fold._w)
+    add(fold._up, fold._w)
+    return out

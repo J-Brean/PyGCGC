@@ -1,0 +1,207 @@
+# Compound-class rules for EI-ToF-MS blobs (unit mass, 70 eV).
+#
+# How to read this file
+# ---------------------
+# 1. [ions]   names sets of ions. The "share" of a set is the fraction of a blob's
+#             total ion current sitting on those ions (0 to 1). Ions outside the
+#             run's m/z range are ignored (this instrument starts at m/z 38, so 29,
+#             30 and 31 never count).
+# 2. [ratios] names a ratio of two shares.
+# 3. [losses] names neutral losses from the molecular ion M: loss_X = I(M - X) / I(M).
+# 4. [[class]] entries say what each class looks like, using only those names plus the
+#             built-in features listed below.
+#
+# A criterion is written  name: a -> b  which means "not satisfied at a, fully
+# satisfied at b, linear in between". a > b means "the smaller the better".
+#     alkyl: 0.30 -> 0.50        0 below 0.30, 1 above 0.50
+#     aromatic: 0.10 -> 0.03     1 below 0.03, 0 above 0.10
+# A hard cut is also allowed:  M_share >= 0.2
+#
+# need   = every one must hold; the class scores as its weakest need (a fuzzy AND).
+# prefer = supporting evidence; raises the score from 0.5 to 1.0, never blocks.
+# A criterion whose feature is unknown for a blob (no alkane ladder, M not found,
+# ion outside the range) is skipped and reported as n/a, never counted as a failure.
+#
+# Built-in features (computed from each blob's apex spectrum):
+#   M_mass      m/z of the molecular-ion candidate: the highest ion of at least 8% of
+#               the base peak, stepped down one if it looks like a 13C isotope. Not
+#               guaranteed to be the molecular ion (alkanes and alcohols often lose it).
+#   M_rel       I(M) / I(base peak). 1 when M is the base peak (PAHs, phenols,
+#               heteroaromatics), 0.05 to 0.1 for alkanes.
+#   M_share     fraction of the ion current on M. Same idea, but dilutes as a spectrum
+#               gets more fragments; used only as supporting evidence.
+#   M_odd       1 if M is odd (nitrogen rule: an odd M means an odd number of N), else 0
+#   M_plus2     I(M+2) / I(M): about 0.045 per sulfur atom, about 0.003 for hydrocarbons
+#   siloxane    similarity to the measured column-bleed or cyclic-siloxane spectra
+#   dt2         t2 (s) above the n-alkane line at the blob's own t1: a polarity axis
+#               (0 for alkanes, positive for aromatics and polar compounds). Needs an
+#               alkane ladder. Column-set dependent: tuned on the supplied run, so
+#               only ever used under "prefer".
+#
+# Soft-ionisation features (from the 14 eV channel of a tandem acquisition, when one is
+# loaded; unknown otherwise, so every rule works without it):
+#   soft_M_mass, soft_M_rel, soft_M_share, soft_M_odd, soft_M_plus2, soft_loss_X
+#               the same as the M features above, measured on the 14 eV spectrum of the
+#               same blob. The molecular ion survives there (an n-alkane M+ is 4 to 7% of
+#               its base peak, not lost), so the parity and mass are far more trustworthy.
+#   soft_M_mod14   M mod 14. For a hydrocarbon CnH(2n+z) this is z mod 14, which names the
+#               homologous series: 2 alkane (and naphthalene, z = -12), 0 alkene or
+#               cycloalkane, 8 alkylbenzene (z = -6), 6 indane or tetralin (z = -8).
+#               Measured on the supplied run: 86% of confident alkylbenzene calls land on 8.
+#
+# Tuning: every number below is a starting point measured on, or checked against, the
+# supplied 70 eV run (see real_data/CLASS_VALIDATION.md). The n-alkane ladder (C12 to
+# C28) is the only labelled ground truth in that run. Everything else is checked for
+# chromatographic sense (does it sit where that class should?), not against a library.
+
+[ions]
+alkyl        = [43, 57, 71, 85, 99, 113]      # CnH2n+1+, alkanes
+alkenyl      = [41, 55, 69, 83, 97, 111]      # CnH2n-1+, alkenes and cycloalkanes
+cnh2n        = [56, 70, 84, 98, 112]          # CnH2n+., alkene / cycloalkane radical cations
+tropylium    = [91, 105, 119, 133]            # CnH2n-7+, alkylbenzenes
+aryl         = [51, 63, 65, 77, 78]           # small aromatic fragments
+indane       = [115, 116, 117, 118, 129, 130, 131, 132, 144, 145, 146]   # indanes, indenes, tetralins: M and M-H of C9 to C11 bicyclics
+naphthalene  = [127, 128, 141, 142, 155, 156, 169, 170]  # M and M-H of naphthalene and its methyl, dimethyl and trimethyl homologues
+oxonium      = [45, 59, 73]                   # CnH2n+1O+, alcohols and ethers
+carbonyl_mcl = [58, 72, 86, 100]              # McLafferty ions of ketones and aldehydes
+iminium      = [44, 58, 72, 86]               # CnH2n+2N+, aliphatic amines (same ions as the ketones' McLafferty series)
+acid         = [60]                           # McLafferty ion of carboxylic acids
+ester        = [74, 87, 88]                   # methyl and ethyl esters
+m44          = [44]                           # amines, aldehydes (and CO2 background, so only ever a large share means anything)
+phthalate    = [149]
+
+[ratios]
+olefinicity = ["alkenyl", "alkyl"]            # about 0.3 for n-alkanes, above 1 for alkenes
+
+[losses]
+H    = 1
+CH3  = 15
+H2O  = 18
+HCN  = 27
+CO   = 28
+CHO  = 29
+OCH3 = 31
+
+# ------------------------------------------------------------------ hydrocarbons
+[[class]]
+name  = "alkane"
+group = "hydrocarbon"
+note  = "n- and iso-alkanes. Measured on the C12 to C28 ladder: alkyl share 0.48 to 0.59, olefinicity 0.24 to 0.31."
+need   = ["alkyl: 0.30 -> 0.45", "olefinicity: 0.8 -> 0.5", "aryl: 0.08 -> 0.03", "carbonyl_mcl: 0.12 -> 0.06"]
+prefer = ["dt2: 0.6 -> 0.2", "M_share: 0.10 -> 0.02", "soft_M_mod14 == 2"]
+
+[[class]]
+name  = "alkene"
+group = "hydrocarbon"
+note  = "Alkenes: 41, 55, 69, 83 dominate, alkyl ions weak."
+need   = ["olefinicity: 0.9 -> 1.8", "alkenyl: 0.15 -> 0.30", "aryl: 0.08 -> 0.03"]
+prefer = ["M_share: 0.02 -> 0.005", "dt2: 1.5 -> 0.5", "soft_M_mod14 == 0"]
+
+[[class]]
+name  = "cycloalkane"
+group = "hydrocarbon"
+note  = "Naphthenes: the alkene ion pattern plus a real, even-mass molecular ion (CnH2n) and CnH2n radical cations. An alkene whose M+ is too weak to find leaves an odd-mass fragment as the M candidate, which is what M_odd <= 0 rules out. Not otherwise separable from alkenes by the alkyl/alkenyl pattern."
+need   = ["olefinicity: 0.9 -> 1.8", "alkenyl: 0.15 -> 0.30", "aryl: 0.08 -> 0.03", "M_share: 0.01 -> 0.04", "M_odd <= 0"]
+prefer = ["cnh2n: 0.03 -> 0.10", "dt2: 0.2 -> 0.6", "soft_M_mod14 == 0"]
+
+[[class]]
+name  = "alkylbenzene"
+group = "aromatic"
+note  = "Benzene, toluene, xylenes, alkylbenzenes: tropylium series (91, 105, 119) plus small aryl ions."
+need   = ["tropylium: 0.15 -> 0.30", "aryl: 0.02 -> 0.05"]
+prefer = ["dt2: 0.3 -> 1.0", "M_share: 0.02 -> 0.10", "soft_M_mod14 == 8"]
+
+[[class]]
+name  = "indane / indene / tetralin"
+group = "aromatic"
+note  = "Partly saturated bicyclics: indane 117/118, indene 115/116, methylindanes 131/132, tetralin 104/132, methylindenes 129/130."
+need   = ["indane: 0.25 -> 0.45", "M_rel: 0.15 -> 0.4", "M_odd <= 0", "naphthalene: 0.20 -> 0.08"]
+prefer = ["dt2: 0.5 -> 1.2", "soft_M_mod14 == 6"]
+
+[[class]]
+name  = "naphthalene"
+group = "aromatic"
+note  = "Naphthalene and its alkyl homologues: a strong M and M-H at 128, 142, 156, 170 with 115 and 127."
+need   = ["naphthalene: 0.15 -> 0.35", "M_rel: 0.5 -> 0.9", "M_odd <= 0"]
+prefer = ["dt2: 0.8 -> 1.5", "soft_M_mod14 == 2"]
+
+[[class]]
+name  = "PAH"
+group = "aromatic"
+note  = "Three or more rings, biphenyl, fluorene: one dominant even-mass molecular ion, almost no aliphatic fragments."
+need   = ["M_mass: 148 -> 152", "M_rel: 0.5 -> 0.9", "M_odd <= 0", "alkyl: 0.15 -> 0.05", "alkenyl: 0.15 -> 0.05"]
+prefer = ["dt2: 1.0 -> 2.0", "loss_CHO: 0.05 -> 0.01"]
+
+# ------------------------------------------------------------------ nitrogen
+[[class]]
+name  = "N-heteroaromatic"
+group = "nitrogen"
+note  = "Pyridines, quinolines, indoles, carbazoles, anilines, benzonitriles: a strong odd-mass M (nitrogen rule), aryl fragments, often loss of HCN. Column bleed (m/z 207, 281) is odd-mass too, so a siloxane-like spectrum rules it out."
+need   = ["M_rel: 0.5 -> 0.9", "M_odd >= 1", "M_mass: 76 -> 79", "alkyl: 0.20 -> 0.08", "siloxane: 0.3 -> 0.1"]
+prefer = ["soft_M_odd >= 1", "loss_HCN: 0.05 -> 0.20", "aryl: 0.02 -> 0.06", "dt2: 1.0 -> 2.0"]
+
+[[class]]
+name  = "aliphatic amine"
+group = "nitrogen"
+note  = "Weak at unit mass: the diagnostic ion for primary amines is m/z 30, outside this instrument's range, and the 58/72/86 iminium ions are the same ones a ketone gives. Only an odd M (nitrogen rule, when it can be found) or a large m/z 44 tells them apart, so an amine and a ketone often both score and the result is flagged ambiguous. Use the 14 eV run to confirm."
+need   = ["iminium: 0.15 -> 0.35", "alkyl: 0.35 -> 0.15", "aryl: 0.08 -> 0.03"]
+prefer = ["M_odd >= 1", "soft_M_odd >= 1", "m44: 0.05 -> 0.2", "dt2: 0.3 -> 1.0"]
+
+# ------------------------------------------------------------------ oxygen
+[[class]]
+name  = "alcohol / ether"
+group = "oxygen"
+note  = "Oxonium series 45, 59, 73, 87. Long-chain alcohols dehydrate and look like alkenes, so they are often only 'possible'."
+need   = ["oxonium: 0.08 -> 0.20", "aryl: 0.08 -> 0.03", "ester: 0.15 -> 0.05", "acid: 0.10 -> 0.04"]
+prefer = ["loss_H2O: 0.02 -> 0.10", "dt2: 0.5 -> 1.5"]
+
+[[class]]
+name  = "ketone / aldehyde"
+group = "oxygen"
+note  = "McLafferty ions (58, 72, 86) with the acylium ion 43 or 57."
+need   = ["carbonyl_mcl: 0.12 -> 0.25", "aryl: 0.08 -> 0.03", "m44: 0.25 -> 0.10"]
+prefer = ["M_odd <= 0", "soft_M_odd <= 0", "dt2: 0.5 -> 1.5"]
+
+[[class]]
+name  = "carboxylic acid"
+group = "oxygen"
+note  = "m/z 60, the McLafferty ion of the COOH group, on top of an alkyl / alkenyl background."
+need   = ["acid: 0.08 -> 0.18", "aryl: 0.08 -> 0.03"]
+prefer = ["dt2: 1.0 -> 2.5"]
+
+[[class]]
+name  = "ester"
+group = "oxygen"
+note  = "Fatty acid methyl and ethyl esters: 74 and 87, or 88 and 101, with the loss of OCH3 from M."
+need   = ["ester: 0.12 -> 0.25", "aryl: 0.08 -> 0.03"]
+prefer = ["loss_OCH3: 0.01 -> 0.05", "dt2: 0.5 -> 1.5"]
+
+[[class]]
+name  = "aromatic oxygenate"
+group = "oxygen"
+note  = "Phenols, cresols, alkylphenols, aryl ethers: a strong even M (or M-15 for alkylphenols) with loss of CO and CHO, few aliphatic fragments. M-29 is also the loss of C2H5 from an alkylbenzene, so a strong tropylium series rules it out. Not validated against a library: see real_data/CLASS_VALIDATION.md."
+need   = ["M_rel: 0.3 -> 0.7", "M_odd <= 0", "M_mass: 92 -> 95", "loss_CHO: 0.05 -> 0.15", "alkyl: 0.20 -> 0.08", "tropylium: 0.30 -> 0.15"]
+prefer = ["loss_CO: 0.10 -> 0.30", "dt2: 1.0 -> 2.5"]
+
+# ------------------------------------------------------------------ sulfur
+[[class]]
+name  = "S-heteroaromatic"
+group = "sulfur"
+enabled = false
+note  = "Thiophenes, benzothiophenes, dibenzothiophenes: a strong M with M+2 near 4.5% (34S), unlike 0.3% for hydrocarbons. DISABLED: on the supplied run the M+2/M of hydrocarbon-like blobs (M the base peak, no sulfur) rises with peak size, median 0.007 below 3e6 volume and 0.05 to 0.06 above 1e7, so intense hydrocarbons (indene, naphthalene, methylnaphthalene) all read as sulfur. Enable it only for a run where the isotope ratios of your intense peaks check out. The 14 eV channel does not rescue it on the supplied run: with the soft M as the base peak the M+2/M median is a clean 0.006, but the 13 blobs left with M+2 of 3.5 to 7% are alkylbenzenes, indanes and cresols by their 14 eV spectra (co-elution in the upper tail), not sulfur compounds."
+need   = ["M_rel: 0.5 -> 0.9", "M_plus2: 0.025 -> 0.04", "M_odd <= 0", "alkyl: 0.20 -> 0.08"]
+prefer = ["aryl: 0.02 -> 0.06", "dt2: 1.0 -> 2.0"]
+
+# ------------------------------------------------------------------ silicon and contaminants
+[[class]]
+name  = "siloxane"
+group = "contaminant"
+note  = "Column bleed or a cyclic siloxane, scored against the spectra measured on this instrument (core/siloxane.py)."
+need   = ["siloxane: 0.15 -> 0.35"]
+
+[[class]]
+name  = "phthalate"
+group = "contaminant"
+note  = "Plasticiser: m/z 149 dominates."
+need   = ["phthalate: 0.25 -> 0.45"]
+prefer = ["alkyl: 0.01 -> 0.05"]

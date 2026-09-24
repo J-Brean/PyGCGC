@@ -287,6 +287,12 @@ def _cmd_batch(args) -> int:
         path = write_feature_table_csv(result.feature_table, run_names, args.outdir / "feature_table.csv")
         print(f"Wrote {path} ({len(result.feature_table)} features, reference {result.reference})")
 
+    cluster_table = None
+    if args.cluster:
+        cluster_table = _batch_clusters(result, run_names, config, args)
+    if args.regions:
+        _batch_regions(result, run_names, args)
+
     method_path = args.folder / "method.json"
     method = json.loads(method_path.read_text()) if method_path.exists() else {}
     period = result.period
@@ -310,7 +316,8 @@ def _cmd_batch(args) -> int:
                             volcano_points=volcano_points)
         if args.report in ("xlsx", "all"):
             path = write_excel(args.outdir / "report.xlsx", report=result.report,
-                              feature_table=result.feature_table, run_names=run_names, provenance=prov)
+                              feature_table=result.feature_table, run_names=run_names, provenance=prov,
+                              cluster_table=cluster_table)
             print(f"Wrote {path}")
         if args.report in ("html", "all"):
             path = write_html_report(args.outdir / "report.html", prov, report=result.report,
@@ -321,6 +328,61 @@ def _cmd_batch(args) -> int:
                                    feature_table=result.feature_table, **chart_kwargs)
             print(f"Wrote {path}")
     return 1 if result.errors and not result.prepped else 0
+
+
+def _batch_clusters(result, run_names: list, config, args):
+    """Pool every run's blobs, cluster them by spectrum, and write the peak and run tables. Returns the cluster
+    features (percent of each run's peak volume) for the workbook, or None if there was nothing to cluster."""
+    from .core import feature_table_matrix
+    from .core.cluster import (ClusterSettings, PeakTable, cluster_features, cluster_peaks, permanova,
+                               write_clusters_csv)
+    from .core.report import write_feature_table_csv
+
+    tables = [PeakTable.from_blobs(p.blobs, name) for name, p in result.prepped.items() if p.blobs is not None]
+    if not any(len(t) for t in tables):
+        print("No blobs to cluster (blob detection is off or found nothing)")
+        return None
+    table = PeakTable.concat(tables)
+    clusters = cluster_peaks(table, ClusterSettings(distance_threshold=args.cluster_threshold))
+    unassigned = 100.0 * float(table.volume[clusters.labels < 0].sum()) / (float(table.volume.sum()) or 1.0)
+    print(f"{len(clusters)} clusters from {len(table)} peaks in {len(tables)} run(s); {unassigned:.1f}% of the volume unassigned")
+    print(f"Wrote {write_clusters_csv(table, clusters, args.outdir / 'peak_clusters.csv')}")
+    features = cluster_features(table, clusters, run_names, relative=True)
+    print(f"Wrote {write_feature_table_csv(features, run_names, args.outdir / 'cluster_run_table.csv')} "
+          "(one row per cluster, % of each run's peak volume)")
+    if config.group_a and config.group_b and features:
+        matrix = feature_table_matrix(features, run_names)
+        rows = [run_names.index(n) for n in (*config.group_a, *config.group_b) if n in run_names]
+        groups = ["a" if n in config.group_a else "b" for n in (*config.group_a, *config.group_b) if n in run_names]
+        try:
+            f, p = permanova(matrix[rows], groups)
+            print(f"PERMANOVA of the two groups on the cluster shares: pseudo-F = {f:.2f}, p = {p:.3f}")
+        except ValueError as exc:
+            print(f"PERMANOVA skipped: {exc}")
+    return features
+
+
+def _batch_regions(result, run_names: list, args) -> None:
+    """Fit pixel regions on every prepared run at once, write each run's label image (.npy, rows x modulations,
+    -1 outside) and the table of each run's share of its signal in each region."""
+    from .core import Feature
+    from .core.report import write_feature_table_csv
+    from .core.segment import SegmentSettings, fit_regions, region_shares
+
+    prepared = [(name, result.prepped[name]) for name in run_names if name in result.prepped]
+    model = fit_regions([(p.clean, p.fold) for _, p in prepared], SegmentSettings(n_regions=args.regions))
+    labels = {name: model.label_image(p.clean, p.fold) for name, p in prepared}
+    shares = {name: region_shares(labels[name], p.clean, p.fold, len(model)) for name, p in prepared}
+    first = model.summary(labels[prepared[0][0]], prepared[0][1].clean, prepared[0][1].fold)
+    features = [Feature(id=k, ref_t1=first[k].t1_median, ref_t2=first[k].t2_median,
+                        volumes={name: float(shares[name][k]) for name, _ in prepared}) for k in range(len(model))]
+    for name, lab in labels.items():
+        np.save(args.outdir / f"region_labels_{name}.npy", lab)
+    path = write_feature_table_csv(features, [n for n, _ in prepared], args.outdir / "region_run_table.csv")
+    print(f"{len(model)} pixel regions fitted on {len(prepared)} run(s); wrote {path} "
+          "(one row per region, % of each run's signal) and one region_labels_<run>.npy per run")
+    for k in range(min(len(model), 8)):
+        print(f"  region {k}: top ions {model.top_ions(k, 5)}")
 
 
 def _cmd_gui(args) -> int:
@@ -403,6 +465,15 @@ def main(argv: list[str] | None = None) -> int:
     pba.add_argument("--no-quant", action="store_true", help="skip 🧪 quantification")
     pba.add_argument("--reference", help="run to build the feature table against; default: "
                                          "the first run with blobs")
+    pba.add_argument("--cluster", action="store_true",
+                     help="also cluster the peaks of every run by mass spectrum (needs 🔍): writes peak_clusters.csv "
+                          "and cluster_run_table.csv, and tests the config's two run groups by PERMANOVA if it has any")
+    pba.add_argument("--cluster-threshold", type=float, default=0.3,
+                     help="cosine distance at which clusters stop merging (default 0.3; lower gives more clusters)")
+    pba.add_argument("--regions", type=int, metavar="N",
+                     help="also divide every run into N pixel regions of similar mass spectrum, with no peak "
+                          "detection (needs scikit-learn): writes region_run_table.csv and a region_labels_<run>.npy "
+                          "per run")
     pba.add_argument("--config", type=Path, help="a saved pipeline JSON; overrides the flags above")
     pba.add_argument("--save-config", type=Path, help="save the settings used as a pipeline JSON")
     pba.add_argument("--report", choices=["none", "xlsx", "html", "pdf", "all"], default="none",

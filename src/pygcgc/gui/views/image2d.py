@@ -44,6 +44,47 @@ def display_transform(img: np.ndarray, scale: str) -> np.ndarray:
     return img
 
 
+def _merge_collinear(x: np.ndarray, y: np.ndarray, tol: float = 1e-7) -> tuple[np.ndarray, np.ndarray]:
+    """Join touching horizontal or vertical (start, end, NaN) segments into single segments.
+
+    A legacy blob outline is one segment per pixel edge, so a straight 30-row side is
+    30 segments; the full run was ~250,000 of them, rebuilt into a painter path on
+    every zoom step. Merging only ever joins segments that touch or overlap on the
+    same line, so the drawing is unchanged. Other segments pass through untouched.
+    Run this on display coordinates (after the wrap shift), never before it.
+    """
+    n = len(x) // 3 * 3
+    x, y = np.asarray(x, dtype=float)[:n], np.asarray(y, dtype=float)[:n]
+    if n == 0:
+        return x, y
+    x0, x1, y0, y1 = x[0::3], x[1::3], y[0::3], y[1::3]
+    vertical = (x0 == x1) & (y0 != y1)
+    horizontal = (y0 == y1) & (x0 != x1)
+    other = ~(vertical | horizontal)
+
+    def runs(line, a, b):
+        lo, hi = np.minimum(a, b), np.maximum(a, b)
+        order = np.lexsort((lo, line))
+        line, lo, hi = line[order], lo[order], hi[order]
+        new = np.ones(line.size, dtype=bool)
+        new[1:] = (line[1:] != line[:-1]) | (lo[1:] > hi[:-1] + tol)
+        start = np.flatnonzero(new)
+        return line[start], np.minimum.reduceat(lo, start), np.maximum.reduceat(hi, start)
+
+    gap = np.nan
+    xs, ys = [np.column_stack((x0[other], x1[other], np.full(other.sum(), gap)))], \
+             [np.column_stack((y0[other], y1[other], np.full(other.sum(), gap)))]
+    if vertical.any():
+        at, lo, hi = runs(x0[vertical], y0[vertical], y1[vertical])
+        xs.append(np.column_stack((at, at, np.full(at.size, gap))))
+        ys.append(np.column_stack((lo, hi, np.full(at.size, gap))))
+    if horizontal.any():
+        at, lo, hi = runs(y0[horizontal], x0[horizontal], x1[horizontal])
+        xs.append(np.column_stack((lo, hi, np.full(at.size, gap))))
+        ys.append(np.column_stack((at, at, np.full(at.size, gap))))
+    return np.concatenate(xs).ravel(), np.concatenate(ys).ravel()
+
+
 def auto_levels(disp: np.ndarray, scale: str, processed: bool = False) -> tuple[float, float]:
     vals = disp[np.isfinite(disp)]
     if vals.size == 0:
@@ -233,6 +274,12 @@ class ChromatogramView(QtWidgets.QWidget):
         self.image = pg.ImageItem()
         self.image.setColorMap(pg.colormap.get(DEFAULT_CMAP))
         self.plot.addItem(self.image)
+        # 🧩 cluster colours: RGBA laid over the image, in the same place
+        self.cluster_layer = pg.ImageItem()
+        self.cluster_layer.setZValue(2)
+        self.cluster_layer.setVisible(False)
+        self.plot.addItem(self.cluster_layer)
+        self._cluster_rgba = None
         self.vline = pg.InfiniteLine(angle=90, pen=CROSS_PEN)
         self.hline = pg.InfiniteLine(angle=0, pen=CROSS_PEN)
         self.period_line = pg.InfiniteLine(angle=0, pen=PERIOD_PEN)
@@ -335,6 +382,13 @@ class ChromatogramView(QtWidgets.QWidget):
             item.setZValue(15)
             self.plot.addItem(item, ignoreBounds=True)
 
+        # 🏷️ overlay: internal standards labelled or matched on this run, coloured by confidence tier
+        self._istd_overlay: list[dict] = []
+        self.istd_markers = pg.ScatterPlotItem(size=12, pxMode=True)
+        self.istd_labels: list[pg.TextItem] = []
+        self.istd_markers.setZValue(17)
+        self.plot.addItem(self.istd_markers, ignoreBounds=True)
+
         # 🔍 overlay: every blob found on this run, with the selected ones picked out
         self.blob_overlay_on = False
         self._blob_outline = (np.array([]), np.array([]))
@@ -345,10 +399,12 @@ class ChromatogramView(QtWidgets.QWidget):
         self._candidate_centres = (np.array([]), np.array([]))
         self._component_overlays = []
         self.component_items = []
+        self._outline_cache: dict = {}
         self.blob_outline = pg.PlotDataItem(connect="finite", pen=pg.mkPen((250, 204, 21, 130), width=1))
         self.blob_highlight = pg.PlotDataItem(connect="finite", pen=pg.mkPen((250, 204, 21), width=2.2))
         # 🫧 blobs at or above the threshold: the ones removal would block out
-        self.blob_siloxane = pg.PlotDataItem(connect="finite", pen=pg.mkPen((255, 64, 160), width=2, style=QtCore.Qt.PenStyle.DashLine))
+        # Width 1: any wider pen uses Qt's slow wide-line stroker, and hundreds of bleed blobs can be flagged.
+        self.blob_siloxane = pg.PlotDataItem(connect="finite", pen=pg.mkPen((255, 64, 160), width=1, style=QtCore.Qt.PenStyle.DashLine))
         self.candidate_regions = pg.PlotDataItem(
             connect="finite", pen=pg.mkPen((34, 211, 238, 150), width=1,
                                             style=QtCore.Qt.PenStyle.DashLine))
@@ -376,6 +432,13 @@ class ChromatogramView(QtWidgets.QWidget):
             self.empty.setPos(0.5, 0.5)
             self.plot.setRange(xRange=(0, 1), yRange=(0, 1), padding=0)
 
+    def set_image_visible(self, on: bool) -> None:
+        """Hide the base chromatogram image (raw or 🧹 cleaned) while leaving overlays on show."""
+        self.image.setVisible(on)
+
+    def set_image_opacity(self, alpha: float) -> None:
+        self.image.setOpacity(alpha)
+
     # ------------------------------------------------------------- display
     def show_result(self, result: Rendered) -> None:
         self.set_empty_message("")
@@ -400,6 +463,7 @@ class ChromatogramView(QtWidgets.QWidget):
         w = result.image.shape[1] * result.period / 60.0
         h = result.image.shape[0] * result.pitch
         self.image.setRect(QtCore.QRectF(x0, -0.5 * result.pitch, w, h))
+        self._place_cluster_layer()
         if old_levels is not None:
             self.image.setLevels(old_levels)
         else:
@@ -422,12 +486,29 @@ class ChromatogramView(QtWidgets.QWidget):
         self._place_split_labels()
         self._draw_overlay()
         self._draw_blob_overlay()
+        self._draw_istd_overlay()
         prof = result.profile
         self.profile_curve.setData(result.t1 / 60.0 + result.period / 120.0, prof)
         if self._first_image:
             self._first_image = False
             self.reset_view()
         self._update_slice(self._slice_col if self._slice_col is not None else int(np.nanargmax(prof)) if np.isfinite(prof).any() else 0)
+
+    def set_cluster_layer(self, rgba) -> None:
+        """RGBA uint8 (rows, modulations, 4), or None to remove it. It is laid over the image
+        only while it fits: not on an aligned or extended image, whose pixels are elsewhere."""
+        self._cluster_rgba = rgba
+        self._place_cluster_layer()
+
+    def _place_cluster_layer(self) -> None:
+        r, rgba = self.result, self._cluster_rgba
+        fits = (rgba is not None and r is not None and rgba.shape[:2] == r.image.shape
+                and not r.aligned and not r.extended)
+        self.cluster_layer.setVisible(bool(fits))
+        if fits:
+            self.cluster_layer.setImage(rgba, autoLevels=False, levels=(0, 255))
+            self.cluster_layer.setRect(QtCore.QRectF(r.t1[0] / 60.0, -0.5 * r.pitch,
+                                                     r.image.shape[1] * r.period / 60.0, r.image.shape[0] * r.pitch))
 
     def _composite(self) -> np.ndarray:
         after, before = self._disp_after, self._disp_before
@@ -505,6 +586,27 @@ class ChromatogramView(QtWidgets.QWidget):
         y[:, 2] = np.nan
         return x.ravel(), y.ravel()
 
+    def _display_outline(self, outline) -> tuple[np.ndarray, np.ndarray]:
+        """`_wrap_outline` then `_merge_collinear`, cached per outline array and display geometry.
+
+        Selecting a blob redraws every overlay, but the big outlines (all blobs, all
+        component contours) are the same array objects each time, so they are only
+        converted once.
+        """
+        ot1, ot2 = outline
+        if not len(ot1):
+            return np.array([]), np.array([])
+        r = self.result
+        key = (id(ot1), len(ot1), r.image.shape[0], r.pitch, r.period)
+        hit = self._outline_cache.get(key)
+        if hit is not None and hit[0] is ot1:
+            return hit[1]
+        drawn = _merge_collinear(*self._wrap_outline(ot1, ot2))
+        if len(self._outline_cache) > 20000:
+            self._outline_cache.clear()
+        self._outline_cache[key] = (ot1, drawn)     # the reference keeps id(ot1) from being reused
+        return drawn
+
     def _draw_overlay(self) -> None:
         for t in self.overlay_labels:
             self.plot.removeItem(t)
@@ -529,6 +631,36 @@ class ChromatogramView(QtWidgets.QWidget):
                 self.plot.addItem(t, ignoreBounds=True)
                 self.overlay_labels.append(t)
         self.overlay_markers.setData(spots)
+
+    # --------------------------------------------------------- 🏷️ internal-standard overlay
+    TIER_COLOURS = {"high": (60, 200, 110), "medium": (230, 180, 40), "low": (230, 110, 70),
+                    "not found": (150, 150, 150)}
+
+    def set_istd_overlay(self, markers: list[dict]) -> None:
+        """markers: dicts with t1, t2 (s), label and tier ("high"/"medium"/"low"/"not found")."""
+        self._istd_overlay = markers
+        self._draw_istd_overlay()
+
+    def _draw_istd_overlay(self) -> None:
+        for t in self.istd_labels:
+            self.plot.removeItem(t)
+        self.istd_labels = []
+        if self.result is None or not self._istd_overlay:
+            self.istd_markers.setData([])
+            return
+        spots = []
+        for m in self._istd_overlay:
+            x, y = self._to_display([m["t1"]], [m["t2"]])
+            colour = self.TIER_COLOURS.get(m.get("tier"), (255, 255, 255))
+            spots.append({"pos": (float(x[0]), float(y[0])), "symbol": "t", "size": 12,
+                          "pen": pg.mkPen(colour, width=1.8), "brush": None})
+            if m.get("label") and len(self.istd_labels) < 50:
+                t = pg.TextItem(m["label"], anchor=(0.5, 1.4), color=colour)
+                t.setZValue(18)
+                t.setPos(float(x[0]), float(y[0]))
+                self.plot.addItem(t, ignoreBounds=True)
+                self.istd_labels.append(t)
+        self.istd_markers.setData(spots)
 
     # --------------------------------------------------------- 🔍 blob overlay
     def set_blob_overlay(self, outline: tuple, highlight: tuple, siloxane: tuple | None = None) -> None:
@@ -555,7 +687,7 @@ class ChromatogramView(QtWidgets.QWidget):
                                      (np.array([]), np.array([])))
         self._blob_outline = self._blob_highlight = (np.array([]), np.array([]))
         self._blob_siloxane = (np.array([]), np.array([]))
-        self._draw_blob_overlay()
+        self._draw_blob_overlay(components=False)     # contours are untouched by this call
 
     def set_component_overlay(self, overlays: list[dict]) -> None:
         """Set overlapping component contours.
@@ -564,16 +696,15 @@ class ChromatogramView(QtWidgets.QWidget):
         RGB tuple, and optional ``width``/``style`` values.
         """
         self._component_overlays = list(overlays)
-        self._draw_blob_overlay()
+        self._draw_components()
 
     def set_blob_overlay_visible(self, on: bool) -> None:
         self.blob_overlay_on = bool(on)
         self._draw_blob_overlay()
 
-    def _draw_blob_overlay(self) -> None:
-        for item in self.component_items:
-            self.plot.removeItem(item)
-        self.component_items = []
+    def _draw_blob_overlay(self, components: bool = True) -> None:
+        if components:
+            self._draw_components()
         if self.result is None or not self.blob_overlay_on:
             self.blob_outline.setData([], [])
             self.blob_siloxane.setData([], [])
@@ -582,11 +713,11 @@ class ChromatogramView(QtWidgets.QWidget):
             self.candidate_highlight.setData([], [])
             self.candidate_centres.setData([])
             return
-        x, y = self._wrap_outline(*self._blob_outline)
+        x, y = self._display_outline(self._blob_outline)
         self.blob_outline.setData(x, y)
-        x, y = self._wrap_outline(*self._blob_siloxane)
+        x, y = self._display_outline(self._blob_siloxane)
         self.blob_siloxane.setData(x, y)
-        x, y = self._wrap_outline(*self._blob_highlight)
+        x, y = self._display_outline(self._blob_highlight)
         self.blob_highlight.setData(x, y)
         x, y = self._wrap_outline(*self._candidate_regions)
         self.candidate_regions.setData(x, y)
@@ -598,13 +729,33 @@ class ChromatogramView(QtWidgets.QWidget):
             self.candidate_centres.setData(x=x, y=y)
         else:
             self.candidate_centres.setData([])
+
+    def _draw_components(self) -> None:
+        """Draw the fitted-component contours as a handful of plot items.
+
+        Adding and removing one pyqtgraph item per contour cost about five seconds
+        for the ~1,600 contours of a full run. Contours that share a pen are joined
+        (NaN-separated) into one item, so the item count is the number of distinct
+        pens, and nothing is redrawn unless the overlays themselves change.
+        """
+        for item in self.component_items:
+            self.plot.removeItem(item)
+        self.component_items = []
+        if self.result is None or not self.blob_overlay_on or not self._component_overlays:
+            return
+        pens: dict = {}
         for overlay in self._component_overlays:
-            x, y = self._wrap_outline(*overlay["outline"])
-            style = overlay.get("style", QtCore.Qt.PenStyle.SolidLine)
-            item = pg.PlotDataItem(
-                x, y, connect="finite",
-                pen=pg.mkPen(overlay.get("colour", (0, 220, 255)),
-                             width=overlay.get("width", 1.8), style=style))
+            x, y = self._display_outline(overlay["outline"])
+            if not x.size:
+                continue
+            key = (tuple(overlay.get("colour", (0, 220, 255))),
+                   overlay.get("style", QtCore.Qt.PenStyle.SolidLine),
+                   float(overlay.get("width", 1.0)))
+            pens.setdefault(key, []).append((x, y))
+        for (colour, style, width), outlines in pens.items():
+            x, y = np.concatenate([o[0] for o in outlines]), np.concatenate([o[1] for o in outlines])
+            item = pg.PlotDataItem(x, y, connect="finite",
+                                   pen=pg.mkPen(colour, width=width, style=style))
             item.setZValue(18)
             self.plot.addItem(item, ignoreBounds=True)
             self.component_items.append(item)
@@ -769,8 +920,11 @@ class ChromatogramView(QtWidgets.QWidget):
         px = self.pixel_at(p.x(), p.y())
         self._slice_col = px[1]
         self._update_slice(px[1])
-        self.pointClicked.emit(int(px[1]), float(px[0] * self.result.pitch))
+        # pixelClicked (the raw scan spectrum) fires first so that, when the click also
+        # lands on a blob, pointClicked's own spectrum can overwrite it; a click that
+        # misses every blob leaves the raw spectrum showing.
         self.pixelClicked.emit(t)
+        self.pointClicked.emit(int(px[1]), float(px[0] * self.result.pitch))
 
     def _update_slice(self, col: int) -> None:
         r = self.result

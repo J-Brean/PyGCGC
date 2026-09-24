@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -27,10 +29,15 @@ from ..core.io import discover_runs
 from .jobs import JobManager, Cancelled
 from .align_state import AlignState
 from .blob_state import BlobState
+from .class_state import ClassState
+from .cluster_state import ClusterState
 from .hydrocarbon_state import HydrocarbonState
+from .istd_state import IstdState
 from .quantstate import QuantState
 
 PROJECT_VERSION = 1
+SIDECAR_NAME = "project.pygcgc.json"     # default project file dropped alongside a folder of runs
+AUTOSAVE_DELAY_MS = 1000
 
 
 @dataclass(eq=False)
@@ -57,6 +64,7 @@ class Project(QtCore.QObject):
     anchorsChanged = QtCore.Signal()
     layersChanged = QtCore.Signal()               # a processing layer was added, removed or updated
     message = QtCore.Signal(str)                  # short status-bar messages
+    autosaved = QtCore.Signal()                    # processing was written to disk without being asked
 
     def __init__(self, jobs: JobManager, parent=None):
         super().__init__(parent)
@@ -70,6 +78,9 @@ class Project(QtCore.QObject):
         self.targets_path: Path | None = None
         self.sequence_path: Path | None = None
         self.path: Path | None = None
+        self.processed_at: str | None = None       # when this project was last saved, for "processed on ..."
+        self._data_folder: Path | None = None       # folder opened from, for the default autosave location
+        self._loading_project = False                # suppresses autosave while a project is being restored
         self.view_state: dict = {}
         self._folds: dict[tuple, Fold] = {}
         self.loading = False
@@ -94,6 +105,26 @@ class Project(QtCore.QObject):
         self.layersChanged.connect(self._layers_for_blobs)
         # ⛓️ hydrocarbon and isomer mapper
         self.hydrocarbons = HydrocarbonState(self, self)
+        # 🧬 compound classes (after ⛓️: the ladder gives it a polarity axis)
+        self.classes = ClassState(self, self)
+        self.foldChanged.connect(self.classes.mark_stale)
+        self.blobs.changed.connect(self.classes.mark_stale)
+        self.hydrocarbons.changed.connect(self.classes.mark_stale)
+        # 🧩 peak clustering (from the same legacy blobs; no ladder needed)
+        self.clusters = ClusterState(self, self)
+        self.foldChanged.connect(self.clusters.mark_stale)
+        self.blobs.changed.connect(self.clusters.mark_stale)
+        # 🏷️ internal standards (click-labelled, matched by position and spectrum)
+        self.istd = IstdState(self, self)
+        # autosave: written silently once a step actually finishes, never mid-preview
+        self._autosave_timer = QtCore.QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(AUTOSAVE_DELAY_MS)
+        self._autosave_timer.timeout.connect(self._autosave)
+        self.align.changed.connect(self.request_autosave)
+        self.istd.changed.connect(self.request_autosave)
+        for state in (self.blobs, self.quant, self.classes, self.clusters, self.hydrocarbons):
+            state.runningChanged.connect(self._run_finished)
 
     # ------------------------------------------------------------ queries
     def __len__(self) -> int:
@@ -197,6 +228,7 @@ class Project(QtCore.QObject):
             self.bg_blank = blank
         self.layersChanged.emit()
         self.runsChanged.emit()
+        self.request_autosave()
 
     def _alignment_changed_under_blank(self) -> None:
         """Blank subtraction reads the blank through the runs' alignment, so
@@ -291,6 +323,7 @@ class Project(QtCore.QObject):
             self.siloxane_settings = settings
         self.layersChanged.emit()
         self.runsChanged.emit()
+        self.request_autosave()
 
     def compute_siloxane(self, indices: list[int], settings: SiloxaneSettings, on_done=None) -> None:
         """Run 🫧 on the given runs (their currently displayed data, 🧹
@@ -362,6 +395,7 @@ class Project(QtCore.QObject):
                 if e.background is not None:     # skip runs whose layer was removed meanwhile
                     e.background = res
             self.layersChanged.emit()
+            self.request_autosave()
 
         self.compute_background(affected, settings, blank, on_done=done)
 
@@ -406,6 +440,7 @@ class Project(QtCore.QObject):
 
     # ------------------------------------------------------------ loading
     def add_files(self, paths, on_loaded=None) -> None:
+        self._loading_project = False      # a fresh user action; any earlier stuck load guard is over
         paths = [Path(p) for p in paths]
         known = {e.path.resolve() for e in self.entries}
         new = [RunEntry(path=p, name=p.stem) for p in paths if p.resolve() not in known]
@@ -464,6 +499,7 @@ class Project(QtCore.QObject):
         def failed(text):
             self.loading = False
             self.loadingChanged.emit(False)
+            self._loading_project = False      # a project load that dies here would otherwise wedge autosave off
             self.message.emit(f"Loading failed: {text}")
 
         n = len(entries)
@@ -473,6 +509,7 @@ class Project(QtCore.QObject):
                     entry.error = 'Import cancelled; remove and reopen to retry'
             self.loading = False
             self.loadingChanged.emit(False)
+            self._loading_project = False      # a project load that dies here would otherwise wedge autosave off
             self.runsChanged.emit()
 
         self.jobs.submit(f"📂 Reading {n} run{'s' if n > 1 else ''}", work, done, failed,
@@ -480,6 +517,8 @@ class Project(QtCore.QObject):
 
     def open_folder(self, folder, on_loaded=None) -> None:
         """Discover acquisition alternatives off the GUI thread, then load."""
+        self._loading_project = False      # a fresh user action; any earlier stuck load guard is over
+        self._data_folder = Path(folder)
         self.loading = True
         self.loadingChanged.emit(True)
 
@@ -650,6 +689,8 @@ class Project(QtCore.QObject):
         self.quant.forget_runs(removed)
         self.blobs.forget_runs(removed)
         self.hydrocarbons.forget_runs(removed)
+        self.classes.forget_runs(removed)
+        self.clusters.forget_runs(removed)
         for i in sorted(set(indices), reverse=True):
             if self.preview is not None and self.preview[0] is self.entries[i]:
                 self.preview = None
@@ -659,6 +700,39 @@ class Project(QtCore.QObject):
         self._folds.clear()
         self.runsChanged.emit()
         self.foldChanged.emit(-1)
+
+    # ------------------------------------------------------------ autosave
+    def _run_finished(self, running: bool) -> None:
+        if not running:
+            self.request_autosave()
+
+    def request_autosave(self) -> None:
+        """Write the project soon, silently. A job finishing and the layer it
+        produces arrive together, so requests are coalesced into one write."""
+        if not self._loading_project:
+            self._autosave_timer.start()
+
+    def flush_autosave(self) -> None:
+        if self._autosave_timer.isActive():
+            self._autosave_timer.stop()
+            self._autosave()
+
+    def _default_autosave_path(self) -> Path | None:
+        folder = self._data_folder or (self.entries[0].path.parent if self.entries else None)
+        return folder / SIDECAR_NAME if folder is not None else None
+
+    def _autosave(self) -> None:
+        # Skipped while a project is being restored: that would overwrite the
+        # file being read and reset `processed_at` to now.
+        if self._loading_project or not self.entries:
+            return
+        path = self.path or self._default_autosave_path()
+        if path is None:
+            return
+        try:
+            self.save(path, autosave=True)
+        except OSError as exc:
+            self.message.emit(f"Autosave to {path} failed: {exc}")
 
     # ------------------------------------------------------------ files
     def to_dict(self, base: Path | None = None) -> dict:
@@ -675,6 +749,7 @@ class Project(QtCore.QObject):
 
         return {
             "pygcgc_project": PROJECT_VERSION,
+            "processed_at": self.processed_at,
             "period": self.period,
             "period_confirmed": self.period_confirmed,
             "period_method": self.period_method,
@@ -692,14 +767,31 @@ class Project(QtCore.QObject):
             "align": self.align.to_dict(),
             "blobs": self.blobs.to_dict(),
             "hydrocarbons": self.hydrocarbons.to_dict(),
+            "classes": self.classes.to_dict(),
+            "clusters": self.clusters.to_dict(),
+            "istd": self.istd.to_dict(),
             "view": self.view_state,
         }
 
-    def save(self, path) -> None:
+    def save(self, path, autosave: bool = False) -> None:
         path = Path(path)
-        path.write_text(json.dumps(self.to_dict(path.parent), indent=2))
+        self._loading_project = False      # an explicit save is proof loading (if any was stuck) has ended
+        previous = self.processed_at
+        self.processed_at = datetime.now().isoformat(timespec="seconds")
+        # Written beside the target, then swapped in, so a crash mid-write
+        # never leaves the only copy of the processing half-written.
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(self.to_dict(path.parent), indent=2))
+            os.replace(tmp, path)
+        except OSError:
+            self.processed_at = previous
+            raise
         self.path = path
-        self.message.emit(f"Saved {path.name}")
+        if autosave:
+            self.autosaved.emit()
+        else:
+            self.message.emit(f"Saved {path.name}")
 
     def load(self, path, on_loaded=None) -> None:
         path = Path(path)
@@ -707,6 +799,13 @@ class Project(QtCore.QObject):
         if data.get("pygcgc_project") != PROJECT_VERSION:
             raise ValueError("not a PyGCGC project file, or a newer version")
         base = path.parent
+        self._loading_project = True      # restoring settings triggers the same calls processing does
+        self._autosave_timer.stop()        # a write still pending belongs to the project being replaced
+
+        def finished():
+            self._loading_project = False
+            if on_loaded:
+                on_loaded()
 
         def resolve(p):
             if p is None:
@@ -717,6 +816,7 @@ class Project(QtCore.QObject):
         self.entries.clear()
         self._folds.clear()
         self.path = path
+        self.processed_at = data.get("processed_at")
         self.period = float(data["period"])
         self.period_confirmed = bool(data.get('period_confirmed', False))
         self.period_method = data.get("period_method", "manual" if self.period_confirmed else "default")
@@ -735,7 +835,10 @@ class Project(QtCore.QObject):
         self.align.from_dict(data.get("align", {}))
         self.blobs.from_dict(data.get("blobs", {}))
         self.hydrocarbons.from_dict(data.get("hydrocarbons", {}))
-        bg = data.get("background", {})
+        self.classes.from_dict(data.get("classes", {}))
+        self.clusters.from_dict(data.get("clusters", {}))
+        self.istd.from_dict(data.get("istd", {}))
+        bg =data.get("background", {})
         self.bg_settings = BackgroundSettings.from_dict(bg.get("settings", {}))
         self.bg_blank = bg.get("blank")
         self.show_processed = bool(bg.get("show_processed", True))
@@ -798,9 +901,9 @@ class Project(QtCore.QObject):
                             for e in self.entries if e.run is not None)
                 wanted = self.blobs.was_run
             if wanted and self.loaded() and not fresh:
-                self.blobs.run_all(on_done=on_loaded)
-            elif on_loaded:
-                on_loaded()
+                self.blobs.run_all(on_done=finished)
+            else:
+                finished()
 
         def requant():
             # Results aren't stored; they are rebuilt from the saved settings and decisions.

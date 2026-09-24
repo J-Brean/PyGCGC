@@ -4,6 +4,7 @@ import numpy as np
 
 from pygcgc import (CandidateSet, CandidateSettings, candidate_cube,
                     candidate_regions, find_candidates, fold)
+from pygcgc.core.peaks import Frame
 from tests.conftest import make_run
 
 
@@ -57,3 +58,7 @@ def test_candidate_cube_uses_local_support_without_a_legacy_footprint():
     assert cube.mask.all()
     assert 60 in cube.ions and 61 in cube.ions
     assert cube.data.shape[:2] == (region.row1-region.row0, region.col1-region.col0)
+    expected = Frame(folded, candidates.wrap_rows).extend(
+        folded.cube(run, mz=cube.ions, dtype=np.float32))[
+            region.row0:region.row1, region.col0:region.col1]
+    assert np.allclose(cube.data, expected)
