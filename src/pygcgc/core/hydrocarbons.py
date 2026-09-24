@@ -86,7 +86,11 @@ class HydrocarbonSettings:
     quant_ion: int = 57
     qual_ions: tuple[int, ...] = (71, 85)
     # Expected n-alkane ratios to the quantifier, in the order of `qual_ions`.
-    # Measured on the supplied real acquisition (see `docs/validation/hydrocarbons-2026-09-20.md`).
+    # Measured on the earlier acquisition (docs/validation/hydrocarbons-2026-09-20.md). Re-measured on
+    # the September 2026 runs the n-alkane medians are lower (0.60, 0.38), but a gate centred there
+    # admits branched isomers with lower ratios still and gave worse ladders (14 eV molecular-ion
+    # check: 25 carbons confirmed and 3 contradicted, against 36 and 1), so these values stay
+    # (benchmarks/real_data_audit/alkane_ratios.py).
     qual_ratios: tuple[float, ...] = (0.66, 0.44)
     qual_tol: float = 0.3             # allowed relative deviation of each ratio
     enforce_qualifiers: bool = True   # reject a candidate whose ratios are outside the tolerance
