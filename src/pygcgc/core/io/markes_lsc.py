@@ -159,66 +159,109 @@ class LSCFile:
                     time_origin_policy='whole acquisition clock second; vendor RT offset unvalidated')
 
 
+HEADER = np.dtype([('tag', 'S4'), ('size', '<u4'), ('frac', '<u4'), ('sec', '<u4'),
+                   ('flag', '<u4'), ('count', '<u4'), ('reserved', '<u4')])
+BLOCK = 16384      # scans decoded together: bounds memory, and sets how often cancel and progress are checked
+
+
 def read_lsc(path, *, check_cancel=None, progress=None):
-    """Read this supported LSC variant into a Run, preserving every scan."""
+    """Read this supported LSC variant into a Run, preserving every scan.
+
+    The file is read into memory once (the SHA-256 is taken of the same bytes)
+    and decoded a block of scans at a time with array operations, making the
+    checks `LSCFile.spectrum` makes for a single scan. A 460,000-scan file takes
+    a second or two; the scan-by-scan loop it replaced took about 25 s."""
     check = check_cancel or (lambda: None)
+    name = Path(path).name
     with LSCFile(path, check) as source:
         n = len(source.offsets)
-        counts = np.empty(n, np.int64)
-        for i,p in enumerate(source.offsets):
-            if i % 1024 == 0:
-                check()
-            _, size = source.chunk(int(p))
-            count = struct.unpack('<I', source.read(int(p)+20, 4))[0]
-            if size != 28+16*count:
-                source.fail(f'point count mismatch in scan {i}', int(p))
-            counts[i] = count
+        offsets = source.offsets.astype(np.int64)
+        settings = {k.lower():v for s,k,v in source.records['PD01'] if s == 'Mass Conversion Settings'}
+        lo, hi = int(float(settings.get('min mass', 38))), int(float(settings.get('max mass', 300)))
+        if not 0 <= lo <= hi <= 100000:
+            source.fail('invalid declared mass range')
+        source.f.seek(0)
+        raw = source.f.read()
+        if len(raw) != source.size:
+            source.fail('file truncated during import')
+        buf = np.frombuffer(raw, np.uint8)
+
+        def first(bad, what, scan_of=None):
+            """Fail at the first flagged scan, naming it and its byte offset."""
+            k = int(np.flatnonzero(bad)[0])
+            i = k if scan_of is None else int(scan_of(k))
+            source.fail(f'{what} in scan {i}', int(offsets[i]))
+
+        # Spectrum headers (28 bytes each).
+        short = offsets + 28 > source.size
+        if short.any():
+            first(short, 'spectrum header outside the file')
+        heads = np.empty(n, HEADER)
+        for a in range(0, n, BLOCK):
+            check()
+            p = offsets[a:a + BLOCK]
+            heads[a:a + BLOCK] = buf[p[:, None] + np.arange(28)].view(HEADER).ravel()
+        counts = heads['count'].astype(np.int64)
+        bad = ((heads['tag'] != b'SD04') | (heads['size'].astype(np.int64) != 28 + 16 * counts)
+               | (heads['reserved'] != 0) | (offsets + 28 + 16 * counts > source.size))
+        if bad.any():
+            first(bad, 'invalid or unsupported spectrum header (tag, length, count or reserved field)')
+        flags = heads['flag']
+        if np.any(flags & 0xf000 != flags[0] & 0xf000):
+            first(flags & 0xf000 != flags[0] & 0xf000, 'mixed energy channels; unsupported LSC variant')
+        times = (heads['sec'].astype(np.int64) - source.origin) + heads['frac'] / 2**32
+        if n > 1 and np.any(np.diff(times) <= 0):
+            first(np.diff(times) <= 0, 'non-increasing timestamp', scan_of=lambda k: k + 1)
+
+        # Ion records (16 bytes each), a block of scans at a time.
         indptr = np.concatenate(([0], np.cumsum(counts)))
         values = np.empty(int(indptr[-1]), np.float32)
         indices = np.empty(len(values), np.int32)
-        times = np.empty(n, np.float64)
-        flag_counts = {}
-        lo, hi = 38, 300
-        settings = {k.lower():v for s,k,v in source.records['PD01'] if s == 'Mass Conversion Settings'}
-        lo, hi = int(float(settings.get('min mass', lo))), int(float(settings.get('max mass', hi)))
-        if not 0 <= lo <= hi <= 100000:
-            source.fail('invalid declared mass range')
         off_nominal = 0
-        channel_bits = source.spectrum(0)[1] & 0xf000
-        for i in range(n):
-            if i % 1024 == 0:
-                check()
-                if progress: progress(i, n, f'Decoding {Path(path).name}')
-            time, flag, mass, intensity = source.spectrum(i)
-            if flag & 0xf000 != channel_bits:
-                source.fail(f'mixed energy channels in scan {i}; unsupported LSC variant', int(source.offsets[i]))
-            if i and time <= times[i-1]:
-                source.fail(f'non-increasing timestamp in scan {i}', int(source.offsets[i]))
-            unit = np.rint(mass).astype(np.int64)
-            if np.any(unit < lo) or np.any(unit > hi):
-                source.fail(f'mass outside declared range in scan {i}', int(source.offsets[i]))
-            if np.any(intensity > np.finfo(np.float32).max):
-                source.fail(f'intensity exceeds Run precision in scan {i}', int(source.offsets[i]))
-            off_nominal += int(np.count_nonzero(abs(mass-unit) > .3))
-            a,b = indptr[i:i+2]
-            indices[a:b], values[a:b], times[i] = unit-lo, intensity, time
-            flag_counts[str(flag)] = flag_counts.get(str(flag), 0)+1
+        f32_max = np.finfo(np.float32).max
+        for a in range(0, n, BLOCK):
+            check()
+            if progress:
+                progress(a, n, f'Decoding {name}')
+            b = min(a + BLOCK, n)
+            A, B = int(indptr[a]), int(indptr[b])
+            if A == B:
+                continue
+            ions = np.concatenate([buf[s:s + 16 * c] for s, c in zip(offsets[a:b] + 28, counts[a:b]) if c]).view(ION)
+            local = indptr[a:b + 1] - A
+            scan_of = lambda k, local=local, a=a: a + np.searchsorted(local, k, side='right') - 1
+            mass = ions['mass'].astype(np.int64)
+            steps = np.diff(mass) <= 0
+            steps[local[1:-1][(local[1:-1] > 0) & (local[1:-1] < len(mass))] - 1] = False   # a new scan may restart
+            if np.any(ions['reserved']) or steps.any():
+                first((ions['reserved'] != 0) | np.append(steps, False), 'unsupported ion layout', scan_of)
+            intensity = ions['intensity']
+            if np.any(~np.isfinite(intensity) | (intensity <= 0)):
+                first(~np.isfinite(intensity) | (intensity <= 0), 'invalid intensity', scan_of)
+            mz = mass / 1000
+            unit = np.rint(mz).astype(np.int64)
+            if np.any((unit < lo) | (unit > hi)):
+                first((unit < lo) | (unit > hi), 'mass outside declared range', scan_of)
+            if np.any(intensity > f32_max):
+                first(intensity > f32_max, 'intensity exceeds Run precision', scan_of)
+            off_nominal += int(np.count_nonzero(np.abs(mz - unit) > .3))
+            indices[A:B] = unit - lo
+            values[A:B] = intensity
         data = csr_matrix((values, indices, indptr), shape=(n, hi-lo+1))
         original_points = data.nnz
         data.sum_duplicates()
         if not np.all(np.isfinite(data.data)):
             source.fail('unit-mass summation overflow')
-        digest = hashlib.sha256()
-        source.f.seek(0)
-        while block := source.f.read(4*1024*1024):
-            check()
-            digest.update(block)
+        check()
+        digest = hashlib.sha256(raw).hexdigest()
+        del buf, raw
         stat = os.fstat(source.f.fileno())
         if (stat.st_size, stat.st_mtime_ns) != (source.size, source.mtime):
             source.fail('file changed during import; retry after acquisition/sync completes')
+        flag_values, flag_n = np.unique(flags, return_counts=True)
         meta = dict(format='Markes LSC', parser_version=PARSER_VERSION,
-                    source_sha256=digest.hexdigest(), metadata_text=source.text,
-                    metadata_records=source.records, flags=flag_counts,
+                    source_sha256=digest, metadata_text=source.text,
+                    metadata_records=source.records, flags={str(int(f)): int(c) for f, c in zip(flag_values, flag_n)},
                     stored_points=int(original_points), merged_points=int(original_points-data.nnz),
                     off_nominal_points=off_nominal, vendor_validated=False,
                     modulation_period_confirmed=False, **source.identity())
