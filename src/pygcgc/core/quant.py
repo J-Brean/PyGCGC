@@ -238,6 +238,16 @@ def _istd_pairs(targets: list[Target], s: QuantSettings) -> dict:
     return out
 
 
+def _near_expected(t1: float, t2: float, expected_t2: float, period: float) -> tuple[float, float]:
+    """The same peak with t2 on the side of the modulation boundary nearest the
+    expected t2. A compound whose true t2 is longer than the period is found in
+    the next modulation at a small t2; described this way it matches a target
+    table that gives its true t2 (column k, t2 9.1 s is column k+1, t2 1.1 s
+    at an 8 s period)."""
+    shift = float(np.round((t2 - expected_t2) / period))
+    return t1 + shift * period, t2 - shift * period
+
+
 def quantify_run(raw: Run, clean: Run, fold: Fold, noise: NoiseMap | None, targets: list[Target],
                  settings: QuantSettings = QuantSettings(), assigned: dict | None = None,
                  progress=None, footprints: dict | None = None) -> RunQuant:
@@ -288,9 +298,10 @@ def quantify_run(raw: Run, clean: Run, fold: Fold, noise: NoiseMap | None, targe
             hits[t.compound] = TargetHit(t.compound, t.role, False, manual=manual,
                                          qual_expected=t.qual_ratios, expected=(c1, c2))
             continue
+        where = [_near_expected(p.t1, p.t2, c2, fold.spec.period) for p in cands]
         scores = []
-        for p in cands:
-            pos = np.exp(-0.5 * (((p.t1 - c1) / tol1) ** 2 + ((p.t2 - c2) / tol2) ** 2))
+        for p, (p1, p2) in zip(cands, where):
+            pos = np.exp(-0.5 * (((p1 - c1) / tol1) ** 2 + ((p2 - c2) / tol2) ** 2))
             qual = 1.0
             for obs, exp in zip(p.qual_ratios, t.qual_ratios):
                 if exp > 0 and np.isfinite(obs):
@@ -301,6 +312,7 @@ def quantify_run(raw: Run, clean: Run, fold: Fold, noise: NoiseMap | None, targe
             scores.append(max(pos, 1e-12) * max(qual, 1e-6) * size)
         order = np.argsort(scores)[::-1]
         best = cands[order[0]]
+        best_t1, best_t2 = where[order[0]]
         ambiguous = (not manual and len(order) > 1
                      and scores[order[1]] >= s.ambiguity * scores[order[0]])
         qual_ok = None
@@ -308,7 +320,7 @@ def quantify_run(raw: Run, clean: Run, fold: Fold, noise: NoiseMap | None, targe
             devs = [100.0 * abs(o / e - 1.0) for o, e in zip(best.qual_ratios, t.qual_ratios)
                     if e > 0 and np.isfinite(o)]
             qual_ok = bool(devs) and max(devs) <= s.qual_tolerance
-        off = (not manual) and (abs(best.t1 - c1) > 3 * tol1 or abs(best.t2 - c2) > 3 * tol2)
+        off = (not manual) and (abs(best_t1 - c1) > 3 * tol1 or abs(best_t2 - c2) > 3 * tol2)
         rows, cols = best.pixels
         saturated = bool(ceiling is not None and best.max_raw >= ceiling * 0.999)
         quant_volume, used_ion = best.quant_volume, None
@@ -319,7 +331,7 @@ def quantify_run(raw: Run, clean: Run, fold: Fold, noise: NoiseMap | None, targe
                     quant_volume, used_ion = float(qvol / expected), int(ion)
                     break
         hits[t.compound] = TargetHit(
-            compound=t.compound, role=t.role, found=True, t1=best.t1, t2=best.t2, snr=best.snr,
+            compound=t.compound, role=t.role, found=True, t1=best_t1, t2=best_t2, snr=best.snr,
             quant_volume=quant_volume, tic_volume=float(tic_ext[rows, cols].sum()),
             qual_ratios=tuple(best.qual_ratios), qual_expected=t.qual_ratios, qual_ok=qual_ok,
             saturated=saturated, quant_ion_used=used_ion, integrated_by_hand=bool(poly),
@@ -328,7 +340,7 @@ def quantify_run(raw: Run, clean: Run, fold: Fold, noise: NoiseMap | None, targe
             score=float(scores[order[0]]), n_candidates=len(cands), manual=manual,
             blob=blobs.at_pixel(best.row, best.col), pixels=(rows, cols), apex=(best.row, best.col))
         if t.is_istd and not off:
-            offsets[t.compound] = (best.t1 - t.t1, best.t2 - t.t2)
+            offsets[t.compound] = (best_t1 - t.t1, best_t2 - t.t2)
 
     # Targets on the same ion that picked the same peak cannot both be right.
     step(2, 3, "Checking overlaps")
@@ -382,10 +394,44 @@ def learn_positions(seq: list["SequenceRun"], targets: list[Target],
     return out
 
 
-def with_positions(targets: list[Target], positions: dict) -> list[Target]:
+def learn_qual_ratios(seq: list["SequenceRun"], targets: list[Target]) -> dict:
+    """Expected qualifier ratios for rows of the target table that list
+    qualifier ions but leave `qual_ratios` blank.
+
+    Each ratio is the median over the calibration runs (every run, for an
+    internal standard) where the peak was found without flags. Without
+    expected ratios nothing checks the qualifiers, so a peak sitting on a
+    matrix compound that shares the quantifier ion would pass unflagged.
+    Returns {compound: (ratio, ...)} in the order of `qual_ions`."""
+    out = {}
+    for t in targets:
+        if not t.qual_ions or t.qual_ratios:
+            continue
+        obs = []
+        for r in seq:
+            h = r.quant.hits.get(t.compound) if r.quant is not None else None
+            if h is None or not h.found or h.flags() or not (t.is_istd or r.is_calibration):
+                continue
+            if len(h.qual_ratios) == len(t.qual_ions) and all(np.isfinite(h.qual_ratios)):
+                obs.append(h.qual_ratios)
+        if obs:
+            out[t.compound] = tuple(float(v) for v in np.median(np.array(obs), axis=0))
+    return out
+
+
+def with_positions(targets: list[Target], positions: dict, ratios: dict | None = None) -> list[Target]:
+    """Targets with learned positions and, where the table left them blank,
+    learned qualifier ratios."""
     from dataclasses import replace
-    return [replace(t, t1=positions[t.compound][0], t2=positions[t.compound][1])
-            if t.compound in positions else t for t in targets]
+    ratios = ratios or {}
+    out = []
+    for t in targets:
+        if t.compound in positions:
+            t = replace(t, t1=positions[t.compound][0], t2=positions[t.compound][1])
+        if t.compound in ratios and not t.qual_ratios:
+            t = replace(t, qual_ratios=ratios[t.compound])
+        out.append(t)
+    return out
 
 
 # ------------------------------------------------------------- sequence
@@ -855,6 +901,7 @@ def quantify_prepared(prepared: list, info: list, targets: list, levels: dict,
         cal = [i for i, r in enumerate(info) if r.is_calibration] or list(range(len(info)))
         measure(targets, cal)
         positions = learn_positions([info[i] for i in cal], targets, settings)
-        targets = with_positions(targets, positions)
+        ratios = learn_qual_ratios([info[i] for i in cal], targets)
+        targets = with_positions(targets, positions, ratios)
     measure(targets, list(range(len(info))))
     return finish_sequence(info, targets, levels, settings, decisions, positions)

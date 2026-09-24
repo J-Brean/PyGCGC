@@ -21,9 +21,8 @@ Finding the ladder (`find_alkane_series`, `propagate_alkane_series`)
 ---------------------------------------------------------------------
 Given two confirmed points (carbon number, t1 and t2 of where you clicked),
 the ladder grows outward one carbon at a time. Each next carbon is predicted
-from its nearest confirmed neighbours (a quadratic in carbon number for t1,
-because the spacing between alkanes shrinks steadily through a temperature
-programme; a straight line for t2) and searched for on the alkane quantifier
+from the straight line through its two nearest confirmed neighbours (in t1
+and in t2; see `_predict` for why not a quadratic) and searched for on the alkane quantifier
 ion (m/z 57 by default). The search is two-dimensional: it looks only at scans
 whose t2 lies within `t2_window_s` of the predicted t2 and takes the tallest
 pulse whose qualifier ratios (m/z 71/57 and 85/57 by default) match the
@@ -49,12 +48,12 @@ whose apex falls inside the resulting real-coordinate polygon.
 Homologous series (`find_homologous_series`) and markers (`find_markers`)
 ---------------------------------------------------------------------------
 Other series are found the cheap way: candidate blobs carrying a strong
-share of a diagnostic ion pair, fit to an evenly-spaced sequence whose
-step size is taken from the alkane ladder's own spacing (every CH2-adding
-series climbs t1 at close to the same rate), by trying every candidate in
-turn as the reference phase and keeping whichever phase explains the most
-of the rest (a small, exhaustive stand-in for RANSAC, cheap because there
-are only ever a few dozen candidates). Markers (pristane, phytane) are
+share of a diagnostic ion pair are placed in carbon-equivalent space (the
+alkane ladder's own t1-to-carbon map, so the shrinking spacing through a
+temperature programme is handled) and must sit one carbon apart at a
+consistent t2 offset from the alkane line. Every candidate is tried in turn
+as the reference phase and the phase explaining the most carbons wins (a
+small, exhaustive stand-in for RANSAC). Markers (pristane, phytane) are
 looked up at a measured carbon-equivalent offset from their neighbouring
 n-alkane (see `MARKER_OFFSET_CARBONS`).
 """
@@ -303,6 +302,12 @@ def find_alkane_series(run: Run, fold: Fold, seeds: list[tuple[int, float, float
             raise ValueError(f"couldn't confirm the seed at C{carbon} near t1={t1_guess:.1f} s")
         hit.seeded = True
         series.hits[int(carbon)] = hit
+    # A ladder grown from seeds in the wrong order runs backwards through the run.
+    cs = series.carbons()
+    t1s = [series.hits[int(c)].t1 for c in cs]
+    if len(cs) < len(seeds) or np.any(np.diff(t1s) <= 0):
+        pairs = ", ".join(f"C{c} at {t / 60:.2f} min" for c, t in zip(cs, t1s))
+        raise ValueError(f"the seeds must be different peaks that elute in carbon order ({pairs})")
 
     lo, hi = s.carbon_range
     for _ in range(max(s.refine_passes, 1)):

@@ -22,7 +22,7 @@ from pathlib import Path
 from PySide6 import QtCore
 
 from ..core import (QuantDecisions, QuantReport, QuantSettings, SequenceRun, finish_sequence,
-                    learn_positions, load_levels, load_targets, quantify_run, read_sequence_extras,
+                    learn_positions, learn_qual_ratios, load_levels, load_targets, quantify_run, read_sequence_extras,
                     with_positions)
 
 
@@ -41,6 +41,7 @@ class QuantState(QtCore.QObject):
         self.decisions = QuantDecisions()
         self.report: QuantReport | None = None
         self.positions: dict = {}
+        self.ratios: dict = {}           # qualifier ratios learned where the table leaves them blank
         self.runquants: dict = {}        # RunEntry -> RunQuant
         self.extras: dict = {}           # run name -> {cal_set, volume}
         self.stale = False
@@ -109,7 +110,7 @@ class QuantState(QtCore.QObject):
     def used_targets(self):
         if self.targets is None:
             return None
-        return with_positions(self.targets, self.positions) if self.positions else self.targets
+        return with_positions(self.targets, self.positions, self.ratios)
 
     def calibration_entries(self) -> list:
         info = self.info()
@@ -195,12 +196,13 @@ class QuantState(QtCore.QObject):
             def learned():
                 info = [i for i in self.info() if i.quant is not None]
                 self.positions = learn_positions(info, targets, self.settings)
+                self.ratios = learn_qual_ratios(info, targets)
                 second_pass()
 
-            self.positions = {}
+            self.positions, self.ratios = {}, {}
             self._measure(cal, targets, "Learning positions", learned)
         else:
-            self.positions = {}
+            self.positions, self.ratios = {}, {}
             second_pass()
         return True
 
@@ -258,7 +260,7 @@ class QuantState(QtCore.QObject):
         d = d or {}
         self.settings = QuantSettings.from_dict(d.get("settings", {}))
         self.decisions = QuantDecisions.from_dict(d.get("decisions", {}))
-        self.report, self.runquants, self.positions = None, {}, {}
+        self.report, self.runquants, self.positions, self.ratios = None, {}, {}, {}
         self.stale = False
         self.levels, self.levels_path = None, None
         lv = resolve(d.get("levels"))

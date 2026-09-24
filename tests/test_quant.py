@@ -373,6 +373,31 @@ def test_sequence_quantification_recovers_amounts():
     assert rep.positions["A"][0] == pytest.approx(110.0, abs=1.0)
 
 
+def test_blank_qualifier_ratios_are_learned_from_the_calibration_runs():
+    from dataclasses import replace
+    prepared, info, targets, levels = _sequence()
+    blank = [replace(t, qual_ratios=()) for t in targets]
+    rep = quantify_prepared(prepared, info, blank, levels)
+    learned = {t.compound: t.qual_ratios for t in rep.targets}
+    assert learned["IS"] == pytest.approx((0.5,), rel=0.05)
+    assert learned["A"] == pytest.approx((0.3,), rel=0.05)
+    assert learned["B"] == ()                         # no qualifier ion, nothing to learn
+    # Samples are now checked against the learned ratios, and pass.
+    s1 = next(i for i in rep.seq if i.name == "S1").quant
+    assert s1.hits["A"].qual_ok is True
+
+
+def test_a_target_whose_t2_is_longer_than_the_period_is_on_position():
+    # Found on real data: perylene-d12 (true t2 about 9.1 s at an 8 s period) was found but always
+    # flagged "off position", because it is recorded in the next modulation at t2 about 1.1 s.
+    run = make_run([(180.0, 5.0, 52, 1.5e5)], phase=GUI_PHASE, rate=50.0)
+    targets = [Target("wrapped", "istd", "", 52, (), (), 180.0, 10.0, 5.0, 0.2)]
+    hit = quantify_run(run, run, fold(run, 4.0, GUI_PHASE), None, targets).hits["wrapped"]
+    assert hit.found and not hit.off_position
+    assert hit.t2 == pytest.approx(5.0, abs=0.05)
+    assert hit.t1 == pytest.approx(180.0, abs=4.0)
+
+
 def test_shared_peak_and_qualifier_flags():
     targets = [Target("IS", "istd", "", 50, (51,), (0.5,), 60.0, 10, 1.2, 0.2),
                Target("A", "target", "", 52, (53,), (0.3,), 110.0, 10, 2.0, 0.2, "IS"),

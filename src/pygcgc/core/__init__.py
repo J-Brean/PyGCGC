@@ -38,7 +38,7 @@ from .batch import (BatchConfig, BatchResult, BatchSettings, Feature, PCAResult,
 from .calibration import CalibrationError, CalibrationFit, CalibrationSettings, fit_calibration
 from .quant import (QuantDecisions, QuantReport, QuantSettings, RunQuant, SequenceRun, TargetHit, all_signals,
                     build_calibrations, cal_set_for, bracket_cal_sets, CalBracket, blended_amount,
-                    istd_table, learn_positions, quantify_run,
+                    istd_table, learn_positions, learn_qual_ratios, quantify_run,
                     quantify_sequence, read_sequence_extras, with_positions,
                     finish_sequence, quantify_prepared)
 from .report import (Provenance, build_provenance, chromatogram_caption, plot_chromatogram, plot_pca,
@@ -94,7 +94,7 @@ __all__ = [
     "QCFlag", "westgard_flags", "PCAResult", "pca", "VolcanoPoint", "volcano", "benjamini_hochberg",
     "CalibrationSettings", "CalibrationFit", "CalibrationError", "fit_calibration",
     "QuantSettings", "QuantDecisions", "TargetHit", "RunQuant", "SequenceRun", "quantify_run",
-    "learn_positions", "with_positions", "build_calibrations", "quantify_sequence",
+    "learn_positions", "learn_qual_ratios", "with_positions", "build_calibrations", "quantify_sequence",
     "all_signals", "istd_table", "cal_set_for", "bracket_cal_sets", "CalBracket", "blended_amount",
     "read_sequence_extras",
     "QuantReport", "finish_sequence", "quantify_prepared",

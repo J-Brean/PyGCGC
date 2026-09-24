@@ -71,6 +71,17 @@ def test_needs_at_least_two_seeds():
         find_alkane_series(run, f, [(12, 300.0, 1.0)])
 
 
+def test_seeds_in_the_wrong_order_are_refused():
+    # Found on real data: carbon numbers typed the wrong way round grew a ladder backwards through the run.
+    run = _build_run()
+    f = fold(run, PERIOD, 0.7)
+    a, b = CARBONS.index(12), CARBONS.index(20)
+    seeds = [(20, *_fold_pos(f, T1_START + a * STEP, 1.0 + 0.01 * a)),
+             (12, *_fold_pos(f, T1_START + b * STEP, 1.0 + 0.01 * b))]
+    with pytest.raises(ValueError, match="carbon order"):
+        find_alkane_series(run, f, seeds, HydrocarbonSettings(carbon_range=(8, 32)))
+
+
 def test_propagate_alkane_series_follows_a_shifted_run():
     ref_run = _build_run()
     ref_f = fold(ref_run, PERIOD, 0.7)
