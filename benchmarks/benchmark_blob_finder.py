@@ -4,7 +4,7 @@ Real cleaned background and real spectra, planted peaks, the whole automatic
 pipeline (no positions supplied). Each injection pass plants one case of every
 type at non-interacting, candidate-free sites of the cached ten-minute segment.
 
-    python examples/benchmark_blob_finder.py --split tuning --label baseline \
+    python benchmarks/benchmark_blob_finder.py --split tuning --label baseline \
         --set search_hidden_components=False
 
 Splits use different random seeds and disjoint halves of the real spectrum

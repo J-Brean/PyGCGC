@@ -6,7 +6,7 @@ several candidate-detector settings. As a false-positive proxy, the number of fi
 components in the reviewed background band (t1 14 to 16 min, t2 5 to 9 s, visually
 background-dominated but not a certified blank) is reported for the same settings.
 
-    python examples/benchmark_sensitivity.py
+    python benchmarks/benchmark_sensitivity.py
 """
 
 from __future__ import annotations

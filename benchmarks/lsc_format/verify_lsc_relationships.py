@@ -7,7 +7,7 @@ import struct
 import numpy as np
 from audit_lsc import ION
 
-folder=Path(__file__).parent
+folder=(Path(__file__).resolve().parents[2] / 'real_data')
 paths=[next(folder.glob('*70eV.lsc')),next(folder.glob('*.dbc.lsc'))]
 files=[p.open('rb') for p in paths]
 maps=[mmap.mmap(f.fileno(),0,access=mmap.ACCESS_READ) for f in files]

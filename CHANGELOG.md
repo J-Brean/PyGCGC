@@ -2,9 +2,26 @@
 
 Dated record of what was built and what real-data checks found, newest first. Add new
 entries at the top; keep the detail that a fresh session needs (decisions, gotchas, what was
-not checked). This was section 2 of the old HANDOVER.md.
+not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
+
+**Audit and reorganisation, 2026-09-24** (branch `audit-2026-09-24`; full report in
+[docs/validation/audit-2026-09-24.md](docs/validation/audit-2026-09-24.md)). The previously
+uncommitted tree was committed as found, then every feature was run on the four tandem
+acquisitions now in `real_data/` (8 s modulation) and on semi-synthetic sequences built from them.
+Fixed: targets whose true t2 exceeds the period were always "off position" (perylene-d12);
+blank `qual_ratios` are now learned from the calibration runs, as the README promised; alkane
+seeds in the wrong carbon order are refused instead of growing a ladder backwards; Go on the
+internal-standard step raised `KeyError`; the step was missing from the toolbar; a disabled
+"3D, milestone 8" tab was left over. New: the 🏷️ IS step writes its labelled standards into the
+target table, so they anchor the phase and normalise 🧪 (before, labelling fed nothing).
+Reorganised: benchmark and investigation scripts moved to `benchmarks/` (with new
+`real_data_audit/` scripts reproducing every audit number), validation reports to
+`docs/validation/`, superseded plans and handovers to `docs/history/`, screenshots to
+`docs/images/`; `real_data/` is now entirely git-ignored; HANDOVER.md became CLAUDE.md;
+known-limitations.md was merged into a rewritten ROADMAP.md; README rewritten; stale statements
+in the user guide and architecture notes corrected. 543 tests pass, 28 skip (dummy pack).
 
 **🧩 Unsupervised clustering, 2026-09-21.** Workflow step 10 (`core/cluster.py`, `core/segment.py`,
 `gui/cluster_state.py`, `gui/panels/clusters.py`). Peaks (legacy blobs, or the MS-aware components
@@ -28,7 +45,7 @@ clusters are only as good as those boundaries. Full suite at the time: 509 passe
 unrelated `test_gui.py` failures (stencil lift, homolog table, settings dialog) that fail identically
 with the cluster code switched off. A session that froze mid-work had left duplicate function
 definitions in `cluster.py` (the later one silently wins); they were removed. See
-[known limitations](docs/known-limitations.md) and the [ROADMAP](ROADMAP.md) for what to check first.
+[known limitations](ROADMAP.md) and the [ROADMAP](ROADMAP.md) for what to check first.
 
 **🧬 Compound classes, 2026-09-21.** Built as a readable replacement for GC Image's CLIC, run after blob detection.
 `core/chemclass.py` classifies blobs from a TOML rule file (`presets/chemical_classes.toml`, 17 classes, ion-set
@@ -36,7 +53,7 @@ shares, fuzzy ramps, need/prefer, a tier and a per-blob reason). Evidence: the a
 the alkane line) and, when the 14 eV file of the same acquisition is loaded, soft molecular-ion features
 (`soft_M_mass`, `soft_M_mod14`, ...) read on the 70 eV pixel grid. GUI: workflow step 7 (`gui/class_state.py`,
 `gui/panels/classes.py`), so Identify is now step 8 and Quantify step 9. Checked on `real_data/`
-(`real_data/CLASS_VALIDATION.md`): the alkane ladder recovers, and 14 eV recovers 9 of 10 alkane molecular masses but
+(`docs/validation/classes-2026-09-21.md`): the alkane ladder recovers, and 14 eV recovers 9 of 10 alkane molecular masses but
 changes only about 25 of 4068 calls. Not resolved: alkene against cycloalkane at unit mass; sulfur heteroaromatics
 (class disabled, M+2 unreliable); whether the alkylbenzene block at t2 above 4 s is real. MS-aware users get blobs
 found privately by the legacy detector. Results are not saved in the project. Three `tests/test_gui.py` tests
@@ -48,7 +65,7 @@ fitted peaks per window is now chosen by `core/modelselect.py` (grow from one pe
 accept only on BIC, spectral distinctness or resolution, and held-out gain; merge
 same-spectrum unresolved peaks with a warning) and duplicates across windows are removed.
 The residual prototype was removed after it made false splitting worse. Held-out planted-peak
-benchmark (`examples/benchmark_blob_finder.py`): exact count for 1:1 pairs 0.70 (was 0.28),
+benchmark (`benchmarks/benchmark_blob_finder.py`): exact count for 1:1 pairs 0.70 (was 0.28),
 false splits of broad single peaks 10% (was 95%), median area error for distinct pairs
 0.02 to 0.03 (was 0.3 to 0.6). Open: 1:0.1 pairs, tailing pairs, runtime about 4x on the
 ten-minute segment. A fixed bug: spectra from different windows were compared on mismatched
@@ -59,14 +76,14 @@ pan/zoom with the overlay open fell from ~400 ms to ~15-40 ms per step (bulk ove
 at 1 px, since wider pens use Qt's slow stroker; legacy pixel-edge outlines merged into
 runs); clicking a blob now shows its own spectrum; 📊 signal accounting
 added (on the supplied file the fitted peaks explain 37% of the signal); the sensitivity
-trade-off is in `examples/benchmark_sensitivity.py`. See
-[docs/CLAUDE_CODE_HANDOVER.md](docs/CLAUDE_CODE_HANDOVER.md). Amounts are still not
+trade-off is in `benchmarks/benchmark_sensitivity.py`. See
+[docs/history/ms-aware-handover-2026-09-21.md](docs/history/ms-aware-handover-2026-09-21.md). Amounts are still not
 validated against a labelled standard and must not feed quantification.
 
 **Real blob audit, 2026-09-20:** James supplied period 10 s and phase 1.81 s
 for the acquisition in `real_data/`, highlighting t1 around 15 min and t2 around
-1.2 s. See [diagnosis and phased plan](docs/BLOB_DIAGNOSIS_AND_PLAN.md).
-`examples/diagnose_real_blobs.py` reproduces six detector comparisons using a
+1.2 s. See [diagnosis and phased plan](docs/history/blob-diagnosis-and-plan.md).
+`benchmarks/diagnose_real_blobs.py` reproduces six detector comparisons using a
 cached ten-minute scan crop and exports a small all-ion focus cube, metrics and
 figures under `real_data/blob_diagnosis/`. Default ion-summed detection labels
 about 99% of a background-dominated comparison band. GUI/batch derive their
@@ -115,8 +132,8 @@ read-only dialog output; no project persistence, identification, export or quant
 consumes the components yet.
 
 **Real-data checks of 🫧 and ⛓️, 2026-09-20:** full write-up and numbers in
-[real_data/HYDROCARBON_VALIDATION.md](real_data/HYDROCARBON_VALIDATION.md), reproduced by
-`examples/validate_real_data.py`. What changed in the code:
+[docs/validation/hydrocarbons-2026-09-20.md](docs/validation/hydrocarbons-2026-09-20.md), reproduced by
+`benchmarks/validate_real_data.py`. What changed in the code:
 - 🫧 default reference is now the column bleed measured in the real run (m/z 207 base, 73 only about 7%), not the generic Dn pattern (`BLEED_REFERENCE`). Presets (`SILOXANE_PRESETS`), table editing and click-to-pick live in the new 🫧 Siloxane tab (`gui/panels/siloxane.py`, `MainWindow._finish_siloxane_pick`). The picked spectrum comes from `core/pixelspec.spectrum_at` (baseline-subtracted by the modulation's median spectrum, switchable) and `siloxane.reference_from_spectrum`. Panel edits set `Project.siloxane_settings` immediately (flags follow); applied layers are not refitted, the panel reports how many are stale. `ApplySiloxane`'s undo still stores the same settings before and after; settings are not part of undo.
 - ⛓️ alkane search is now two-dimensional (`_search_carbon`: t2 window, qualifier gate, sub-scan apex, duplicate guard; `_predict`: local secant; window capped at 0.45 of the local spacing). The old time-only search failed on the real run. Seeds carry t2 and are trusted (ratios reported, not enforced). `HydrocarbonSettings` gained `qual_ratios` (0.66, 0.44), `qual_tol`, `enforce_qualifiers`, `t2_window_s`, `seed_t2_window_s`, `max_gap`, `pair_min_ratio`, `series_tol_carbon`, `series_t2_tol_s`; `series_tol_s` is gone. The ⛓️ panel edits, resets and picks the ratios; the ladder table shows each hit's ratios. Synthetic test and conftest alkanes now carry the measured ratios.
 - `find_homologous_series` works in carbon-equivalent space (one member per carbon, t2-consistent). Its diagnostic pairs are unvalidated: no series on this run apart from the (57, 71) positive control.
@@ -168,7 +185,7 @@ All 12 milestones are done (version 0.12.0 -- the number counts completed milest
 **Native-data investigation, 2026-09-19:** All three instrument-produced LSC files
 in `real_data/` have now been decoded by standalone investigative scripts (all
 645,045 spectra / 53,674,922 ion records), with TIC/EIC outputs and structural audits.
-See [real_data/NATIVE_LSC_REPORT.md](real_data/NATIVE_LSC_REPORT.md) for the current
+See [docs/validation/native-lsc-format.md](docs/validation/native-lsc-format.md) for the current
 findings and integration proposal.
 LSC stores calibrated centroid masses as integer m/z × 1000 and float64 intensities;
 direct import is implemented without DAT decoding or CDF conversion in

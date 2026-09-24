@@ -1,7 +1,10 @@
+> Describes the earlier acquisition (10 s modulation, 2025-10-09) that is no longer in
+> real_data/. The current runs are covered by [audit-2026-09-24.md](audit-2026-09-24.md).
+
 # Native LSC import: implementation and validation
 
 Native import uses `src/pygcgc/core/io/markes_lsc.py`; forensic evidence remains in
-`real_data/NATIVE_LSC_REPORT.md`. Original instrument files have not been changed.
+`docs/validation/native-lsc-format.md`. Original instrument files have not been changed.
 
 ## Implemented
 

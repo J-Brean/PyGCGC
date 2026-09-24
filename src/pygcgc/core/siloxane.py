@@ -19,7 +19,7 @@ at all before it's scored; otherwise the score is 0, not a spurious high
 cosine from one or two ions. A blob at or above `score_threshold` is
 flagged as probable siloxane. That threshold is provisional (a reasonable
 guess, not yet chosen from a ROC curve on labelled data, because no real
-or dummy data has been available to build one from); see HANDOVER.md.
+or dummy data has been available to build one from); see ROADMAP.md.
 
 Blob removal (`remove_siloxane_blobs`), the default method
 -----------------------------------------------------------

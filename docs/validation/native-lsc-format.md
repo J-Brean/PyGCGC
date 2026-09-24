@@ -1,7 +1,10 @@
+> Describes the earlier acquisition (10 s modulation, 2025-10-09) that is no longer in
+> real_data/. The current runs are covered by [audit-2026-09-24.md](audit-2026-09-24.md).
+
 # Native Markes LSC investigation and PyGCGC integration proposal
 
 > Implementation update: native import is now registered in `core/io/markes_lsc.py`
-> and connected to GUI/CLI/batch loading. See README.md for usage and HANDOVER.md
+> and connected to GUI/CLI/batch loading. See README.md for usage and docs/history/handover-2026-09-21.md
 > for the current state. This report retains the original investigation/proposal
 > below; its statements that the app was not yet changed describe that earlier stage.
 > Production times use the whole acquisition-clock second as a shared channel

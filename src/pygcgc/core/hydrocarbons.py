@@ -86,7 +86,7 @@ class HydrocarbonSettings:
     quant_ion: int = 57
     qual_ions: tuple[int, ...] = (71, 85)
     # Expected n-alkane ratios to the quantifier, in the order of `qual_ions`.
-    # Measured on the supplied real acquisition (see `real_data/HYDROCARBON_VALIDATION.md`).
+    # Measured on the supplied real acquisition (see `docs/validation/hydrocarbons-2026-09-20.md`).
     qual_ratios: tuple[float, ...] = (0.66, 0.44)
     qual_tol: float = 0.3             # allowed relative deviation of each ratio
     enforce_qualifiers: bool = True   # reject a candidate whose ratios are outside the tolerance

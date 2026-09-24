@@ -5,13 +5,9 @@ __pycache__/
 dist/
 build/
 
-# raw and generated instrument data
-real_data/*.DAT
-real_data/*.DAX
-real_data/*.HDR
-real_data/*.lsc
-real_data/*.csv
-real_data/blob_diagnosis/
+# instrument data, caches and everything generated from them stay local
+real_data/*
+!real_data/README.md
 
 # autosaved GUI project sidecars (user state)
 project.pygcgc.json

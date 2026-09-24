@@ -50,7 +50,7 @@
 #               Measured on the supplied run: 86% of confident alkylbenzene calls land on 8.
 #
 # Tuning: every number below is a starting point measured on, or checked against, the
-# supplied 70 eV run (see real_data/CLASS_VALIDATION.md). The n-alkane ladder (C12 to
+# supplied 70 eV run (see docs/validation/classes-2026-09-21.md). The n-alkane ladder (C12 to
 # C28) is the only labelled ground truth in that run. Everything else is checked for
 # chromatographic sense (does it sit where that class should?), not against a library.
 
@@ -179,7 +179,7 @@ prefer = ["loss_OCH3: 0.01 -> 0.05", "dt2: 0.5 -> 1.5"]
 [[class]]
 name  = "aromatic oxygenate"
 group = "oxygen"
-note  = "Phenols, cresols, alkylphenols, aryl ethers: a strong even M (or M-15 for alkylphenols) with loss of CO and CHO, few aliphatic fragments. M-29 is also the loss of C2H5 from an alkylbenzene, so a strong tropylium series rules it out. Not validated against a library: see real_data/CLASS_VALIDATION.md."
+note  = "Phenols, cresols, alkylphenols, aryl ethers: a strong even M (or M-15 for alkylphenols) with loss of CO and CHO, few aliphatic fragments. M-29 is also the loss of C2H5 from an alkylbenzene, so a strong tropylium series rules it out. Not validated against a library: see docs/validation/classes-2026-09-21.md."
 need   = ["M_rel: 0.3 -> 0.7", "M_odd <= 0", "M_mass: 92 -> 95", "loss_CHO: 0.05 -> 0.15", "alkyl: 0.20 -> 0.08", "tropylium: 0.30 -> 0.15"]
 prefer = ["loss_CO: 0.10 -> 0.30", "dt2: 1.0 -> 2.5"]
 

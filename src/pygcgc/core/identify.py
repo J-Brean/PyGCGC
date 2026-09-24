@@ -49,7 +49,7 @@ NIST licence in hand, and no dummy pack in this environment either
 (`tests/test_identify.py` has one test marked `@pytest.mark.dummy`,
 against the dummy pack's own `synthetic_library.msp`, ready for when
 either turns up). Everything else here is tested against small,
-hand-built synthetic libraries with a known right answer. See HANDOVER.md.
+hand-built synthetic libraries with a known right answer. See ROADMAP.md.
 """
 
 from __future__ import annotations
@@ -167,7 +167,7 @@ def load_msp(path, is_decoy: bool = False) -> list:
 
     Real exports vary more than this handles (quoted per-peak comments,
     unusual encodings); nothing here has been checked against a real
-    NIST or MoNA export yet -- see HANDOVER.md.
+    NIST or MoNA export yet -- see ROADMAP.md.
     """
     entries: list = []
     name = ri = formula = cas = None

@@ -2,10 +2,10 @@
 
 Code layout, rules, conventions, design decisions and gotchas.
 
-**Section numbers.** These sections keep the numbering they had in the old HANDOVER.md
-(5, 6, 7, 8), because many cross-references in the text and the changelog use it. Where a
-section reads "section 4", "section 9" or "section 10", see [HANDOVER.md](../HANDOVER.md),
-[milestone-specs.md](milestone-specs.md) and HANDOVER.md respectively.
+**Section numbers.** Sections 5 to 8 keep the numbers they had in the old single-file
+handover, because the changelog and older reports cite them. "Section 4" and "section 10"
+refer to [the old handover](history/handover-2026-09-21.md) (first job with real data;
+questions answered by James), "section 9" to [the milestone specs](history/milestone-specs.md).
 
 ## Code layout
 
@@ -15,63 +15,62 @@ src/pygcgc/
     run.py              Run: times, m/z axis, sparse data, TIC, XICs, spectra
     io/andi.py          ANDI reader and writer, cropping
     io/markes_lsc.py    native Markes FT04/SD04 .lsc reader (no DAT or CDF conversion)
-    io/__init__.py      reader registry, threaded read_many
+    io/__init__.py      reader registry, acquisition-aware discovery, read_many
     timing.py           scan timing check and gap filling
     fold.py             FoldSpec, Fold, images, cube, extended view
     circstats.py        circular mean, spread, difference, median
-    phase.py            anchors, void method, sequence phase
-    period.py           period and phase fit from anchors or clicked points
+    phase.py            anchors, bleed and void methods, sequence phase
+    period.py           period from the signal's periodicity; period and phase from anchors or clicked points
     background.py       despiking, arPLS, pattern removal, blank subtraction, noise map
     ionexpr.py          ion expressions
     pixelspec.py        spectrum at a clicked pixel, baseline-subtracted
-    solvent.py          solvent-front handling
-    peaks.py            TIC blobs (ion-summed S/N, co-elution flag, editing) and quantifier-ion peaks, wrap-aware
-    candidates.py       MS-aware per-ion candidates and analysis regions (alternative to blob borders)
-    components.py       durable overlapping component and group objects
-    overlap.py          ✂️ unique-ion map, geometric splits, peak-shape fit, MCR-ALS, cross-run PARAFAC
-    siloxane.py         🫧 flagging (score) and per-pixel NNLS-style removal
+    solvent.py          solvent-front detection
+    peaks.py            legacy TIC blobs (ion-summed S/N, co-elution flag, editing) and quantifier-ion peaks, wrap-aware
+    candidates.py       MS-aware per-ion candidates and calculation windows
+    modelselect.py      how many peaks a calculation window holds (grow, BIC, spectra, held-out gain)
+    components.py       durable overlapping components and groups; automatic detection across a run
+    peaktable.py        fitted components re-solved on every ion, as a BlobSet-shaped table; signal accounting
+    overlap.py          ✂️ unique-ion map, geometric splits, peak-shape fits, MCR-ALS, cross-run PARAFAC
+    synthetic.py        planted known-answer peaks for the benchmarks
+    siloxane.py         🫧 blob scoring and blocking, and the per-pixel fit
     calibration.py      weighted calibration fits, Mandel's test, LOD/LOQ, inverse prediction
-    quant.py            targets across a sequence, calibration sets and bracketing, all-signal ratios, IS table
-    targets.py          target table loading
+    quant.py            targets across a sequence, learned positions and qualifier ratios, bracketing, all signals, IS table
+    targets.py          target table and calibration levels
+    istd.py             🏷️ internal-standard library, click-labelled references, cross-run matching, to target rows
     align.py            anchor fitting (shift/affine/smooth), cross-validation, propagation, resampling
-    hydrocarbons.py     ⛓️ n-alkane ladder, homologous series, group-type stencils
+    hydrocarbons.py     ⛓️ n-alkane ladder, homologous series, group-type stencils, markers
     identify.py         🏷️ MSP import/export, weighted dot-product search, target-decoy confidence
     chemclass.py        🧬 compound classes from blob spectra: TOML rules, fuzzy criteria, 14 eV soft features
+    cluster.py          🧩 PeakTable, spectral tree and density clustering, cross-run tables, PQN, PERMANOVA
+    segment.py          🧩 pixel regions: truncated SVD and k-means on every bright scan, no peak detection
     batch.py            🗂️ cached process-pool pipeline, feature table, QC, PCA, volcano
-    cluster.py          🧩 PeakTable (any detector's peaks), spectral tree and density clustering, cross-run cluster tables, PQN, PERMANOVA, merge, stability and distance scan
-    segment.py          🧩 pixel regions: truncated SVD and k-means on every bright scan's spectrum, no peak detection
-    report.py           📤 provenance, Excel/HTML/PDF reports, publication figures (including the cluster-coloured chromatogram)
+    report.py           📤 provenance, Excel/HTML/PDF reports, publication figures
+  presets/              chemical_classes.toml (🧬 rules), istd_library.json (🏷️ defaults)
   gui/
     app.py              start-up
-    mainwindow.py       window, docks, toolbars, shortcuts, wiring
+    mainwindow.py       window, toolbars, menus, shortcuts and the handlers for every step
     workflow.py         left-hand workflow panel: open step's settings, Go, next-step banner
-    project.py          runs, sequence, targets, phases, layers, save/open
+    project.py          runs, sequence, targets, phases, layers, autosave, save/open
     render.py           background image building, cache, preloading
     jobs.py             thread-pool jobs with progress and cancel; Jobs panel
     commands.py         undoable edits
-    quantstate.py       🧪 state, background measuring, decisions
-    align_state.py      📍 reference, anchors, transforms, batch search
-    blob_state.py       🔍 per-run blobs, background job, hand-edit log
-    hydrocarbon_state.py ⛓️ per-run alkane series, stencil frame
-    cluster_state.py    🧩 settings, the latest peak or region result, groups, names; clustering as a job
-    (also in gui/) views/image2d.py has a second RGBA layer for the cluster colours; panels/clusters.py is the 🧩 panel
-    class_state.py      🧬 per-run class results, rule file, 14 eV partner lookup, classify job
-    overlap_dialog.py   ✂️ pick a blob, 3D surface, unique-ion map/split, peak-shape fit, MCR-ALS
-    identify_dialog.py  🏷️ load a library, search blobs, promote to target, add to in-house library
+    quantstate.py       🧪 state; align_state.py 📍; blob_state.py 🔍; hydrocarbon_state.py ⛓️;
+    class_state.py      🧬; cluster_state.py 🧩; istd_state.py 🏷️ internal standards
+    overlap_dialog.py   ✂️ pick a group or blob, 3D surface, splits, fits, MCR-ALS
+    identify_dialog.py  🏷️ load a library, search, promote to target, library browser
     batch_dialog.py     🗂️ folder pipeline dialog: run, feature table, QC, PCA, volcano, 📤 export
-    dialogs.py          🧪 settings dialog
-    theme.py            dark and light themes
-    constants.py        small constants shared across GUI modules
-    views/              image2d (2D), trace1d (1D), spectrum, review (🧪 gallery), compare (📍), surface3d (✂️), results_colours
-    panels/             run list, fold, layers, background, calibration, results, align, blobs, siloxane, hydrocarbons, classes
+    dialogs.py          🧪 settings dialog and the generic SettingsDialog for any settings dataclass
+    theme.py, constants.py
+    views/              image2d (2D), trace1d (1D), spectrum, review (🧪 gallery), compare (📍), surface3d (✂️)
+    panels/             one panel per step (runs, fold and layers in __init__.py)
   cli.py                command line
 tests/                  pytest suite
+benchmarks/             method benchmarks and real-data checks (see benchmarks/README.md)
 examples/tutorials/     top-to-bottom walkthroughs on the dummy data pack
-examples/                benchmark, diagnosis and real-data validation scripts
-docs/                    guides, design plans, validation write-ups, screenshots
-real_data/              native-format and hydrocarbon validation reports (raw files are git-ignored)
-packaging/              PyInstaller spec and entry point (not yet built)
-HANDOVER.md, ROADMAP.md, CHANGELOG.md   see the documentation map in README.md
+docs/                   user guide, this file, validation/ reports, history/ (superseded plans and handovers)
+real_data/              local instrument files and generated outputs; git-ignored
+packaging/              PyInstaller spec and entry point (never built)
+CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
 ```
 
 ## 5. Architecture and rules
@@ -110,11 +109,11 @@ HANDOVER.md, ROADMAP.md, CHANGELOG.md   see the documentation map in README.md
 - **Figures** are for publication: Nature/Science style, compact, no wider than 8 inches, clear axes, no giant legends.
 - **UI style:** an occasional emoji on main buttons (🔄 🧹 🫧 📍 🔍 ✂️ 🧪 🏷️ ⛓️ 🗂️ 📤 ⚙️), a light Financial Times palette by default (`theme.LIGHT`: salmon paper `#FFF1E5`, text `#33302E`, claret highlight `#990F3D`; `theme.DARK` is one toggle away, and `apply_theme` also recolours pyqtgraph axes), and the turbo colour map for the 2D chromatogram view (`DEFAULT_CMAP` in `gui/views/image2d.py`; the colour key is the custom `ColourKey` item pinned top-right over the image, double-click for exact limits; it replaced pyqtgraph's `HistogramLUTItem`). Compare, Review, 3D and exported figures still use magma.
 - **Communication:** James likes concise, direct answers and wants incorrect premises called out. When a request needs code, clarify scope briefly before building.
-- **Honesty about limits:** when a method can't do something reliably, say so and drop or flag it. The data-only period estimator was removed for that reason (section 7).
+- **Honesty about limits:** when a method can't do something reliably, say so and drop or flag it. An earlier data-only period estimator was removed for that reason; its replacement reports its own confidence and drift (section 7).
 
 ## 7. Decisions worth knowing (and why)
 
-- **No period estimate from the chromatogram alone.** Adjacent-column similarity was far too flat to locate the period, and block-drift tracking was off by several ms on sparse runs. More fundamentally, a genuine t₂ drift is indistinguishable from a period error. The period comes from the method; anchors check it (`period_from_anchors`, with a standard error and a significance flag).
+- **The period is estimated from the signal's periodicity, never from tracking peaks.** A genuine t₂ drift is indistinguishable from a period error for any single compound, so the first estimator (adjacent-column similarity and block drift) was removed. `estimate_period` instead finds the frequency at which the whole stream repeats (bleed and hump locked to the modulator dominate), reports a confidence and the drift its standard error implies over the run, and never overrides a period from `method.json` or the user. Anchors (`period_from_anchors`) remain the check. On the four September 2026 runs it returned 8.0000 s, the method's value, with 1 to 2 ms standard error.
 - **Phase on shifted samples absorbs the run-wide t₂ shift.** That's intended: it aligns runs to expected positions. The dummy calibration runs recover the true phase to within 20 ms; samples to within 50 ms.
 - **Void-method phase is a display cut only.** It finds a cut that splits no peaks, but it can't tell where the modulator cycle truly starts. It is used only when no run in the sequence has usable anchors; otherwise such runs borrow the circular median phase of the others.
 - **Background percentile bias correction.** A low percentile sits below the middle of the noise. The code measures the noise spread from the gap between the p-th and (p/4)-th percentiles and raises the estimate by the Gaussian offset, and does the same for the stripe pattern. Without this, cleaned bleed ions sat about 4 counts above zero.
@@ -133,7 +132,7 @@ HANDOVER.md, ROADMAP.md, CHANGELOG.md   see the documentation map in README.md
 - **Two response kinds per target.** The quantifier-ion ratio quantifies the target. The whole-peak (TIC) ratio, fitted too, is what stands in for nearby unknowns, because an unknown has no quantifier ion of its own.
 - **"Nearest" is a scaled 2D distance** (60 s of t₁ = 0.5 s of t₂). The target table's `istd` column overrides it for targets. James asked for every signal to be reported relative to the nearest internal standard; that is the All signals table (`ratio`). Confirmed again independently (section 10, Q2, 2026-09-19): with many internal standards in real sequences and which ones apply varying by sample, James wants the normalised-distance nearest-IS rule as the *default* everywhere, not just for the All signals table. Worth revisiting whether `target_table.csv`'s `istd` column should itself default to the nearest IS automatically rather than needing a person to hand-assign one per target, now that real sequences are expected to carry more internal standards than the dummy data's placeholder set.
 - **Semi-quant amounts are labelled and capped.** Only within `surrogate_max_distance` (3 units) of a calibrated target, reported "as" that target, in their own table. They were requested as "apply the calibration to nearby peaks"; the assumption that neighbours respond alike is stated in the README.
-- **Calibration sets come from an explicit `cal_set` column.** A sample uses its own set, otherwise the most recent set above it in the sequence. Bracketing interpolation for drift was discussed but not built.
+- **Calibration sets come from an explicit `cal_set` column.** A sample with its own set uses it. Otherwise, with interpolation on (the default), it is read against the two sets bracketing it in run order and the two amounts are blended by position (`bracket_cal_sets`, `blended_amount`); before the first set or after the last it uses the nearest one and is flagged as extrapolated.
 - **TIC blob footprints are trimmed to 1% of their own apex** (`blob_rel_floor`). Without this, footprints in the UCM hump spread over hundreds of noise pixels and volumes were inflated.
 - **The noise floor comes from the raw file** (its storage threshold). Computing it from a cleaned run gave a floor near zero, because cleaning leaves tiny positive values.
 - **R² is shown but never used for decisions**; weights are chosen by relative error, curvature by Mandel's test.

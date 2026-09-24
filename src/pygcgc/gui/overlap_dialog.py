@@ -174,7 +174,7 @@ class OverlapDialog(QtWidgets.QDialog):
         self.model_combo.setToolTip("gaussian: axis-aligned. emg: tail along t1. emg_t2: tail along t2. "
                                     "emg2: both. tilt: t2 apex drifts with t1. cell: t1 profile integrated "
                                     "over each modulation (peaks narrower than a column). See "
-                                    "real_data/HYDROCARBON_VALIDATION.md: on real alkane peaks the gain "
+                                    "docs/validation/hydrocarbons-2026-09-20.md: on real alkane peaks the gain "
                                     "over gaussian was at most a few per cent.")
         self.auto_k = QtWidgets.QCheckBox("Choose k automatically (BIC)")
         self.auto_k.setChecked(True)

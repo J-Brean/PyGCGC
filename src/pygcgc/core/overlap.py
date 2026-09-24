@@ -66,8 +66,8 @@ cost of more assumptions:
 The candidate-region path has now been exercised on one crowded real region,
 but without known chemical truth. Synthetic and software-copy recovery tests
 provide known numerical answers; identified co-eluting standards are still
-needed for chemical validation. See HANDOVER.md and
-docs/BLOB_DIAGNOSIS_AND_PLAN.md.
+needed for chemical validation. See ROADMAP.md and
+docs/history/blob-diagnosis-and-plan.md.
 """
 
 from __future__ import annotations

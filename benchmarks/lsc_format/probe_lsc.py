@@ -4,7 +4,7 @@ import mmap
 import struct
 import numpy as np
 
-for path in sorted(Path(__file__).parent.glob('*.lsc')):
+for path in sorted((Path(__file__).resolve().parents[2] / 'real_data').glob('*.lsc')):
     with path.open('rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as b:
         directory = struct.unpack_from('<Q', b, 8)[0]
         print('\nFILE', path.name, 'directory', directory, b[directory:directory+48].hex(' '))

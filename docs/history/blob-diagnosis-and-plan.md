@@ -1,4 +1,9 @@
-﻿# Real-data blob diagnosis and development plan
+> **Historical document.** Kept for reference; superseded by the README, ROADMAP.md and
+> docs/architecture.md. File paths and numbers describe the project when it was written
+> (scripts have since moved from examples/ to benchmarks/, and the 10 s acquisition it refers
+> to has left real_data/).
+
+# Real-data blob diagnosis and development plan
 
 20 September 2026. This is a measured baseline and proposed development sequence.
 The new route is now a first-class, saved choice in the main Peak detection step;
@@ -109,7 +114,7 @@ feed siloxane handling, batch matching or production quantification.
 
 ## Reproduction and scope
 
-Read HANDOVER.md and README.md, traced the detector, background, overlap and
+Read docs/history/handover-2026-09-21.md and README.md, traced the detector, background, overlap and
 GUI/batch/quantification callers, and ran six controlled detector variants on
 the supplied untreated 70 eV acquisition. The folder contains one acquisition
 with untreated 70 eV, 14 eV and vendor DBC channels. This audit uses untreated
@@ -125,7 +130,7 @@ with untreated 70 eV, 14 eV and vendor DBC channels. This audit uses untreated
 - Crop folding uses t0 = original t0 + 600 s, an integer number of periods.
   Resetting phase relative to an arbitrary crop's first scan would move the data.
 
-Run `python examples/diagnose_real_blobs.py` in the project environment.
+Run `python benchmarks/diagnose_real_blobs.py` in the project environment.
 The first run imports the source; subsequent runs reuse the sparse crop.
 All derived real-data files are under `real_data/blob_diagnosis/`:
 

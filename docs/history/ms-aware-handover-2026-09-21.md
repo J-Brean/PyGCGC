@@ -1,3 +1,8 @@
+> **Historical document.** Kept for reference; superseded by the README, ROADMAP.md and
+> docs/architecture.md. File paths and numbers describe the project when it was written
+> (scripts have since moved from examples/ to benchmarks/, and the 10 s acquisition it refers
+> to has left real_data/).
+
 # Claude Code handover: MS-aware overlapping blob finder
 
 Date: 21 September 2026
@@ -18,8 +23,8 @@ state/panels, presets, and related tests) that is outside this handover.
 Read these files before changing the algorithm:
 
 1. `README.md`
-2. `HANDOVER.md`
-3. `docs/BLOB_DIAGNOSIS_AND_PLAN.md`
+2. `docs/history/handover-2026-09-21.md`
+3. `docs/history/blob-diagnosis-and-plan.md`
 4. `src/pygcgc/core/candidates.py`
 5. `src/pygcgc/core/components.py`
 6. `src/pygcgc/core/overlap.py`
@@ -105,7 +110,7 @@ Measured with the previous default configuration:
 The implementation uses a bounded `ProcessPoolExecutor` queue; it must not
 build dense cubes for all 1,277 windows at once. Four workers are the default.
 Eight workers measured only about two seconds faster in fitting, at more memory
-cost. See `examples/benchmark_full_components.py`.
+cost. See `benchmarks/benchmark_full_components.py`.
 
 ## Critical mismatch with the user's expectation
 
@@ -152,7 +157,7 @@ common m/z axis) are removed, peaks cut by a window edge are dropped when anothe
 window covers them (`edge_policy`), and interacting neighbouring windows are refitted
 jointly. `model_selection="seeds"` restores the old behaviour for comparison.
 
-**Benchmark** (`examples/benchmark_blob_finder.py`, `core/synthetic.py`). Peaks
+**Benchmark** (`benchmarks/benchmark_blob_finder.py`, `core/synthetic.py`). Peaks
 with real spectra are planted at scan level into the cleaned real segment, at
 candidate-free sites, and the whole pipeline runs with no positions supplied.
 Tuning (seeds 101 to 110, even-indexed spectra) and held-out (seeds 901 to 910,
@@ -222,7 +227,7 @@ Spectral cosine of matched components is about 1.00. Peak recall for 1:0.1 is 0.
   faintest pixels hold under 2% of the signal; most unexplained signal sits at 1e4 to 1e6
   per pixel, largely as a broad unresolved hump plus peak-like leftovers (the report
   separates the two).
-- **Sensitivity** (`examples/benchmark_sensitivity.py`, weak planted singles). Detection
+- **Sensitivity** (`benchmarks/benchmark_sensitivity.py`, weak planted singles). Detection
   rate by apex TIC, default vs `tic_prominence_snr=1`: 2e4 to 4e4: 0.23 vs 0.35;
   4e4 to 1e5: 0.50 vs 0.81; 1e5 to 3e5: 0.95 vs 1.00. `seed_snr` has no effect. The price:
   87 to 152 components in the segment and 0 to 7 in the reviewed background band.
@@ -234,7 +239,7 @@ There is no labelled real standard file yet. Do not claim the method is
 accurate or send component amounts to production quantification.
 
 The best available known-area test is
-`examples/benchmark_injection_recovery.py`. It injects ideal Gaussian profiles
+`benchmarks/benchmark_injection_recovery.py`. It injects ideal Gaussian profiles
 with two real spectral factors into real local background. With the previous
 fast shared-width method, both areas were within 10% in **5 of 9** cases. Every
 case where the smaller peak was 10% of the larger failed. This is useful as a
@@ -357,13 +362,13 @@ At minimum, rerun the entire suite after deciding what to retain:
 
 ```powershell
 # full real-file timing; writes ignored JSON under real_data/blob_diagnosis
-& C:/Users/BreanJ/venvs/main/Scripts/python.exe examples/benchmark_full_components.py --workers 4
+& C:/Users/BreanJ/venvs/main/Scripts/python.exe benchmarks/benchmark_full_components.py --workers 4
 
 # cached ten-minute automatic benchmark
-& C:/Users/BreanJ/venvs/main/Scripts/python.exe examples/benchmark_automatic_components.py --all-regions
+& C:/Users/BreanJ/venvs/main/Scripts/python.exe benchmarks/benchmark_automatic_components.py --all-regions
 
 # known-area injection regression
-& C:/Users/BreanJ/venvs/main/Scripts/python.exe examples/benchmark_injection_recovery.py --fast-only
+& C:/Users/BreanJ/venvs/main/Scripts/python.exe benchmarks/benchmark_injection_recovery.py --fast-only
 
 # launch the application
 & C:/Users/BreanJ/venvs/main/Scripts/pygcgc-gui.exe

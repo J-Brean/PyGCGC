@@ -55,7 +55,7 @@ def unit_rows(values):
 # real chromatographic shape.  C17 is deliberately avoided because it co-elutes
 # with pristane in this sample.  Loading the existing full-run cache takes a few
 # seconds; without it the native file is decoded once and cached in the system
-# temporary directory, matching examples/validate_real_data.py.
+# temporary directory, matching benchmarks/validate_real_data.py.
 cache = Path(tempfile.gettempdir()) / "pygcgc_real70.npz"
 if cache.exists():
     full_z = np.load(cache)

@@ -2,10 +2,10 @@
 diagnostic-pair and phenanthrene/anthracene defaults.
 
 Reads the untreated 70 eV native file in real_data/ (period 10 s, phase 1.81 s, as
-supplied), prints every number quoted in real_data/HYDROCARBON_VALIDATION.md and
+supplied), prints every number quoted in docs/validation/hydrocarbons-2026-09-20.md and
 changes no production setting. The first run decodes the 446 MB file (a few
 minutes); the sparse matrix is cached in the system temp folder afterwards.
-Run with the project's Python environment: python examples/validate_real_data.py
+Run with the project's Python environment: python benchmarks/validate_real_data.py
 """
 import tempfile
 from pathlib import Path

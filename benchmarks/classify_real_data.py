@@ -1,10 +1,10 @@
 """Compound-class assignment on the real 70 eV run: reproduces every number in
-real_data/CLASS_VALIDATION.md and writes real_data/class_map.png (+ .txt caption).
+docs/validation/classes-2026-09-21.md and writes real_data/class_map.png (+ .txt caption).
 
 Uses the same cached decode of the native file as validate_real_data.py (the
 first run of that script creates it). Blob detection and the alkane ladder take
 about a minute. Run with the project's Python environment:
-    python examples/classify_real_data.py
+    python benchmarks/classify_real_data.py
 """
 import tempfile
 from pathlib import Path
@@ -28,7 +28,7 @@ SOLVENT_FRONT_END_MIN = 11.0        # the second solvent-front streak is at 10.4
 root = Path(__file__).resolve().parents[1] / "real_data"
 cache = Path(tempfile.gettempdir()) / "pygcgc_real70.npz"
 if not cache.exists():
-    raise SystemExit("Run examples/validate_real_data.py first: it decodes the native file and caches it.")
+    raise SystemExit("Run benchmarks/validate_real_data.py first: it decodes the native file and caches it.")
 
 z = np.load(cache)
 run = Run(z["times"], z["mz"], sparse.csr_matrix((z["values"], z["indices"], z["indptr"]), shape=tuple(z["shape"])), "real70")

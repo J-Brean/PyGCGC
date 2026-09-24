@@ -1,8 +1,11 @@
+> Describes the earlier acquisition (10 s modulation, 2025-10-09) that is no longer in
+> real_data/. The current runs are covered by [audit-2026-09-24.md](audit-2026-09-24.md).
+
 # Real-data checks: siloxane reference, alkane ladder, markers, diagnostic pairs, phenanthrene/anthracene
 
 20 September 2026. Untreated 70 eV native file, modulation period 10 s, phase 1.81 s, 215,015 scans,
 m/z 38 to 300, 72 minutes. Every number below is printed by
-`examples/validate_real_data.py`. No data were committed or uploaded, and no threshold outside
+`benchmarks/validate_real_data.py`. No data were committed or uploaded, and no threshold outside
 `SiloxaneSettings`, `HydrocarbonSettings` and the marker offsets was changed.
 
 ## Siloxane reference spectrum
@@ -72,7 +75,7 @@ requires a consistent t2 offset from the alkane line.
 | (58, 59) | 1 | none |
 
 None of the four spec pairs is validated. The result is a property of this sample and of blob detection on it (4068 blobs,
-with the solvent-front streaks and background fragmentation described in `docs/BLOB_DIAGNOSIS_AND_PLAN.md`), not proof that the
+with the solvent-front streaks and background fragmentation described in `docs/history/blob-diagnosis-and-plan.md`), not proof that the
 series are absent. 142/156 would not be a one-carbon series in any case: methylnaphthalene to dimethylnaphthalene adds
 about 1.3 C.
 

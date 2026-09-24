@@ -1,4 +1,9 @@
-﻿# MS-aware overlapping peak detection: full implementation plan
+> **Historical document.** Kept for reference; superseded by the README, ROADMAP.md and
+> docs/architecture.md. File paths and numbers describe the project when it was written
+> (scripts have since moved from examples/ to benchmarks/, and the 10 s acquisition it refers
+> to has left real_data/).
+
+# MS-aware overlapping peak detection: full implementation plan
 
 20 September 2026.
 

@@ -1,7 +1,7 @@
 """Reproducible, read-only investigation of this FT04/SD04 LSC variant.
 
-Run: python real_data/audit_lsc.py
-Writes derived JSON/CSV/PNG beside this script; never changes input binaries.
+Run: python benchmarks/lsc_format/audit_lsc.py (reads and writes in real_data/)
+Writes derived JSON/CSV/PNG into real_data/; never changes input binaries.
 This is an investigative decoder, not a registered PyGCGC reader.
 """
 from pathlib import Path
@@ -102,7 +102,7 @@ def inspect(path):
         return result, times, ticks, tic, eics
 
 def main():
-    folder = Path(__file__).parent
+    folder = (Path(__file__).resolve().parents[2] / 'real_data')
     results, arrays = [], {}
     for path in sorted(folder.glob('*.lsc')):
         result, times, ticks, tic, eics = inspect(path)

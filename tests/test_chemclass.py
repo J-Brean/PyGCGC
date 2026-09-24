@@ -3,7 +3,7 @@
 The reference spectra are typed from the familiar EI patterns of one
 representative compound per class (approximate, not library-exact). They test
 that each shipped class can fire on what it is meant to describe, not that
-its thresholds are right for any real sample; see real_data/CLASS_VALIDATION.md
+its thresholds are right for any real sample; see docs/validation/classes-2026-09-21.md
 for that.
 """
 
