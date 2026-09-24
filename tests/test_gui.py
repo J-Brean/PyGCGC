@@ -439,6 +439,7 @@ def test_siloxane_flags_shown_in_blobs_panel(qtbot, window):
 def test_blob_siloxane_removal_blocks_blobs_keeps_them_findable_and_undoes(qtbot, window):
     w = window
     w.sil_panel.threshold.setValue(0)             # certainty >= 0%: every blob counts as siloxane
+    w.sil_panel.block_all.setChecked(True)        # the synthetic runs carry no siloxane ions to block
     assert w.project.siloxane_settings.score_threshold == 0.0
     assert w.project.siloxane_settings.method == "blobs"
     n_before = w.undo.count()

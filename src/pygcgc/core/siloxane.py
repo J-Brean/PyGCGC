@@ -10,23 +10,32 @@ Flagging (`siloxane_score`, `flag_siloxane_blobs`)
 ---------------------------------------------------
 Every TIC blob's summed spectrum (`core/peaks.BlobSet.spectra`) is scored:
 the fraction of its volume sitting on the siloxane ions, times its cosine
-similarity to the reference pattern. The default reference is the column
-bleed measured in the supplied real acquisition (`BLEED_REFERENCE`); it can
-be replaced with a preset, edited, or taken from any peak clicked in the 2D
-view (`reference_from_spectrum`).
-A blob needs at least `min_ions_present` of those ions to show any signal
-at all before it's scored; otherwise the score is 0, not a spurious high
-cosine from one or two ions. A blob at or above `score_threshold` is
-flagged as probable siloxane. That threshold is provisional (a reasonable
-guess, not yet chosen from a ROC curve on labelled data, because no real
-or dummy data has been available to build one from); see ROADMAP.md.
+similarity to the reference pattern. Column bleed and discrete cyclic
+siloxane peaks fragment differently (bleed is dominated by m/z 207, a Dn
+peak by 73 and 281), so a blob is scored against two references, the
+measured column bleed (`BLEED_REFERENCE`) and a measured cyclic siloxane
+peak (`CYCLIC_REFERENCE`), and keeps the larger score. On the September
+2026 runs either reference alone missed most peaks of the other kind; the
+pair at a threshold of 0.15 caught 38 of 38 and 21 of 21 siloxane-like
+blobs on two runs and flagged no clearly non-siloxane one
+(docs/validation/audit-2026-09-24.md). Either reference can be replaced
+with a preset, edited, or taken from a peak clicked in the 2D view
+(`reference_from_spectrum`); the second can be switched off.
+A blob needs at least `min_ions_present` of a reference's ions to show any
+signal before it is scored against it; otherwise that score is 0, not a
+spurious high cosine from one or two ions. A blob at or above
+`score_threshold` is flagged as probable siloxane.
 
 Blob removal (`remove_siloxane_blobs`), the default method
 -----------------------------------------------------------
 Every blob is scored as above, and every blob at or above the threshold
 (the "% certainty" slider in the 🫧 panel) is blocked out: each scan that
-falls inside its footprint is set to zero, on every ion (or only on the
-siloxane ions, if `block_all_ions` is off). Nothing is fitted. A blob is
+falls inside its footprint is set to zero on the siloxane ions of both
+references (or on every ion, with `block_all_ions`). Nothing is fitted.
+Only the siloxane ions by default, because a detected blob usually holds
+more than siloxane: legacy footprints cover most of a busy run, and
+blocking every ion of the flagged blobs removed 4.5% of all m/z 57 signal
+on one run. A blob is
 either siloxane or it is not, and the threshold decides which. Because the
 blobs are the ones the 🔍 detector already found, deleting a blob in the
 🔍 panel keeps it out of the removal, and the outlines drawn in the 2D view
@@ -36,7 +45,8 @@ so it is undoable and nothing in the raw data changes.
 Pixel removal (`remove_siloxanes`), the older method
 -----------------------------------------------------
 Independent of flagging, every pixel of every siloxane ion's image is fit
-against the same reference pattern by non-negative least squares. With a
+against the first reference pattern by non-negative least squares (the
+second reference is not used here). With a
 single reference (one generic siloxane profile, not one per homologue),
 that reduces to a closed-form clipped projection:
 
@@ -131,11 +141,14 @@ def reference_from_spectrum(spectrum: np.ndarray, mz: np.ndarray, min_rel: float
 class SiloxaneSettings:
     ions: tuple[int, ...] = SILOXANE_IONS
     reference: tuple[float, ...] = tuple(SILOXANE_REFERENCE[m] for m in SILOXANE_IONS)
-    score_threshold: float = 0.3     # provisional; see the module docstring
-    min_ions_present: int = 3        # a blob or pixel needs at least this many siloxane ions with signal
+    # A second reference scored alongside the first; a blob keeps the larger score. Empty to switch off.
+    second_ions: tuple[int, ...] = tuple(sorted(CYCLIC_REFERENCE))
+    second_reference: tuple[float, ...] = tuple(CYCLIC_REFERENCE[m] for m in sorted(CYCLIC_REFERENCE))
+    score_threshold: float = 0.15    # chosen on the September 2026 runs; see the module docstring
+    min_ions_present: int = 3        # a blob or pixel needs at least this many of a reference's ions with signal
     min_fit_cosine: float = 0.8      # ...and its own ion ratios need to resemble the reference this closely (pixel method only)
     method: str = "blobs"            # "blobs": block out every blob scoring >= score_threshold; "pixels": per-pixel fit
-    block_all_ions: bool = True      # blobs method: zero every ion in the footprint, not only the siloxane ions
+    block_all_ions: bool = False     # blobs method: zero every ion in the footprint, not only the siloxane ions
 
     @classmethod
     def from_reference(cls, reference: dict[int, float], **kw) -> "SiloxaneSettings":
@@ -148,37 +161,56 @@ class SiloxaneSettings:
     def reference_dict(self) -> dict[int, float]:
         return {int(m): float(r) for m, r in zip(self.ions, self.reference)}
 
+    def second_dict(self) -> dict[int, float]:
+        return {int(m): float(r) for m, r in zip(self.second_ions, self.second_reference)}
+
+    def with_second(self, reference: dict[int, float] | None) -> "SiloxaneSettings":
+        """The same settings with another second reference (None or empty switches it off)."""
+        from dataclasses import replace
+        ions = tuple(sorted(int(m) for m in (reference or {})))
+        return replace(self, second_ions=ions, second_reference=tuple(float(reference[m]) for m in ions))
+
+    def all_ions(self) -> tuple[int, ...]:
+        """Every ion of either reference: what blob blocking removes."""
+        return tuple(sorted(set(self.ions) | set(self.second_ions)))
+
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "SiloxaneSettings":
         d = {k: v for k, v in (d or {}).items() if k in cls.__dataclass_fields__}
-        if "ions" in d:
-            d["ions"] = tuple(d["ions"])
-        if "reference" in d:
-            d["reference"] = tuple(d["reference"])
+        for key in ("ions", "reference", "second_ions", "second_reference"):
+            if key in d:
+                d[key] = tuple(d[key])
         return cls(**d)
 
 
 # ------------------------------------------------------------------ flag
-def siloxane_score(spectrum: np.ndarray, mz0: int, s: SiloxaneSettings = SiloxaneSettings()) -> float:
-    """How much one blob's summed spectrum looks like siloxane: the
-    fraction of its volume on the siloxane ions, times its cosine
-    similarity to the reference pattern. 0 if fewer than `min_ions_present`
-    of them carry any signal."""
-    idx = np.asarray(s.ions, dtype=np.int64) - mz0
+def _score_against(spectrum: np.ndarray, mz0: int, ions, reference, min_ions: int) -> float:
+    idx = np.asarray(ions, dtype=np.int64) - mz0
     in_range = (idx >= 0) & (idx < spectrum.size)
-    vals = np.zeros(len(s.ions))
+    vals = np.zeros(len(ions))
     vals[in_range] = np.clip(spectrum[idx[in_range]], 0, None)
     total = float(np.clip(spectrum, 0, None).sum())
-    if total <= 0 or int((vals > 0).sum()) < s.min_ions_present:
+    if total <= 0 or int((vals > 0).sum()) < min_ions:
         return 0.0
     frac = float(vals.sum() / total)
-    ref = np.asarray(s.reference, dtype=np.float64)
+    ref = np.asarray(reference, dtype=np.float64)
     denom = float(np.linalg.norm(vals) * np.linalg.norm(ref))
     cosine = float(np.dot(vals, ref) / denom) if denom > 0 else 0.0
     return frac * cosine
+
+
+def siloxane_score(spectrum: np.ndarray, mz0: int, s: SiloxaneSettings = SiloxaneSettings()) -> float:
+    """How much one blob's summed spectrum looks like siloxane: for each
+    reference, the fraction of its volume on that reference's ions times its
+    cosine similarity to the reference pattern (0 if fewer than
+    `min_ions_present` of those ions carry any signal); the larger of the two."""
+    score = _score_against(spectrum, mz0, s.ions, s.reference, s.min_ions_present)
+    if s.second_ions:
+        score = max(score, _score_against(spectrum, mz0, s.second_ions, s.second_reference, s.min_ions_present))
+    return score
 
 
 def siloxane_scores(blobs: BlobSet, s: SiloxaneSettings = SiloxaneSettings()) -> np.ndarray:
@@ -275,7 +307,7 @@ def remove_siloxane_blobs(run: Run, fold: Fold, blobs: BlobSet,
     module docstring."""
     s = settings
     total_before = float(run.data.sum())
-    ions_used = tuple(int(m) for m in s.ions if run.mz[0] <= m <= run.mz[-1])
+    ions_used = tuple(int(m) for m in s.all_ions() if run.mz[0] <= m <= run.mz[-1])
     chosen = np.flatnonzero(siloxane_scores(blobs, s) >= s.score_threshold) if len(blobs) else np.array([], int)
     if chosen.size == 0:
         return SiloxaneResult(run=run, total_before=total_before, settings=s, ions_used=ions_used)
@@ -291,7 +323,7 @@ def remove_siloxane_blobs(run: Run, fold: Fold, blobs: BlobSet,
     coo = run.data.tocoo()
     hit = blocked[coo.row]
     if not s.block_all_ions:
-        hit &= np.isin(run.mz[coo.col], np.asarray(s.ions))
+        hit &= np.isin(run.mz[coo.col], np.asarray(s.all_ions()))
     removed = np.bincount(coo.col[hit], weights=coo.data[hit].astype(np.float64), minlength=run.n_mz)
     keep = ~hit
     data = sparse.csr_matrix((coo.data[keep], (coo.row[keep], coo.col[keep])), shape=run.data.shape)

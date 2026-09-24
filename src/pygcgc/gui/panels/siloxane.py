@@ -1,9 +1,11 @@
 """🫧 Siloxane panel.
 
 The reference spectrum that flagging and removal fit against: a preset (the
-column bleed measured in the supplied real run is the default), edited by
-hand in the table, or taken from any peak you click in the 2D view. The bar
-chart shows the reference as it will be used.
+measured column bleed is the default), edited by hand in the table, or taken
+from any peak you click in the 2D view. The bar chart shows the reference as
+it will be used. Blobs are also scored against a second reference (the
+measured cyclic siloxane peak by default) and keep the larger score, because
+bleed and discrete Dn peaks fragment differently.
 """
 
 from __future__ import annotations
@@ -31,6 +33,15 @@ class SiloxanePanel(QtWidgets.QWidget):
         self.preset.setToolTip("Column bleed is the default, measured on the supplied real run. "
                                "Use the cyclic preset for a discrete Dn contaminant peak.")
         self.preset.activated.connect(self._preset_chosen)
+        self.second = QtWidgets.QComboBox()
+        self.second.addItem("None", None)
+        for name in PRESETS:
+            self.second.addItem(name, name)
+        self.second.setToolTip("Blobs are scored against this reference too and keep the larger score. Column "
+                               "bleed and cyclic siloxane peaks look different, so scoring against both catches "
+                               "both kinds. Not used by the per-pixel method.")
+        self.second.activated.connect(self._widgets_edited)
+        self._second_custom: dict[int, float] = {}
 
         self.pick_btn = QtWidgets.QPushButton("🖱 Pick from 2D view")
         self.pick_btn.setCheckable(True)
@@ -78,14 +89,15 @@ class SiloxanePanel(QtWidgets.QWidget):
         self.threshold.setToolTip("A blob's certainty is (share of its volume on these ions) × "
                                   "(cosine similarity to the reference). Blobs at or above the slider "
                                   "are outlined in dashed magenta and are what 🫧 blocks out. Provisional scale.")
-        self.threshold_label = QtWidgets.QLabel("30%")
+        self.threshold_label = QtWidgets.QLabel("15%")
         self.threshold_label.setMinimumWidth(36)
         self.threshold.valueChanged.connect(lambda v: self.threshold_label.setText(f"{v}%"))
         self.blob_count = QtWidgets.QLabel("")
         self.blob_count.setStyleSheet("color: palette(mid);")
         self.block_all = QtWidgets.QCheckBox("Block every ion in the blob")
         self.block_all.setToolTip("On: the whole signal under a siloxane blob is removed. "
-                                  "Off: only the siloxane ions are.")
+                                  "Off (default): only the ions of the two references are, so anything "
+                                  "co-eluting inside the blob survives.")
         self.block_all.toggled.connect(self._widgets_edited)
         self.min_ions = QtWidgets.QSpinBox()
         self.min_ions.setRange(1, 30)
@@ -111,6 +123,10 @@ class SiloxanePanel(QtWidgets.QWidget):
         row = QtWidgets.QHBoxLayout()
         row.addWidget(QtWidgets.QLabel("Reference"))
         row.addWidget(self.preset, 1)
+        lay.addLayout(row)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Also score against"))
+        row.addWidget(self.second, 1)
         lay.addLayout(row)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self.pick_btn)
@@ -141,12 +157,14 @@ class SiloxanePanel(QtWidgets.QWidget):
     def settings(self) -> SiloxaneSettings:
         ref = self._read_table()
         base = SiloxaneSettings.from_reference(ref) if ref else SiloxaneSettings()
+        name = self.second.currentData()
+        second = PRESETS[name] if name in PRESETS else (self._second_custom if name == CUSTOM else None)
         return SiloxaneSettings(ions=base.ions, reference=base.reference,
                                 score_threshold=self.threshold.value() / 100.0,
                                 min_ions_present=self.min_ions.value(),
                                 min_fit_cosine=self.min_cosine.value(),
                                 method=self.method.currentData(),
-                                block_all_ions=self.block_all.isChecked())
+                                block_all_ions=self.block_all.isChecked()).with_second(second)
 
     def subtract_baseline(self) -> bool:
         return self.baseline_box.isChecked()
@@ -173,6 +191,13 @@ class SiloxanePanel(QtWidgets.QWidget):
         self.min_cosine.setValue(s.min_fit_cosine)
         self.method.setCurrentIndex(max(0, self.method.findData(s.method)))
         self.block_all.setChecked(s.block_all_ions)
+        second = s.second_dict()
+        name = next((n for n, ref in PRESETS.items() if ref == second), CUSTOM if second else None)
+        if name == CUSTOM:
+            self._second_custom = second
+            if self.second.findData(CUSTOM) < 0:
+                self.second.addItem(CUSTOM, CUSTOM)
+        self.second.setCurrentIndex(max(0, self.second.findData(name)))
         name = label or next((n for n, ref in PRESETS.items() if ref == s.reference_dict()), CUSTOM)
         self.preset.setCurrentText(name if name in PRESETS or name == CUSTOM else CUSTOM)
         self._draw(s.reference_dict())

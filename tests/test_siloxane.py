@@ -62,7 +62,7 @@ def test_blob_removal_blocks_the_siloxane_blob_and_leaves_the_analyte_alone():
     blobs = find_blobs(clean, f, floor=1.0)
     res = remove_siloxane_blobs(clean, f, blobs)
     assert res.n_blobs == 1
-    # Blocked out on every ion; the footprint stops at 1% of the apex, so a faint edge tail remains.
+    # Blocked out on the siloxane ions; the footprint stops at 1% of the apex, so a faint edge tail remains.
     assert _box(res.run, f, 100.0, 1.5, 207) < 0.01 * _box(clean, f, 100.0, 1.5, 207)
     assert _box(res.run, f, 100.0, 1.5, 73) < 0.01 * _box(clean, f, 100.0, 1.5, 73)
     assert _box(res.run, f, 200.0, 2.0, 73) == pytest.approx(_box(clean, f, 200.0, 2.0, 73))   # analyte untouched
@@ -86,6 +86,30 @@ def test_blob_removal_follows_the_threshold_and_can_keep_the_other_ions():
     res = remove_siloxane_blobs(clean2, f2, blobs2, SiloxaneSettings(block_all_ions=False))
     assert _box(res.run, f2, 100.0, 1.5, 207) < 0.01 * _box(clean2, f2, 100.0, 1.5, 207)
     assert _box(res.run, f2, 100.0, 1.5, 300) == pytest.approx(_box(clean2, f2, 100.0, 1.5, 300))
+
+
+def test_a_cyclic_siloxane_peak_is_caught_by_the_second_reference():
+    # Found on real data: the bleed reference (m/z 207 based) alone missed most discrete cyclic
+    # siloxane peaks (73 and 281 based); scoring against both and keeping the larger catches them.
+    cyclic = [(100.0, 1.5, m, 2000.0 * v) for m, v in CYCLIC_REFERENCE.items()]
+    run = make_run(cyclic + [(100.0, 1.5, 91, 3e4)], phase=0.7, rate=50.0, mz=(73, 429), duration=260.0)
+    f = fold(run, 4.0, 0.7)
+    clean = remove_background(run, f).run
+    blobs = find_blobs(clean, f, floor=1.0)
+    bleed_only = SiloxaneSettings().with_second(None)
+    assert siloxane_scores(blobs, bleed_only).max() < 0.3
+    assert siloxane_scores(blobs).max() > 3 * siloxane_scores(blobs, bleed_only).max()
+    res = remove_siloxane_blobs(clean, f, blobs)                  # defaults: both references, siloxane ions only
+    assert res.n_blobs == 1
+    assert _box(res.run, f, 100.0, 1.5, 281) < 0.01 * _box(clean, f, 100.0, 1.5, 281)
+    assert _box(res.run, f, 100.0, 1.5, 91) == pytest.approx(_box(clean, f, 100.0, 1.5, 91))   # co-eluting analyte kept
+
+
+def test_second_reference_round_trips():
+    s = SiloxaneSettings().with_second(BLEED_REFERENCE)
+    again = SiloxaneSettings.from_dict(s.to_dict())
+    assert again.second_dict() == BLEED_REFERENCE and again == s
+    assert SiloxaneSettings.from_dict({}).second_dict() == CYCLIC_REFERENCE
 
 
 def test_isolated_single_ion_pixel_is_never_touched():
