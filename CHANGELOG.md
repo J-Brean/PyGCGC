@@ -6,6 +6,18 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**After the audit, 2026-09-24** (agreed with James). 🫧 blobs are scored against both measured
+references (bleed and cyclic) and keep the larger score; the threshold is 0.15 and blocking removes
+the siloxane ions only (on two runs: every siloxane-like blob caught, no hydrocarbon signal lost;
+old projects keep their saved settings). The n-alkane qualifier ratios were re-measured (0.60, 0.38)
+and the defaults kept, because a gate centred on them admitted branched isomers. Run type, level,
+calibration set and volume are edited in the Runs table, saved with the project and written out as
+`sequence.csv`; quantification reads them from the runs (QuantState.extras is gone). Alkane ladders
+are saved with the project; background layers and 🔍 detections are cached on local disk, keyed by
+file, fold, settings and a fingerprint of the code (`StepCache` gained a size limit; the batch cache
+uses the fingerprint too). `read_lsc` decodes with array operations: identical output on all nine
+real files, 1.2 to 3.1 s instead of 14 to 18 s. 547 tests pass.
+
 **Audit and reorganisation, 2026-09-24** (branch `audit-2026-09-24`; full report in
 [docs/validation/audit-2026-09-24.md](docs/validation/audit-2026-09-24.md)). The previously
 uncommitted tree was committed as found, then every feature was run on the four tandem

@@ -8,19 +8,19 @@ FT04/SD04 `.lsc` files (including tandem 70/14 eV acquisitions) and ANDI (AIA) `
 
 ## Status
 
-Every step below is built and tested on synthetic data with a known answer (543 tests). The
+Every step below is built and tested on synthetic data with a known answer (547 tests). The
 right-hand column says what has been checked on real runs; the details are in
 [docs/validation/audit-2026-09-24.md](docs/validation/audit-2026-09-24.md) and what is left is in
 [ROADMAP.md](ROADMAP.md).
 
 | Step | What | On real data |
 |---|---|---|
-| Read | native `.lsc` (70 eV, 14 eV, vendor DBC) and ANDI | Decodes every scan of the supplied files; vendor comparison of spectra and times still pending |
+| Read | native `.lsc` (70 eV, 14 eV, vendor DBC) and ANDI | Decodes every scan of the supplied files in 1 to 3 s each; vendor comparison of spectra and times still pending |
 | 1 🔄 Fold | period and phase, from the run or from anchors | Period found unaided on four runs (8.0000 s, as set in the method); anchor-free phase within 0.2 s of the hand-set value |
 | 2 📍 Align | anchors, shift/affine/smooth transforms, compare modes | Not yet checked on real drift |
 | 3 🧹 Background | bleed, stripes, spikes, noise map, blank subtraction | Used on every real run; blank subtraction unchecked |
 | 4 🔍 Peaks | MS-aware overlapping components (default) or legacy blobs | Benchmarked with planted peaks in real background; no labelled real standard yet |
-| 5 🫧 Siloxane | score blobs against a reference; block them or fit per pixel | Scores rank siloxanes well; the default threshold and blocking need changing (see ROADMAP) |
+| 5 🫧 Siloxane | score blobs against bleed and cyclic references; block their siloxane ions, or fit per pixel | Defaults chosen on two runs: every siloxane-like blob caught, none of the hydrocarbon signal removed |
 | 6 ⛓️ Hydrocarbons | n-alkane ladder, stencils, homologous series | Ladder from two clicks reaches C9–C30 on four runs; one or two carbons wrong per run |
 | 7 🧬 Classify | compound classes from readable rules | Checked on one earlier run |
 | 8 🏷️ Identify | MSP library search with target-decoy confidence | No real library yet |
@@ -48,8 +48,10 @@ pygcgc-gui "C:\path\to\folder\of\runs"
 ```
 
 Work along the numbered toolbar: open a step, set it on the left, press **▶ Go**, then follow the
-banner to the next step. A first look needs only 1 🔄 Fold and 3 🧹 Background. The project
-saves itself beside the runs (`project.pygcgc.json`) and offers to resume next time. The
+banner to the next step. A first look needs only 1 🔄 Fold and 3 🧹 Background. Set each run's
+type and calibration level in the Runs table (or with a `sequence.csv`). The project saves itself
+beside the runs (`project.pygcgc.json`) and offers to resume next time; background layers and
+peak detections are cached on local disk, so reopening does not recompute them. The
 [user guide](docs/user-guide.md) covers every step.
 
 For native files, confirm the modulation period in the Fold step (it is not stored in the file);
@@ -62,7 +64,7 @@ Quantification needs a target table, a sequence and calibration levels.
 
 **`method.json`**: `{"modulation_period_s": 8.0}`.
 
-**`sequence.csv`**: what each run is, in running order.
+**`sequence.csv`**: what each run is, in running order (or set it in the Runs table and save it from there).
 
 ```
 file,type,level,cal_set,volume_m3

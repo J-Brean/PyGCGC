@@ -96,6 +96,7 @@ In the spectrum, click an ion to image it; Shift+click adds it to the current su
 
 - Select a row, or use PgUp/PgDn, to change run. Zoom, ion and colour levels stay put.
 - Neighbouring runs are prepared in the background, so flicking is instant.
+- **Type, Level, Cal set and Volume (m³)** can be typed straight into the table (double-click, or F2). Right-click several runs to set their type, level, calibration set or volume at once. A type containing "cal" plus a level makes a calibration run; a type containing "blank" is offered as a blank. These values are saved with the project and win over `sequence.csv`; **Save types and levels as sequence.csv…** (right-click, or File → Save sequence list…) writes them out.
 - Right-click a run to remove it from the project.
 - The Timing column warns about dropped scans or irregular timing.
 
@@ -285,18 +286,18 @@ Open a selected MS-aware component group directly from step 4, or inspect a lega
 
 ### 🫧 Siloxane removal
 
-Column bleed and cyclic siloxane contaminants (Dn) fragment under EI onto a recognisable set of ions. Flagging and removal are independent of each other, and both fit against one **reference spectrum**.
+Column bleed and cyclic siloxane contaminants (Dn) fragment under EI onto a recognisable set of ions, but differently: bleed is dominated by m/z 207, a discrete Dn peak by 73 and 281. Blobs are therefore scored against two **reference spectra** and keep the larger score; the per-pixel method fits the first one only.
 
-**The reference spectrum** (🫧 Siloxane tab, left). The default is the column bleed measured in the supplied real run: m/z 207 is the base ion, followed by 281 (18%), 208 (17%), 209, 96, 191, 133 and 73 (only about 7%). It was taken as the slope of each ion against m/z 207 through the last 30 minutes of the run, which keeps what rises with the oven temperature and drops the constant background (39, 40, 44). Three ways to change it:
+**The reference spectra** (🫧 Siloxane tab, left). The first defaults to the column bleed measured on the earlier real run: m/z 207 is the base ion, followed by 281 (18%), 208 (17%), 209, 96, 191, 133 and 73 (only about 7%). It was taken as the slope of each ion against m/z 207 through the last 30 minutes of the run, which keeps what rises with the oven temperature and drops the constant background (39, 40, 44). *Also score against* sets the second, by default *Cyclic siloxane peak (measured)*; choose None to score against the first alone. Three ways to change the first:
 - **Presets:** *Column bleed (measured)*, *Cyclic siloxane peak (measured)* (a discrete Dn peak at 29.3 min in the same run: 73, 147, 281, 282, 283) and *Generic Dn (old default)*.
 - **Edit the table:** change an intensity, add an ion (＋ Ion) or drop one (－ Remove selected). The bar chart shows the reference as it will be used.
 - **🖱 Pick from 2D view:** click a siloxane peak, and that point's spectrum (ions of at least 3% of the base peak above m/z 45, at most 20) becomes the reference. *Subtract local baseline* is on by default, which is right for a discrete peak; switch it off when you click plain column bleed, which the baseline subtraction would otherwise remove. Esc cancels.
 
-The bleed reference leaves a discrete Dn peak alone (its ion ratios do not match), and the cyclic reference leaves the bleed alone; pick the one you want to remove. Changing the reference updates the 🔍 flags at once; layers already applied keep their old fit until you press 🫧 Apply again (the panel says how many).
+On its own the bleed reference leaves a discrete Dn peak alone (its ion ratios do not match), and the cyclic reference leaves the bleed alone, which is why both are used: on the September 2026 runs either alone missed most peaks of the other kind, and the pair caught all 38 and 21 siloxane-like blobs on two runs with no hydrocarbon blob flagged. Changing the reference updates the 🔍 flags at once; layers already applied keep their old fit until you press 🫧 Apply again (the panel says how many).
 
-**Flagging** happens automatically wherever 🔍 blobs are shown: every blob is scored (the fraction of its volume on the reference ions, times its cosine similarity to the reference) and the 🔍 Blobs panel's "🫧 siloxane?" column marks anything at or above the threshold. The threshold is still provisional (see [Known limitations](../ROADMAP.md)).
+**Flagging** happens automatically wherever 🔍 blobs are shown: every blob is scored (the fraction of its volume on the reference ions, times its cosine similarity to the reference) and the 🔍 Blobs panel's "🫧 siloxane?" column marks anything at or above the threshold. The default threshold, 15%, was chosen on two of the September 2026 runs ([audit](validation/audit-2026-09-24.md)); check it on your own runs.
 
-**Blocking out siloxane blobs (default method).** The slider in the 🫧 tab, *Siloxane certainty ≥*, sets how sure a 🔍 blob must be to count as siloxane. A blob's certainty is the score above as a percentage. Drag it and the blobs at or above it are outlined in dashed magenta in the 2D view (the 🔍 outlines switch on for you), the 🔍 table's 🫧 column shows each blob's percentage, marked *yes* at or above the slider, and the panel counts how many blobs on the current run qualify. **🫧 Siloxanes** then zeroes every scan inside those blobs' footprints, on every ion (untick *Block every ion in the blob* to zero only the siloxane ions). Nothing is fitted.
+**Blocking out siloxane blobs (default method).** The slider in the 🫧 tab, *Siloxane certainty ≥*, sets how sure a 🔍 blob must be to count as siloxane. A blob's certainty is the score above as a percentage. Drag it and the blobs at or above it are outlined in dashed magenta in the 2D view (the 🔍 outlines switch on for you), the 🔍 table's 🫧 column shows each blob's percentage, marked *yes* at or above the slider, and the panel counts how many blobs on the current run qualify. **🫧 Siloxanes** then zeroes the ions of both references in every scan inside those blobs' footprints, so anything co-eluting inside a blob survives (tick *Block every ion in the blob* to zero everything; on a busy run that removed several per cent of the hydrocarbon signal with the bleed). Nothing is fitted. Projects saved before 24 September 2026 keep the settings they were saved with (30%, every ion, one reference): pick the preset again and set the slider to 15% to use the new defaults.
 - 🫧 finds the 🔍 blobs first if a run has none, or if they are out of date. Blobs are always found on the layer beneath 🫧 (🧹 if applied, otherwise raw), so a blocked-out blob is still listed and outlined, and the slider keeps working after 🫧 is applied.
 - Delete a blob in the 🔍 panel to keep it out of the removal, or use ➕ Add to include a peak the detector missed.
 - A blob's footprint stops at 1% of its apex, so a faint edge tail (about 0.4% of the signal in the synthetic test) remains.
@@ -309,7 +310,7 @@ The bleed reference leaves a discrete Dn peak alone (its ion ratios do not match
 - Undoable (Ctrl+Z), and its settings are saved with the project; the result itself is rebuilt on reopening, the same way as 🧹 and 🔍.
 - "Remove 🫧 from all runs" is in the Process menu.
 
-**Not built:** a per-homologue set of references (one reference is fitted at a time); automatic re-fitting when 🧹 or the fold changes underneath an applied 🫧 layer (it's cleared instead, so a stale fit is never shown silently); wiring into 🧪's own measurement, which still reads the 🧹 layer directly.
+**Not built:** more than two references, and a second reference for the per-pixel fit; automatic re-fitting when 🧹 or the fold changes underneath an applied 🫧 layer (it's cleared instead, so a stale fit is never shown silently); wiring into 🧪's own measurement, which still reads the 🧹 layer directly.
 
 ### ⛓️ Hydrocarbon and isomer mapper
 
@@ -325,13 +326,13 @@ A hydrocarbon chromatogram is usually a big diagonal smudge: every homologous se
 - **✏️ Draw stencil** drops an editable polygon onto the 2D view (drag its corners, or add more via pyqtgraph's usual ROI controls) positioned over the group you want to lump, using whichever run's alkane series is current.
 - **💾 Save** (with a name and a response factor) records it — not in absolute t1/t2, but as carbon number and offset from the alkane line, so it means the same thing on any run.
 - Every stencil is shown lifted onto the current run automatically (⛓️ Stencil outlines, toolbar or View menu), and the ⛓️ Hydrocarbons panel lists each one's summed TIC volume, blob count and amount (volume × response factor) for the current run, needs 🔍 blobs to have been found on it first.
-- Add, delete and reweight are all undoable (Ctrl+Z), and the stencils (not the alkane series, which is rebuilt like 🔍's blobs and 🧪's report) are saved with the project.
+- Add, delete and reweight are all undoable (Ctrl+Z), and the stencils and each run's alkane series are saved with the project.
 
 **Markers** (pristane, phytane) are looked up automatically at a measured carbon-equivalent offset from their neighbouring n-alkane (+0.01 C from n-C17 and +0.08 C from n-C18, measured on the real run) and shown at the bottom of the panel. At a 10 s modulation they share a column with their alkane, so the nearest blob is often the alkane's own; the m/z 183 and 113 excess is what tells them apart.
 
 **🔗 Find series** and **✎ Edit shape** are described under [Working order, settings and figures](#working-order-settings-and-figures); ⚙️ All settings edits every `HydrocarbonSettings` field. The series finder's diagnostic ion pairs (91/105, 82/83, 142/156, 58/59) are not validated; the (57, 71) pair recovers the alkane ladder as a positive control.
 
-**On the current instrument tune.** On the four September 2026 runs the n-alkane ratios are 71/57 = 0.55 to 0.66 and 85/57 = 0.30 to 0.43, below the defaults, so the gate drops some alkanes (C12 on one run, the odd carbon above C25). Pick the ratios from an n-alkane on your own data (🖱 Pick from 2D view) or untick the gate. From two correct clicks the ladder reaches C9 or C10 to C29 or C30 on all four runs; seeds typed in the wrong carbon order are refused.
+**On the current instrument tune.** On the four September 2026 runs the n-alkane ratios are 71/57 = 0.60 and 85/57 = 0.38 (medians, C13 to C28), below the defaults. The defaults are nonetheless the better gate: the branched isomers it has to reject have lower ratios still, and a gate centred on the n-alkane values let one in and put a whole ladder one carbon out. The gate drops the odd alkane (C12 on one run, one carbon above C25 on others); untick it to fill gaps, then check them. From two correct clicks the ladder reaches C9 or C10 to C29 or C30 on all four runs; seeds typed in the wrong carbon order are refused. Ladders are saved with the project.
 
 ### 🧬 Classify
 
@@ -473,6 +474,10 @@ Every format also records **provenance**: the PyGCGC version, the modulation per
 **🏷️ Library browser.** Browse library… in the 🏷️ dialog: filter, edit name, RI, formula and CAS in place, delete entries, view a spectrum, save as MSP.
 
 **✂️ Peak models.** The ✂️ dialog offers gaussian, emg (t1 tail), emg_t2 (t2 tail), emg2, tilt, emg_t2_tilt, cell and emg_t2_cell. On real alkane peaks none beat gaussian by more than about 3% (see ROADMAP.md section 5).
+
+### Projects and the results cache
+
+The project saves itself beside the runs (`project.pygcgc.json`) and offers to resume when the folder is opened again. It holds the fold, every setting and decision, run types and levels, alkane ladders, stencils, internal-standard labels and MS-aware components. Background layers and peak detections are kept in a cache on local disk (`%LOCALAPPDATA%\PyGCGC\results`, or the folder in `PYGCGC_CACHE`), never in the data folder, so reopening a project reads them back in a second instead of recomputing them. Each entry is keyed by the run file, its fold, the settings and the code that made it, so a changed setting or a new version of a method recomputes. A real run's background layer takes about 380 MB; the least recently used entries are deleted beyond 10 GB (`PYGCGC_CACHE_GB`), and File → Clear results cache… empties it. Layers made with a blank are not cached.
 
 ### Undo
 

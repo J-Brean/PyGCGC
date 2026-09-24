@@ -15,6 +15,12 @@ University of Birmingham). Code conventions are in [docs/architecture.md](docs/a
   28 tests skip without the dummy data pack. Every bug fixed gets a test that failed before.
 - **Real data** lives in `real_data/` and is never committed. Benchmarks read it; tests skip
   without it. Ask before changing a scientific default; report the evidence first.
+- **Results cache.** 🧹 layers and 🔍 detections are cached in `%LOCALAPPDATA%\PyGCGC\results`
+  (tests use a temporary folder via `PYGCGC_CACHE`), keyed by `core.batch.CODE_FINGERPRINT`, a hash
+  of the modules whose results are cached. A new module that feeds a cached result must be added
+  to that list, or stale results will be served.
+- **Line endings.** The repository stores LF; some editors here write CRLF. Scripted
+  find-and-replace on `\n` silently misses CRLF files, so check that an edit applied.
 - **Style.** British English, no em dashes, plain-English docstrings for anything methodological,
   scripts that read top to bottom. Figures follow the user's global figure rules.
 
