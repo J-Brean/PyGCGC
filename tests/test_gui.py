@@ -1733,3 +1733,36 @@ def test_surface3d_view_handles_empty_data_without_raising(qtbot):
     view.set_data(np.zeros((0, 0)))
     view.set_data(np.random.default_rng(0).random((6, 7)))
     assert view.available
+
+
+def test_runs_table_sets_type_level_set_and_volume_and_saves_them(qtbot, window, tmp_path):
+    from pygcgc.gui.mainwindow import MainWindow
+    w = window
+    i_b = w.project.index_of("RUN_B")
+    # Typed into the table: RUN_B becomes a second calibration level.
+    table = w.runs_panel.table
+    table.item(i_b, 1).setText("calibration")
+    table.item(i_b, 2).setText("L2")
+    assert w.project.entries[i_b].kind == "calibration" and w.project.entries[i_b].level == "L2"
+    table.item(i_b, 4).setText("not a number")                    # refused, the old value comes back
+    assert w.project.entries[i_b].volume is None and table.item(i_b, 4).text() == ""
+    # Several runs at once, as the right-click menu does.
+    w.runs_panel.infoEdited.emit([0, i_b], "cal_set", "mon")
+    w.runs_panel.infoEdited.emit([i_b], "volume", "1.5")
+    info = {r.name: r for r in w.quant.info()}
+    assert info["RUN_B"].is_calibration and info["RUN_B"].cal_set == "mon" and info["RUN_B"].volume == 1.5
+    # Written out as a sequence.csv that loads back the same way...
+    w.save_sequence_dialog(tmp_path / "sequence.csv")
+    text = (tmp_path / "sequence.csv").read_text()
+    assert "RUN_B.cdf,calibration,L2,mon,1.5" in text
+    # ...and kept in the project file, winning over any sequence.csv on reopening.
+    path = tmp_path / "proj.pygcgc.json"
+    w.project.save(path)
+    w2 = MainWindow()
+    qtbot.addWidget(w2)
+    done = []
+    w2.open_project(path, on_loaded=lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
+    e = w2.project.entries[w2.project.index_of("RUN_B")]
+    assert (e.kind, e.level, e.cal_set, e.volume) == ("calibration", "L2", "mon", 1.5)
+    w2.jobs.wait(5000)

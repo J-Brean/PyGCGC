@@ -44,8 +44,10 @@ AUTOSAVE_DELAY_MS = 1000
 class RunEntry:
     path: Path
     name: str
-    kind: str = ""
-    level: str = ""
+    kind: str = ""                    # run type: calibration, sample, blank, ... (sequence.csv or the Runs table)
+    level: str = ""                   # calibration level, a row of the levels file
+    cal_set: str = ""                 # calibration set, for bracketing
+    volume: float | None = None       # sampled air volume (m³)
     run: Run | None = None
     phase: float = 0.0
     phase_method: str = "unset"      # unset, anchors, void, fallback, manual
@@ -577,8 +579,8 @@ class Project(QtCore.QObject):
 
     def load_sequence(self, path) -> None:
         self.sequence_path = Path(path)
-        self.quant.set_sequence(path)
         self._apply_sequence(self.entries)
+        self.quant.mark_stale()
         self.runsChanged.emit()
 
     def _apply_sequence(self, entries) -> None:
@@ -591,8 +593,43 @@ class Project(QtCore.QObject):
         for e in entries:
             row = info.get(e.name)
             if row:
-                e.kind = row.get("type", "")
-                e.level = row.get("level", "")
+                e.kind = (row.get("type") or "").strip()
+                e.level = (row.get("level") or "").strip()
+                e.cal_set = (row.get("cal_set") or "").strip()
+                vol = (row.get("volume_m3") or "").strip()
+                e.volume = float(vol) if vol else None
+
+    def set_run_info(self, indices: list[int], **fields) -> None:
+        """Change the type, level, calibration set or volume of some runs, as the
+        Runs table does. Quantification results go out of date; the project is
+        saved with the new values (write them out with `write_sequence`)."""
+        for i in indices:
+            e = self.entries[i]
+            for key, value in fields.items():
+                if key == "volume":
+                    value = None if value in (None, "") else float(value)
+                elif key in ("kind", "level", "cal_set"):
+                    value = str(value).strip()
+                else:
+                    raise KeyError(key)
+                setattr(e, key, value)
+        self.quant.mark_stale()
+        self.runsChanged.emit()
+        self.request_autosave()
+
+    def write_sequence(self, path) -> Path:
+        """Write every run's type, level, calibration set and volume as a
+        sequence.csv (the format `load_sequence` reads) and use it from now on."""
+        path = Path(path)
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(["file", "type", "level", "cal_set", "volume_m3"])
+            for e in self.entries:
+                w.writerow([Path(e.path).name, e.kind, e.level, e.cal_set,
+                            "" if e.volume is None else f"{e.volume:g}"])
+        self.sequence_path = path
+        self.request_autosave()
+        return path
 
     def load_targets(self, path, estimate: bool = True) -> None:
         self.targets_path = Path(path)
@@ -757,7 +794,8 @@ class Project(QtCore.QObject):
             "sequence": rel(self.sequence_path),
             "targets": rel(self.targets_path),
             "runs": [{"path": rel(e.path), "phase": e.phase, "phase_method": e.phase_method,
-                      "import_meta": e.import_meta,
+                      "import_meta": e.import_meta, "kind": e.kind, "level": e.level,
+                      "cal_set": e.cal_set, "volume": e.volume,
                       "background": e.background is not None, "siloxane": e.siloxane is not None}
                      for e in self.entries],
             "background": {"settings": self.bg_settings.to_dict(), "blank": self.bg_blank,
@@ -829,8 +867,6 @@ class Project(QtCore.QObject):
             self.anchors = load_anchors(self.targets_path)
             self.quant.set_targets(self.targets_path)
             self.anchorsChanged.emit()
-        if self.sequence_path is not None and self.sequence_path.exists():
-            self.quant.set_sequence(self.sequence_path)
         self.quant.from_dict(data.get("quant", {}), resolve)
         self.align.from_dict(data.get("align", {}))
         self.blobs.from_dict(data.get("blobs", {}))
@@ -853,6 +889,11 @@ class Project(QtCore.QObject):
             wants_bg.append(bool(r.get("background")))
             wants_sil.append(bool(r.get("siloxane")))
         self._apply_sequence(entries)
+        # What was set in the Runs table and saved with the project wins over the sequence file.
+        for e, r in zip(entries, data["runs"]):
+            for key in ("kind", "level", "cal_set", "volume"):
+                if key in r:
+                    setattr(e, key, r[key])
         self.entries = entries
         self.runsChanged.emit()
         self.layersChanged.emit()

@@ -330,6 +330,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_targets = A("Load target table…", self.load_targets_dialog, None,
                              "Internal standards in the table become phase anchors")
         self.act_sequence = A("Load sequence list…", self.load_sequence_dialog)
+        self.act_save_sequence = A("Save sequence list…", lambda: self.save_sequence_dialog(), None,
+                                   "Write each run's type, level, calibration set and volume (edit them in the Runs table)")
         self.act_fix = A("🔄 Fix phase", self.fix_phase, None, "Estimate the phase of every run")
         self.act_background = A("🧹 Background", lambda: self.apply_background(), None,
                                 "Remove background and spikes from every run, using the 🧹 panel settings")
@@ -535,7 +537,7 @@ class MainWindow(QtWidgets.QMainWindow):
         m = self.menuBar()
         f = m.addMenu("&File")
         for a in (self.act_open, self.act_open_files, None, self.act_open_project, self.act_save,
-                  self.act_save_as, None, self.act_sequence, self.act_targets, self.act_levels,
+                  self.act_save_as, None, self.act_sequence, self.act_save_sequence, self.act_targets, self.act_levels,
                   None, self.act_export, self.act_export_figure, None, self.act_quit):
             f.addSeparator() if a is None else f.addAction(a)
         e = m.addMenu("&Edit")
@@ -675,6 +677,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.renderer.failed.connect(lambda t: self.say(f"Drawing failed: {t}"))
         self.runs_panel.currentChanged.connect(self.set_run)
         self.runs_panel.removeRequested.connect(self.remove_runs)
+        self.runs_panel.infoEdited.connect(lambda rows, field, value: self.project.set_run_info(rows, **{field: value}))
+        self.runs_panel.saveSequenceRequested.connect(lambda: self.save_sequence_dialog())
         self.fold_panel.phaseEdited.connect(self.edit_phase)
         self.fold_panel.periodEdited.connect(self.edit_period)
         self.fold_panel.periodApplyRequested.connect(self.edit_period)
@@ -885,6 +889,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.error("Couldn't read the target table", str(exc))
                 return
             self.fix_phase()
+
+    def save_sequence_dialog(self, path=None):
+        """Write every run's type, level, calibration set and volume (as set in the Runs table) to a sequence.csv."""
+        if not self.project.entries:
+            self.say("Open some runs first")
+            return
+        if path is None:
+            start = self.project.sequence_path or Path(self.project.entries[0].path).parent / "sequence.csv"
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save sequence list", str(start), "CSV (*.csv)")
+            if not path:
+                return
+        self.say(f"Saved {self.project.write_sequence(path).name}")
 
     def load_sequence_dialog(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Sequence list", "", "CSV (*.csv)")

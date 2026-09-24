@@ -22,7 +22,7 @@ from pathlib import Path
 from PySide6 import QtCore
 
 from ..core import (QuantDecisions, QuantReport, QuantSettings, SequenceRun, finish_sequence,
-                    learn_positions, learn_qual_ratios, load_levels, load_targets, quantify_run, read_sequence_extras,
+                    learn_positions, learn_qual_ratios, load_levels, load_targets, quantify_run,
                     with_positions)
 
 
@@ -43,7 +43,6 @@ class QuantState(QtCore.QObject):
         self.positions: dict = {}
         self.ratios: dict = {}           # qualifier ratios learned where the table leaves them blank
         self.runquants: dict = {}        # RunEntry -> RunQuant
-        self.extras: dict = {}           # run name -> {cal_set, volume}
         self.stale = False
         self.running = False
         self.was_run = False
@@ -68,12 +67,6 @@ class QuantState(QtCore.QObject):
         else:
             self.changed.emit()
 
-    def set_sequence(self, path) -> None:
-        try:
-            self.extras = read_sequence_extras(path)
-        except (OSError, KeyError, ValueError):
-            self.extras = {}
-
     def set_settings(self, settings: QuantSettings) -> None:
         self.settings = settings
         self._invalidate()
@@ -97,9 +90,7 @@ class QuantState(QtCore.QObject):
     def info(self) -> list[SequenceRun]:
         out = []
         for e in self.project.entries:
-            ex = self.extras.get(e.name, {})
-            out.append(SequenceRun(e.name, e.kind, e.level, ex.get("cal_set", ""),
-                                   ex.get("volume"), self.runquants.get(e)))
+            out.append(SequenceRun(e.name, e.kind, e.level, e.cal_set, e.volume, self.runquants.get(e)))
         return out
 
     def run_quant(self, index: int):

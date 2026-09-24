@@ -13,11 +13,21 @@ METHOD_TEXT = {"anchors": "anchors", "void": "quiet band", "bleed": "bleed onset
 
 
 class RunsPanel(QtWidgets.QWidget):
-    """Table of runs. Selecting a row shows that run."""
+    """Table of runs. Selecting a row shows that run.
+
+    Type, level, calibration set and volume can be typed straight into the
+    table (double-click, or F2), or set for several selected runs at once
+    from the right-click menu, which can also save them as a sequence.csv.
+    A type containing "cal" plus a level makes a calibration run; a type
+    containing "blank" is offered as a blank."""
     currentChanged = QtCore.Signal(int)
     removeRequested = QtCore.Signal(list)
+    infoEdited = QtCore.Signal(list, str, object)      # run indices, field, value
+    saveSequenceRequested = QtCore.Signal()
 
-    COLUMNS = ("Run", "Type", "Level", "Phase (s)", "Phase from", "Timing")
+    COLUMNS = ("Run", "Type", "Level", "Cal set", "Volume (m³)", "Phase (s)", "Phase from", "Timing")
+    EDITABLE = {1: "kind", 2: "level", 3: "cal_set", 4: "volume"}
+    TYPES = ("calibration", "sample", "blank", "tube blank", "QC")
 
     def __init__(self, project: Project, parent=None):
         super().__init__(parent)
@@ -26,13 +36,17 @@ class RunsPanel(QtWidgets.QWidget):
         self.table.setHorizontalHeaderLabels(self.COLUMNS)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.DoubleClicked
+                                   | QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed)
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._menu)
         self.table.currentCellChanged.connect(lambda r, *_: r >= 0 and self.currentChanged.emit(r))
-        self.hint = QtWidgets.QLabel("PgUp / PgDn to flick between runs")
+        self.table.itemChanged.connect(self._item_changed)
+        self.hint = QtWidgets.QLabel("PgUp / PgDn to flick between runs. Double-click Type, Level, Cal set or "
+                                     "Volume to edit; right-click to set several runs at once.")
+        self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: palette(mid);")
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
@@ -44,28 +58,32 @@ class RunsPanel(QtWidgets.QWidget):
         current = self.table.currentRow()
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.project.entries))
+        editable = QtCore.Qt.ItemFlag.ItemIsEditable
         for i, e in enumerate(self.project.entries):
             loaded = e.run is not None
             phase = f"{e.phase:.3f}" if loaded else ""
             status = e.error and "Unreadable" or (e.timing if loaded else "Loading…")
-            values = (e.name, e.kind, e.level, phase, METHOD_TEXT.get(e.phase_method, e.phase_method), status)
+            volume = "" if e.volume is None else f"{e.volume:g}"
+            values = (e.name, e.kind, e.level, e.cal_set, volume, phase,
+                      METHOD_TEXT.get(e.phase_method, e.phase_method), status)
             if e.import_meta:
                 energy = e.import_meta.get('energy_ev')
                 processing = 'vendor DBC' if e.import_meta.get('processing_state') == 'vendor_dbc' else 'instrument'
                 label = f"{e.name} [{energy:g} eV; {processing}]" if energy is not None else f"{e.name} [{processing}]"
                 values = (label, *values[1:])
                 if loaded and not self.project.period_confirmed:
-                    values = (*values[:5], 'Check modulation period')
+                    values = (*values[:7], 'Check modulation period')
             for c, v in enumerate(values):
                 item = self.table.item(i, c)
                 if item is None:
                     item = QtWidgets.QTableWidgetItem()
                     self.table.setItem(i, c, item)
                 item.setText(str(v))
-                tip = e.phase_detail if c in (3, 4) else (e.error or str(e.path) if c == 0 else "")
+                item.setFlags(item.flags() | editable if c in self.EDITABLE else item.flags() & ~editable)
+                tip = e.phase_detail if c in (5, 6) else (e.error or str(e.path) if c == 0 else "")
                 item.setToolTip(tip)
                 item.setForeground(QtGui.QBrush(QtGui.QColor("#FB923C")) if (e.error or status == "Check timing")
-                                   and c == 5 else QtGui.QBrush())
+                                   and c == 7 else QtGui.QBrush())
         if 0 <= current < self.table.rowCount():
             self.table.setCurrentCell(current, 0)
         self.table.blockSignals(False)
@@ -77,15 +95,52 @@ class RunsPanel(QtWidgets.QWidget):
     def selected_rows(self) -> list[int]:
         return sorted({i.row() for i in self.table.selectedIndexes()})
 
+    def _item_changed(self, item) -> None:
+        field = self.EDITABLE.get(item.column())
+        if field is None:
+            return
+        text = item.text().strip()
+        if field == "volume" and text:
+            try:
+                float(text)
+            except ValueError:
+                self.refresh()            # not a number: put the old value back
+                return
+        self.infoEdited.emit([item.row()], field, text)
+
     def _menu(self, pos) -> None:
         rows = self.selected_rows()
         if not rows:
             return
+        n = f"{len(rows)} run{'s' if len(rows) > 1 else ''}"
         menu = QtWidgets.QMenu(self)
-        remove = menu.addAction(f"Remove {len(rows)} run{'s' if len(rows) > 1 else ''} from project")
+        types = menu.addMenu(f"Set type of {n}")
+        for kind in self.TYPES:
+            types.addAction(kind, lambda k=kind: self.infoEdited.emit(rows, "kind", k))
+        other = [("level", "Set level…", "Calibration level (a row of the levels file):"),
+                 ("cal_set", "Set calibration set…", "Calibration set (leave empty for none):"),
+                 ("volume", "Set sampled volume…", "Sampled air volume in m³ (leave empty for none):")]
+        for field, label, prompt in other:
+            menu.addAction(label, lambda f=field, p=prompt, l=label: self._ask(rows, f, l, p))
+        menu.addSeparator()
+        menu.addAction("Save types and levels as sequence.csv…", self.saveSequenceRequested)
+        menu.addSeparator()
+        remove = menu.addAction(f"Remove {n} from project")
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen is remove:
             self.removeRequested.emit(rows)
+
+    def _ask(self, rows, field, title, prompt) -> None:
+        text, ok = QtWidgets.QInputDialog.getText(self, title.rstrip("…"), prompt)
+        if not ok:
+            return
+        text = text.strip()
+        if field == "volume" and text:
+            try:
+                float(text)
+            except ValueError:
+                return
+        self.infoEdited.emit(rows, field, text)
 
 
 class FoldPanel(QtWidgets.QWidget):
