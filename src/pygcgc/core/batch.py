@@ -52,6 +52,7 @@ import hashlib
 import json
 import os
 import pickle
+import threading
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,12 +137,32 @@ def _hash_key(*parts) -> str:
     return h.hexdigest()[:20]
 
 
-class StepCache:
-    """One pickled file per cache key, under `directory`."""
+def _code_fingerprint() -> str:
+    """A hash of the modules whose results are cached, so a cached result is
+    never served after the method that made it has changed."""
+    here = Path(__file__).resolve().parent
+    h = hashlib.sha256()
+    try:
+        for name in ("run.py", "fold.py", "background.py", "peaks.py", "siloxane.py", "candidates.py",
+                     "components.py", "modelselect.py", "overlap.py", "io/markes_lsc.py", "io/andi.py"):
+            h.update((here / name).read_bytes())
+    except OSError:                    # a frozen build without sources: fall back to the version
+        from .. import __version__
+        return __version__
+    return h.hexdigest()[:12]
 
-    def __init__(self, directory: Path):
+
+CODE_FINGERPRINT = _code_fingerprint()
+
+
+class StepCache:
+    """One pickled file per cache key, under `directory`. With `max_bytes`,
+    the least recently used files are deleted once the folder grows past it."""
+
+    def __init__(self, directory: Path, max_bytes: float | None = None):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
+        self.max_bytes = max_bytes
 
     def get(self, key: str):
         p = self.dir / f"{key}.pkl"
@@ -149,16 +170,46 @@ class StepCache:
             return None
         try:
             with open(p, "rb") as fh:
-                return pickle.load(fh)
-        except (pickle.PickleError, EOFError, OSError):
+                value = pickle.load(fh)
+        except (pickle.PickleError, EOFError, OSError, AttributeError, ImportError):
             return None
+        try:
+            os.utime(p)                # most recently used
+        except OSError:
+            pass
+        return value
 
     def set(self, key: str, value) -> None:
         p = self.dir / f"{key}.pkl"
-        tmp = p.with_suffix(".tmp")
+        tmp = p.with_name(f"{key}.{os.getpid()}.{threading.get_ident()}.tmp")   # threads may write the same key
         with open(tmp, "wb") as fh:
-            pickle.dump(value, fh)
+            pickle.dump(value, fh, protocol=pickle.HIGHEST_PROTOCOL)
         tmp.replace(p)
+        if self.max_bytes is not None:
+            self.prune(self.max_bytes)
+
+    def size(self) -> int:
+        return sum(f.stat().st_size for f in self.dir.glob("*.pkl"))
+
+    def prune(self, max_bytes: float) -> None:
+        files = sorted(self.dir.glob("*.pkl"), key=lambda f: f.stat().st_mtime)
+        total = sum(f.stat().st_size for f in files)
+        for f in files:
+            if total <= max_bytes:
+                break
+            try:
+                size = f.stat().st_size
+                f.unlink()
+                total -= size
+            except OSError:
+                pass
+
+    def clear(self) -> None:
+        for f in list(self.dir.glob("*.pkl")) + list(self.dir.glob("*.tmp")):
+            try:
+                f.unlink()
+            except OSError:
+                pass
 
 
 # ------------------------------------------------------------------- prep
@@ -178,7 +229,7 @@ class PrepResult:
 def _run_cache_base(run: Run, period: float, phase: float) -> str:
     stat = run.source.stat() if run.source and Path(run.source).exists() else None
     fingerprint = (stat.st_mtime_ns, stat.st_size) if stat else (run.nnz, float(run.data.sum()))
-    return _hash_key(str(run.source), fingerprint, period, phase,
+    return _hash_key(CODE_FINGERPRINT, str(run.source), fingerprint, period, phase,
                      {k:run.meta.get(k) for k in ('source_sha256', 'parser_version',
                       'energy_ev', 'processing_state', 'time_origin_policy', 'time_origin_seconds')})
 

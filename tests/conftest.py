@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,9 @@ import pytest
 import scipy.sparse as sp
 
 from pygcgc import Run
+
+# The GUI's results cache goes to a throwaway folder, never the user's own.
+os.environ["PYGCGC_CACHE"] = tempfile.mkdtemp(prefix="pygcgc-test-cache-")
 
 TRUE_PHASE = 0.55      # the dummy pack's hidden phase
 PERIOD = 4.0

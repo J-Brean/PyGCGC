@@ -1432,7 +1432,9 @@ def test_hydrocarbons_saved_and_reloaded(qtbot, hydro_window, monkeypatch, tmp_p
     qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
     assert [s.name for s in w2.hydrocarbons.stencils.stencils] == ["branched C15-25"]
     assert w2.hydrocarbons.stencils.stencils[0].response_factor == 3.0
-    assert w2.hydrocarbons.series_for(w2.project.index_of("STD")) is None    # series aren't stored
+    saved = w2.hydrocarbons.series_for(w2.project.index_of("STD"))          # the ladder is kept with the project
+    assert saved is not None and sorted(saved.hits) == sorted(std_series.hits)
+    assert saved.hits[15].t1 == pytest.approx(std_series.hits[15].t1)
     w2.jobs.wait(5000)
 
 
@@ -1765,4 +1767,34 @@ def test_runs_table_sets_type_level_set_and_volume_and_saves_them(qtbot, window,
     qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
     e = w2.project.entries[w2.project.index_of("RUN_B")]
     assert (e.kind, e.level, e.cal_set, e.volume) == ("calibration", "L2", "mon", 1.5)
+    w2.jobs.wait(5000)
+
+def test_reopening_a_project_reuses_cached_background_and_blobs(qtbot, window, tmp_path, monkeypatch):
+    from pygcgc.gui import blob_state, project as project_module
+    from pygcgc.gui.mainwindow import MainWindow
+    w = window
+    w.apply_background()
+    qtbot.waitUntil(lambda: all(e.background is not None for e in w.project.entries), timeout=TIMEOUT)
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.was_run, timeout=TIMEOUT)
+    n_blobs = {e.name: len(w.blobs.by_run[e]) for e in w.project.entries}
+    assert all(getattr(e.background, "cache_key", None) for e in w.project.entries)
+    path = tmp_path / "proj.pygcgc.json"
+    w.project.save(path)
+    w.jobs.wait(5000)
+
+    # Nothing may be recomputed on reopening: both steps now fail if called.
+    def boom(*a, **k):
+        raise AssertionError("recomputed instead of read from the cache")
+    monkeypatch.setattr(project_module, "remove_background", boom)
+    monkeypatch.setattr(blob_state, "find_blobs", boom)
+    w2 = MainWindow()
+    w2.blobs.set_method(blob_state.LEGACY)
+    qtbot.addWidget(w2)
+    done = []
+    w2.open_project(path, on_loaded=lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done) and all(e.background is not None for e in w2.project.entries), timeout=TIMEOUT)
+    w2.run_blobs()
+    qtbot.waitUntil(lambda: not w2.blobs.running and w2.blobs.was_run, timeout=TIMEOUT)
+    assert {e.name: len(w2.blobs.by_run[e]) for e in w2.project.entries} == n_blobs
     w2.jobs.wait(5000)

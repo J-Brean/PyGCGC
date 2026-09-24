@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import pickle
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from ..core import (BackgroundResult, BackgroundSettings, Fold, FoldSpec, Siloxa
                     phase_for_sequence, read_run, remove_background, remove_siloxane_blobs,
                     remove_siloxanes)
 from ..core.align import blank_mapping
+from ..core.batch import StepCache, _hash_key, _run_cache_base
 from ..core.phase import Anchor, PhaseEstimate
 from ..core.run import Run
 from ..core.io import discover_runs
@@ -38,6 +40,19 @@ from .quantstate import QuantState
 PROJECT_VERSION = 1
 SIDECAR_NAME = "project.pygcgc.json"     # default project file dropped alongside a folder of runs
 AUTOSAVE_DELAY_MS = 1000
+
+
+def results_cache_dir() -> Path:
+    """Where processed layers and detections are kept between sessions: local
+    disk (never the data folder, which may be synced), or `PYGCGC_CACHE`."""
+    if os.environ.get("PYGCGC_CACHE"):
+        return Path(os.environ["PYGCGC_CACHE"])
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".cache")
+    return Path(base) / "PyGCGC" / "results"
+
+
+# The least recently used results are deleted beyond this size (GB).
+CACHE_GB = float(os.environ.get("PYGCGC_CACHE_GB", "10"))
 
 
 @dataclass(eq=False)
@@ -85,6 +100,12 @@ class Project(QtCore.QObject):
         self._loading_project = False                # suppresses autosave while a project is being restored
         self.view_state: dict = {}
         self._folds: dict[tuple, Fold] = {}
+        # 🧹 layers and 🔍 detections are cached on disk, keyed by the run, its fold, the settings
+        # and the code that made them, so reopening a project does not recompute them.
+        try:
+            self.cache: StepCache | None = StepCache(results_cache_dir(), max_bytes=CACHE_GB * 1e9)
+        except OSError:
+            self.cache = None
         self.loading = False
         # 🧹 background layer
         self.bg_settings = BackgroundSettings()
@@ -269,13 +290,20 @@ class Project(QtCore.QObject):
             t_sample = self.align.transforms.get(entry.name)
             t_blank = self.align.transforms.get(blank) if blank else None
             to_blank = blank_mapping(t_sample, t_blank) if (t_sample or t_blank) else None
+            # A blank-subtracted layer depends on another run and the alignment: never cached.
+            raw = None if (use_blank or preview) else self.raw_key(idx)
+            key = _hash_key(raw, "background", s.to_dict()) if raw else None
 
             def work(token, progress):
-                return remove_background(run, fold, s,
-                                         blank=blank_res if use_blank else None,
-                                         blank_fold=blank_fold if use_blank else None,
-                                         blank_name=blank if use_blank else None,
-                                         progress=progress, to_blank=to_blank if use_blank else None)
+                def make():
+                    res = remove_background(run, fold, s,
+                                            blank=blank_res if use_blank else None,
+                                            blank_fold=blank_fold if use_blank else None,
+                                            blank_name=blank if use_blank else None,
+                                            progress=progress, to_blank=to_blank if use_blank else None)
+                    res.cache_key = key
+                    return res
+                return self.cached(key, make)
 
             def done(res):
                 results[entry] = res
@@ -598,6 +626,37 @@ class Project(QtCore.QObject):
                 e.cal_set = (row.get("cal_set") or "").strip()
                 vol = (row.get("volume_m3") or "").strip()
                 e.volume = float(vol) if vol else None
+
+    def raw_key(self, index: int) -> str | None:
+        """Cache key of run `index` as read and folded now."""
+        e = self.entries[index]
+        if e.run is None or self.cache is None:
+            return None
+        return _hash_key(_run_cache_base(e.run, self.period, e.phase), "raw")
+
+    def base_key(self, index: int) -> str | None:
+        """Cache key of `base_run(index)`, what 🔍 detects on; None when it has none
+        (a preview, or a 🧹 layer made with a blank)."""
+        e = self.entries[index]
+        if self.preview is not None and self.preview[0] is e:
+            return None
+        if self.show_processed and e.background is not None:
+            return getattr(e.background, "cache_key", None)
+        return self.raw_key(index)
+
+    def cached(self, key: str | None, make):
+        """The cached result under `key`, or `make()` stored there. Safe to call from a job."""
+        if key is None or self.cache is None:
+            return make()
+        hit = self.cache.get(key)
+        if hit is not None:
+            return hit
+        value = make()
+        try:
+            self.cache.set(key, value)
+        except (OSError, pickle.PicklingError):
+            pass
+        return value
 
     def set_run_info(self, indices: list[int], **fields) -> None:
         """Change the type, level, calibration set or volume of some runs, as the

@@ -464,6 +464,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_theme = A("Dark theme", self.set_dark, None, checkable=True)
         self.act_theme.setChecked(self.dark)
         self.act_quit = A("Quit", self.close, "Ctrl+Q")
+        self.act_clear_cache = A("Clear results cache…", self.clear_results_cache, None,
+                                 "Delete the cached 🧹 layers and 🔍 detections that let projects reopen without recomputing")
 
     def _build_toolbars(self):
         tb = self.addToolBar("Main")
@@ -538,7 +540,7 @@ class MainWindow(QtWidgets.QMainWindow):
         f = m.addMenu("&File")
         for a in (self.act_open, self.act_open_files, None, self.act_open_project, self.act_save,
                   self.act_save_as, None, self.act_sequence, self.act_save_sequence, self.act_targets, self.act_levels,
-                  None, self.act_export, self.act_export_figure, None, self.act_quit):
+                  None, self.act_export, self.act_export_figure, None, self.act_clear_cache, self.act_quit):
             f.addSeparator() if a is None else f.addAction(a)
         e = m.addMenu("&Edit")
         e.addAction(self.act_undo)
@@ -889,6 +891,20 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.error("Couldn't read the target table", str(exc))
                 return
             self.fix_phase()
+
+    def clear_results_cache(self):
+        cache = self.project.cache
+        if cache is None:
+            self.say("No results cache in use")
+            return
+        size = cache.size() / 1e9
+        answer = QtWidgets.QMessageBox.question(
+            self, "Clear results cache",
+            f"Delete {size:.1f} GB of cached background layers and peak detections in {cache.dir}?\n"
+            "Nothing in any project changes; they are recomputed when next needed.")
+        if answer == QtWidgets.QMessageBox.StandardButton.Yes:
+            cache.clear()
+            self.say(f"Cleared {size:.1f} GB of cached results")
 
     def save_sequence_dialog(self, path=None):
         """Write every run's type, level, calibration set and volume (as set in the Runs table) to a sequence.csv."""

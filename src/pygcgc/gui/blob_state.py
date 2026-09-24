@@ -23,6 +23,7 @@ from dataclasses import replace
 from PySide6 import QtCore
 
 from ..core.background import storage_threshold
+from ..core.batch import _hash_key
 from ..core.candidates import CandidateSettings
 from ..core.components import (ComponentDetectionSettings, ComponentGroup, ComponentSet,
                                detect_components)
@@ -164,16 +165,19 @@ class BlobState(QtCore.QObject):
             run, fold = self.project.base_run(idx), self.project.fold(idx)
             raw_floor = storage_threshold(e.run) / 3.0
             edits = list(self.edits.get(e.name, []))
+            base = self.project.base_key(idx)
+            key = _hash_key(base, method, (component_settings if method == MS_AWARE else settings).to_dict(),
+                            raw_floor) if base else None
 
             def work(token, progress, run=run, fold=fold, edits=edits,
-                     raw_floor=raw_floor, run_name=e.name):
+                     raw_floor=raw_floor, run_name=e.name, key=key):
                 if method == MS_AWARE:
                     def report(done, total):
                         progress(done, total, "Separating overlapping components")
-                    return detect_components(run, fold, run_name, component_settings,
-                                             floor=raw_floor, progress=report,
-                                             cancel=token.check)
-                blobs = find_blobs(run, fold, settings, floor=raw_floor)
+                    return self.project.cached(key, lambda: detect_components(
+                        run, fold, run_name, component_settings, floor=raw_floor, progress=report,
+                        cancel=token.check))
+                blobs = self.project.cached(key, lambda: find_blobs(run, fold, settings, floor=raw_floor))
                 return _replay(blobs, run, fold, edits)
 
             def done(result, e=e):

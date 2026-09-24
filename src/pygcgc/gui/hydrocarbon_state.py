@@ -1,7 +1,8 @@
 """⛓️ Hydrocarbon and isomer mapper state for the app.
 
-Keeps one `AlkaneSeries` per run (found by two clicks, or propagated from
-another run's), and a single `StencilSet` -- the "frame" -- drawn once
+Keeps one `AlkaneSeries` per run name (found by two clicks, or propagated
+from another run's; saved with the project), and a single `StencilSet` --
+the "frame" -- drawn once
 against whichever run's series was current, and lifted onto any other
 run's own series on demand. Finding/propagating the ladder isn't
 undoable (like 🔍's `find_blobs`, it's a detection result, not an edit);
@@ -13,8 +14,9 @@ from __future__ import annotations
 
 from PySide6 import QtCore
 
-from ..core.hydrocarbons import (HydrocarbonSettings, StencilSet, find_alkane_series, find_markers,
-                                 propagate_alkane_series, stencil_from_polygon)
+from ..core.hydrocarbons import (AlkaneHit, AlkaneSeries, HydrocarbonSettings, StencilSet,
+                                 find_alkane_series, find_markers, propagate_alkane_series,
+                                 stencil_from_polygon)
 
 
 class HydrocarbonState(QtCore.QObject):
@@ -25,19 +27,19 @@ class HydrocarbonState(QtCore.QObject):
         super().__init__(parent)
         self.project = project
         self.settings = HydrocarbonSettings()
-        self.series: dict = {}          # RunEntry -> AlkaneSeries
+        self.series: dict[str, AlkaneSeries] = {}     # run name -> ladder
         self.stencils = StencilSet(name="frame")
         self.running = False
 
     def forget_runs(self, entries) -> None:
         for e in entries:
-            self.series.pop(e, None)
+            self.series.pop(e.name, None)
 
     def series_for(self, index: int):
         p = self.project
         if not 0 <= index < len(p.entries):
             return None
-        return self.series.get(p.entries[index])
+        return self.series.get(p.entries[index].name)
 
     def _set_running(self, on: bool) -> None:
         self.running = on
@@ -55,8 +57,9 @@ class HydrocarbonState(QtCore.QObject):
             return find_alkane_series(run, fold, seeds, settings)
 
         def done(series):
-            self.series[e] = series
+            self.series[e.name] = series
             self._set_running(False)
+            p.request_autosave()
             self.changed.emit()
             if on_done:
                 on_done(series)
@@ -92,13 +95,14 @@ class HydrocarbonState(QtCore.QObject):
 
             def done(series, e=e):
                 if len(series):
-                    self.series[e] = series
+                    self.series[e.name] = series
                 else:
                     missing.append(e.name)
                 remaining.discard(e)
                 if not remaining:
                     self._set_running(False)
                     self.changed.emit()
+                    p.request_autosave()
                     if missing:
                         p.message.emit("No alkanes found in: " + ", ".join(missing))
                     if on_done:
@@ -151,13 +155,19 @@ class HydrocarbonState(QtCore.QObject):
 
     # -------------------------------------------------------------- files
     def to_dict(self) -> dict:
-        # Series aren't stored, the same way 🔍's blobs and 🧪's report
-        # aren't: find or propagate again after reopening.
-        return dict(settings=self.settings.to_dict(), stencils=self.stencils.to_dict())
+        # Ladders are small and cost clicks to make, so they are kept with the project.
+        series = {name: [dict(carbon=h.carbon, t1=h.t1, t2=h.t2, height=h.height, qual_ratios=list(h.qual_ratios),
+                              seeded=h.seeded, qual_ok=h.qual_ok) for h in s.hits.values()]
+                  for name, s in self.series.items()}
+        return dict(settings=self.settings.to_dict(), stencils=self.stencils.to_dict(), series=series)
 
     def from_dict(self, d: dict) -> None:
         d = d or {}
         self.settings = HydrocarbonSettings.from_dict(d.get("settings", {}))
         self.stencils = StencilSet.from_dict(d.get("stencils") or {"name": "frame", "stencils": []})
-        self.series = {}
+        self.series = {name: AlkaneSeries(hits={int(h["carbon"]): AlkaneHit(
+                           carbon=int(h["carbon"]), t1=float(h["t1"]), t2=float(h["t2"]), height=float(h["height"]),
+                           qual_ratios=tuple(h.get("qual_ratios", ())), seeded=bool(h.get("seeded")),
+                           qual_ok=bool(h.get("qual_ok", True))) for h in hits})
+                       for name, hits in (d.get("series") or {}).items()}
         self.changed.emit()
