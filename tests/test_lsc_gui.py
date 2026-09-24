@@ -93,6 +93,8 @@ def test_real_native_window_renders(qtbot):
     done=[]
     window.project.add_files(paths[:1],on_loaded=lambda:done.append(True))
     qtbot.waitUntil(lambda:bool(done) and window.view2d.result is not None,timeout=60000)
-    assert window.project.entries[0].run.n_scans == 215015
+    from pygcgc.core.io.markes_lsc import LSCFile
+    with LSCFile(paths[0], validate_index=False) as source:
+        assert window.project.entries[0].run.n_scans == len(source.offsets)
     assert not window.project.period_confirmed
     window.close()

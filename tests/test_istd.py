@@ -5,7 +5,7 @@ import pytest
 
 from pygcgc.core.istd import (IstdLibraryEntry, IstdMatchSettings, IstdReference, add_custom_entry,
                               build_report, find_istd_on_run, load_library, position_score,
-                              save_library, write_istd_report_csv)
+                              references_to_targets, save_library, write_istd_report_csv)
 from pygcgc.core.peaks import BlobSet
 
 
@@ -197,3 +197,19 @@ def test_build_report_and_csv_round_trip(tmp_path):
     path = write_istd_report_csv([match], tmp_path / "report.csv")
     text = path.read_text(encoding="utf-8")
     assert "sample" in text and "Acenaphthene-d10" in text
+
+
+# ------------------------------------------------------------------ to the target table
+def test_labelled_standards_become_istd_rows_of_a_target_table(tmp_path):
+    from pygcgc.core.targets import load_targets, write_targets_csv
+    # phenanthrene-d10's measured spectrum on the real runs: 188 base, then 189, 184, 187 (and 80 below 100)
+    ref = _reference(2708.2, 4.60, [80, 94, 184, 187, 188, 189], [30, 20, 18, 15, 100, 16],
+                     name="phenanthrene-d10")
+    (t,) = references_to_targets([ref])
+    assert t.role == "istd" and t.quant_ion == 188
+    assert t.qual_ions == (184, 189) or t.qual_ions == (189, 184)
+    assert t.qual_ratios == pytest.approx(tuple({184: 0.18, 189: 0.16}[m] for m in t.qual_ions))
+    assert (t.t1, t.t2) == (2708.2, 4.6)
+    # The rows round-trip through the target-table file and become phase anchors.
+    path = write_targets_csv([t], tmp_path / "target_table.csv")
+    assert load_targets(path)[0].quant_ion == 188

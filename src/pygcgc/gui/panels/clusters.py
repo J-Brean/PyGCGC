@@ -1,4 +1,4 @@
-﻿"""🧩 Peak-clustering panel.
+"""🧩 Peak-clustering panel.
 
 Settings on top (which runs, how fine the grouping is), the result
 underneath: one row per cluster, and, when several runs were pooled, how

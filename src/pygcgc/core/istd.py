@@ -37,6 +37,8 @@ tier reported per run so a weak match can be spotted and corrected by hand.
 4. **Confidence** (`IstdMatchSettings` tiers). A simple threshold on the
    combined score -- "high"/"medium"/"low", or "not found" when nothing
    at all falls inside the position window.
+5. **Target table** (`references_to_targets`). The labelled standards become
+   `role="istd"` rows, so the same peaks anchor the phase and normalise 🧪.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ import numpy as np
 
 from .align import AlignmentError, AnchorPoint, fit_alignment
 from .identify import IdentifySettings, build_inhouse_entry, build_library, search
+from .targets import Target
 
 PRESET_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "presets" / "istd_library.json"
 
@@ -291,6 +294,32 @@ def match_run(references: list[IstdReference], run_name: str, peaks,
                 expected = None
         out.append(find_istd_on_run(ref, run_name, peaks, settings, expected=expected,
                                     n_drift_anchors=len(others) if expected is not None else 0))
+    return out
+
+
+# ------------------------------------------------------------------ to the target table
+def references_to_targets(references: list[IstdReference], n_quals: int = 2, min_mz: int = 50) -> list[Target]:
+    """Target-table rows (role `istd`) for labelled internal standards, so the
+    same peaks anchor the phase and normalise quantification.
+
+    Ions are ranked by intensity times m/z, so a strong high-mass ion (a
+    molecular ion) beats a slightly stronger low-mass fragment that many
+    compounds share; ions below `min_mz` are left out. The best is the
+    quantifier, the next `n_quals` the qualifiers, with their measured ratios.
+    Positions are the labelled peak's own. Check the ions before relying on
+    them: an ion shared with a co-eluting compound makes a poor quantifier."""
+    out = []
+    for ref in references:
+        spec = np.clip(np.asarray(ref.spectrum, dtype=float), 0.0, None)
+        mz = ref.mz0 + np.arange(spec.size)
+        order = [j for j in np.argsort(spec * mz)[::-1] if mz[j] >= min_mz and spec[j] > 0][:n_quals + 1]
+        if not order:
+            continue
+        q, quals = order[0], order[1:]
+        out.append(Target(compound=ref.name, role="istd", quant_ion=int(mz[q]),
+                          qual_ions=tuple(int(mz[j]) for j in quals),
+                          qual_ratios=tuple(round(float(spec[j] / spec[q]), 3) for j in quals),
+                          t1=round(float(ref.t1), 1), t2=round(float(ref.t2), 3)))
     return out
 
 

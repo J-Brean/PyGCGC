@@ -206,7 +206,7 @@ def test_the_unit_and_region_count_are_saved(qtbot, cwin):
 
 
 def test_cluster_is_step_ten_after_quantify(qtbot, cwin):
-    assert cwin.workflow.keys()[-1] == "cluster"
+    assert cwin.workflow.keys()[-2:] == ["cluster", "istd"]
     assert cwin.step_actions["cluster"].text().lstrip("✓▸ ") == "10 🧩 Cluster"
     assert cwin.step_actions["quant"].text().lstrip("✓▸ ") == "9 🧪 Quantify"     # nothing renumbered
 

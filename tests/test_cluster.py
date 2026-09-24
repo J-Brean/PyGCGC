@@ -1,4 +1,4 @@
-﻿"""Unsupervised peak clustering: within a run, pooled across runs, and the
+"""Unsupervised peak clustering: within a run, pooled across runs, and the
 run-level statistics built on it."""
 
 import numpy as np

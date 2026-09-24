@@ -1,4 +1,4 @@
-﻿"""Unsupervised grouping of peaks, within one chromatogram and across many.
+"""Unsupervised grouping of peaks, within one chromatogram and across many.
 
 The idea in plain terms
 ------------------------

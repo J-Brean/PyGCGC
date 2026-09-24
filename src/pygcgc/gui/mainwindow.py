@@ -21,7 +21,8 @@ from ..core.segment import SegmentSettings
 from ..core.components import ComponentSet
 from ..core.peaktable import format_accounting, respectrum_components, signal_accounting
 from ..core.io import file_filter
-from ..core.istd import write_istd_report_csv
+from ..core.istd import references_to_targets, write_istd_report_csv
+from ..core.targets import write_targets_csv
 from .blob_state import LEGACY, MS_AWARE
 from .batch_dialog import BatchDialog
 from .commands import (ApplyBackground, ApplySiloxane, EditAlignment, EditBlobs, EditComponents, EditDecisions,
@@ -136,8 +137,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.compare = CompareView(self.align)
         self.compare.image_source = self._compare_image
         self.tabs.addTab(self.compare, "Compare")
-        i3d = self.tabs.addTab(QtWidgets.QLabel("Arrives in milestone 8"), "3D")
-        self.tabs.setTabEnabled(i3d, False)
         self.setCentralWidget(self.tabs)
 
         # ---- docks
@@ -474,7 +473,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addAction(self.act_open)
         tb.addSeparator()
         for key in ("fold", "align", "background", "blobs", "siloxane", "hydro", "classify", "identify", "quant",
-                    "cluster"):
+                    "cluster", "istd"):
             tb.addAction(self.step_actions[key])
         tb.addSeparator()
         tb.addAction(self.act_overlap)
@@ -628,7 +627,8 @@ class MainWindow(QtWidgets.QMainWindow):
          "classify": self.start_classify,
          "identify": self._go_identify,
          "quant": self.run_quant,
-         "cluster": self.start_cluster}[key]()
+         "cluster": self.start_cluster,
+         "istd": self.propagate_istd}[key]()
 
     def reset_layout(self):
         self.restoreState(self._default_layout)
@@ -803,6 +803,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.istd_panel.addCustomRequested.connect(self.istd.add_custom)
         self.istd_panel.removeFromLibraryRequested.connect(self.istd.remove_from_library)
         self.istd_panel.exportRequested.connect(self.export_istd_report)
+        self.istd_panel.targetsRequested.connect(lambda: self.istd_to_targets())
         self.istd_panel.rowActivated.connect(self.relabel_istd)
         # Layers tab: raw image visibility/alpha, and mirrors of the blob, stencil and
         # cluster overlay toggles that live in the top bar and the Cluster panel.
@@ -2848,6 +2849,31 @@ class MainWindow(QtWidgets.QMainWindow):
         if path:
             write_istd_report_csv(matches, path)
             self.say(f"Saved {Path(path).name}")
+
+    def istd_to_targets(self, path=None):
+        """Write the labelled internal standards into a target table (replacing rows of the
+        same name, keeping every other row of the table already loaded) and load it."""
+        new = references_to_targets(list(self.istd.references.values()))
+        if not new:
+            self.say("Label at least one internal standard first")
+            return
+        if path is None:
+            if self.project.targets_path is not None:
+                start = str(self.project.targets_path)
+            elif self.project.entries:
+                start = str(Path(self.project.entries[0].path).parent / "target_table.csv")
+            else:
+                start = "target_table.csv"
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Save the internal standards as a target table", start, "CSV (*.csv)")
+            if not path:
+                return
+        names = {t.compound for t in new}
+        kept = [t for t in (self.quant.targets or []) if t.compound not in names]
+        write_targets_csv(new + kept, path)
+        self.project.load_targets(path, estimate=False)
+        self.say(f"🏷️ {len(new)} internal standard(s) written to {Path(path).name} and loaded "
+                 f"({len(kept)} other row(s) kept). Check each quantifier ion before quantifying.")
 
     def _istd_changed(self):
         self.istd_panel.set_current_run(self.project.entries[self.index].name if self.index >= 0 else None)

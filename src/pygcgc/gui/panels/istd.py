@@ -32,6 +32,7 @@ class IstdPanel(QtWidgets.QWidget):
     addCustomRequested = QtCore.Signal(str, str, str)   # name, cas, product_code
     removeFromLibraryRequested = QtCore.Signal(str)
     exportRequested = QtCore.Signal()
+    targetsRequested = QtCore.Signal()            # write the labelled standards as target-table rows
     rowActivated = QtCore.Signal(str, str)        # run, IS name -- re-label that one run by hand
 
     def __init__(self, parent=None):
@@ -67,6 +68,10 @@ class IstdPanel(QtWidgets.QWidget):
         self.find_btn.clicked.connect(self.findAllRequested)
         self.export_btn = QtWidgets.QPushButton("Export report (CSV)…")
         self.export_btn.clicked.connect(self.exportRequested)
+        self.targets_btn = QtWidgets.QPushButton("📋 Use as target table…")
+        self.targets_btn.setToolTip("Write the labelled standards as internal-standard rows of a target table and "
+                                    "load it, so they anchor the phase and normalise 🧪 quantification")
+        self.targets_btn.clicked.connect(self.targetsRequested)
 
         self.summary = QtWidgets.QLabel("Label an internal standard, then find it on every other run.")
         self.summary.setWordWrap(True)
@@ -105,7 +110,10 @@ class IstdPanel(QtWidgets.QWidget):
         lay.addWidget(self.summary)
         lay.addWidget(QtWidgets.QLabel("Confidence report"))
         lay.addWidget(self.report_table, 2)
-        lay.addWidget(self.export_btn)
+        row3 = QtWidgets.QHBoxLayout()
+        row3.addWidget(self.export_btn)
+        row3.addWidget(self.targets_btn)
+        lay.addLayout(row3)
 
     # ------------------------------------------------------------- wiring
     def set_istd(self, istd) -> None:
@@ -172,6 +180,7 @@ class IstdPanel(QtWidgets.QWidget):
                 self.library_table.selectRow(hit[0].row())
         self.label_btn.setEnabled(bool(self.selected_name()) and self.current_run is not None)
         self.find_btn.setEnabled(bool(self.istd.references))
+        self.targets_btn.setEnabled(bool(self.istd.references))
 
         matches = self.istd.all_matches()
         self.report_table.setRowCount(len(matches))

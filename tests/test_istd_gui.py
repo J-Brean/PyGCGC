@@ -103,3 +103,31 @@ def test_ms_aware_labelling_round_trips_through_respectrum(qtbot, window):
     w.propagate_istd()
     qtbot.waitUntil(lambda: "RUN_B" in w.istd.matches and name in w.istd.matches["RUN_B"], timeout=TIMEOUT)
     assert w.istd.matches["RUN_B"][name].tier in ("high", "medium")
+
+
+def test_go_on_the_internal_standard_step_searches_every_run(qtbot, window):
+    # Go on step 11 used to raise KeyError: the step had no entry in MainWindow.go.
+    w = window
+    w.workflow.show_step("istd")
+    w.go("istd")                                   # nothing labelled yet: says so, does not crash
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.was_run, timeout=TIMEOUT)
+    name = _label_first_library_row(w, w.project.index_of("RUN_A"), 50)
+    qtbot.waitUntil(lambda: name in w.istd.references, timeout=TIMEOUT)
+    w.go("istd")
+    qtbot.waitUntil(lambda: "RUN_B" in w.istd.matches, timeout=TIMEOUT)
+    assert "istd" in [a for a in w.step_actions]
+
+
+def test_labelled_standards_become_the_target_table(qtbot, window, tmp_path):
+    w = window
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.was_run, timeout=TIMEOUT)
+    name = _label_first_library_row(w, w.project.index_of("RUN_A"), 50)
+    qtbot.waitUntil(lambda: name in w.istd.references, timeout=TIMEOUT)
+    before = {t.compound for t in w.quant.targets}          # the synthetic folder's own table
+    w.istd_to_targets(path=tmp_path / "targets.csv")
+    rows = {t.compound: t for t in w.quant.targets}
+    assert rows[name].role == "istd" and rows[name].quant_ion == 50
+    assert before - {name} <= set(rows)                      # the other rows are kept
+    assert name in [a.name for a in w.project.anchors]
