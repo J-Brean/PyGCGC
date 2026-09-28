@@ -30,6 +30,7 @@ from .commands import (ApplyBackground, ApplySiloxane, EditAlignment, EditBlobs,
 from .dialogs import QuantSettingsDialog, SettingsDialog
 from .identify_dialog import IdentifyDialog
 from .jobs import JobManager, JobsPanel
+from .fit_map_dialog import FitMapWindow
 from .overlap_dialog import OverlapDialog
 from .panels import FoldPanel, LayersPanel, RunsPanel
 from .panels.align import AlignPanel
@@ -1638,14 +1639,28 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.blobs.method == MS_AWARE:
             component_set = self.blobs.components_for(self.index)
             if component_set is not None and component_set.components:
+                # Pick the blob whose outline the click falls inside, measuring distance in
+                # that blob's own fitted widths (its 10% outline is 2.1 widths out), and in
+                # display coordinates so wrapped blobs are picked where they are drawn.
                 fold = self.project.fold(self.index)
-                t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
+                period, pitch = fold.spec.period, fold.row_pitch
+                click = self.view2d.last_click
+                clicked = self.view2d.pixel_at(*click) if click is not None else None
+                if clicked is not None and clicked[1] == col:
+                    x, y = click                      # exact position, not just the column
+                else:
+                    x, y = float(fold.t1[col] + 0.5 * period) / 60.0, float(t2)
                 components = component_set.components
-                distance = np.asarray([
-                    np.hypot((component.t1 - t1) / 60.0, (component.t2 - t2) / 0.5)
-                    for component in components])
+                shown_x, shown_y = self.view2d._to_display([c.t1 for c in components],
+                                                           [c.t2 for c in components])
+                sigma_col = np.asarray([c.sigma_col for c in components], dtype=float)
+                sigma_row = np.asarray([c.sigma_row for c in components], dtype=float)
+                sigma_col = np.where(np.isfinite(sigma_col) & (sigma_col > 0), sigma_col, 1.0)
+                sigma_row = np.where(np.isfinite(sigma_row) & (sigma_row > 0), sigma_row, 3.0)
+                distance = np.hypot((shown_x - x) * 60.0 / period / sigma_col,
+                                    (shown_y - y) / pitch / sigma_row)
                 nearest = int(np.argmin(distance))
-                if distance[nearest] < 1.5:
+                if distance[nearest] <= 3.0:
                     # select_component/select_row suppress their own selectionChanged signal
                     # (it exists for genuine table clicks), so the overlay and spectrum are
                     # refreshed here explicitly.
@@ -1893,11 +1908,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 (np.array([]), np.array([])), (np.array([]), np.array([])))
             colours = ((0, 220, 255), (255, 105, 180), (255, 205, 60),
                        (120, 235, 120), (190, 130, 255), (255, 140, 70))
-            selected_regions = set(self.blobs_panel.selected_region_indices())
+            selected = self.blobs_panel.selected_component_ids()
             component_overlays, used = [], set()
             if component_set is not None:
                 for group in component_set.groups:
-                    for component_index, _component in enumerate(group.components):
+                    for component_index, component in enumerate(group.components):
                         colour = colours[component_index % len(colours)]
                         for fraction, style in ((0.10, QtCore.Qt.PenStyle.SolidLine),
                                                 (0.50, QtCore.Qt.PenStyle.DotLine)):
@@ -1907,7 +1922,9 @@ class MainWindow(QtWidgets.QMainWindow):
                                 # Any width above 1 sends Qt down its slow wide-line stroker:
                                 # ~1,600 contours at 1.8 cost 0.1-1.7 s per pan frame, at 1 about
                                 # 8 ms. Only the few selected contours are drawn wide.
-                                "width": 3.0 if group.region_index in selected_regions else 1.0})
+                                # The selected blob alone is drawn wide, not every blob fitted
+                                # in the same group as it.
+                                "width": 3.0 if component.id in selected else 1.0})
             # forget contours of groups that no longer exist (re-fits replace group objects)
             self._contour_cache = {k: v for k, v in getattr(self, '_contour_cache', {}).items() if k in used}
             self.view2d.set_component_overlay(component_overlays + self._class_overlays() + self._cluster_overlays())
@@ -2093,21 +2110,33 @@ class MainWindow(QtWidgets.QMainWindow):
         wrap = self.blobs.component_settings.candidates.wrap_below_s
 
         def work(token, progress):
-            _peaks, model, footprint = respectrum_components(
+            _peaks, model_tic, footprint = respectrum_components(
                 base_run, fold, component_set, wrap_below_s=wrap,
                 progress=lambda done, total: progress(done, total, "Fitting full spectra"),
                 cancel=token.check)
-            return signal_accounting(fold.tic_image(base_run), model, footprint, fold.row_pitch,
-                                     fold.spec.period, float(fold.t1[0]))
+            tic = fold.tic_image(base_run)
+            report = signal_accounting(tic, model_tic, footprint, fold.row_pitch,
+                                       fold.spec.period, float(fold.t1[0]))
+            model, _mask = model_on_frame(model_tic, footprint, tic.shape[0])
+            outlines = [group.contour(j, 0.10) for group in component_set.groups
+                        for j in range(len(group.components))]
+            return report, tic, model, outlines
 
-        def done(report):
+        def done(out):
+            report, tic, model, outlines = out
             self._accounting = getattr(self, "_accounting", {})
             self._accounting[entry.name] = report
             text = format_accounting(report)
             self.blobs_panel.show_accounting(text)
             self.say("📊 " + text)
+            if getattr(self, "fit_map", None) is None:
+                self.fit_map = FitMapWindow(self)
+            self.fit_map.set_data(entry.name, tic, model, float(fold.t1[0]), fold.spec.period,
+                                  fold.row_pitch, report, outlines)
+            self.fit_map.show()
+            self.fit_map.raise_()
 
-        self.project.jobs.submit(f"📊 Signal accounting: {entry.name}", work, done,
+        self.project.jobs.submit(f"📊 Fit and residual map: {entry.name}", work, done,
                                  lambda message: self.say(f"📊 {entry.name}: {message}"))
     def export_components(self, path=None) -> None:
         """Export the current run's component estimates and their warnings."""

@@ -65,8 +65,9 @@ class BlobsPanel(QtWidgets.QWidget):
         self.delete_btn.clicked.connect(self._delete_selected)
         self.export_btn = QtWidgets.QPushButton("Export peaks CSV…")
         self.export_btn.clicked.connect(self.exportRequested)
-        self.account_btn = QtWidgets.QPushButton("📊 Signal accounting")
-        self.account_btn.setToolTip("How much of the run's total signal the fitted peaks explain, and where the rest is.")
+        self.account_btn = QtWidgets.QPushButton("📊 Fit and residual map…")
+        self.account_btn.setToolTip("Opens a window with the observed chromatogram, the sum of the fitted blobs and "
+                                    "what is left over, and reports how much of the signal the blobs explain.")
         self.account_btn.clicked.connect(self.accountingRequested)
         self.accounting = QtWidgets.QLabel("")
         self.accounting.setWordWrap(True)
@@ -270,6 +271,11 @@ class BlobsPanel(QtWidgets.QWidget):
 
     def group_for_row(self, row: int):
         return self._row_groups[row] if 0 <= row < len(self._row_groups) else None
+
+    def selected_component_ids(self) -> set[str]:
+        """Ids of the selected fitted blobs: each one is its own thing, even inside one fitted group."""
+        return {self._row_components[row].id for row in self.selected_indices()
+                if 0 <= row < len(self._row_components) and self._row_components[row] is not None}
 
     def selected_region_indices(self) -> list[int]:
         return sorted({self._row_regions[row] for row in self.selected_indices()
