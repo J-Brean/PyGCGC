@@ -213,6 +213,42 @@ A tile is flagged amber when:
 
 Changing settings marks the results out of date; the banner in the Results panel reruns them.
 
+### 📈 Calibration builder
+
+**📈 Calibrate** on the main toolbar opens a separate window for building curves by hand from a set of standard runs. It keeps its own runs, fold, 🧹 layers and 🔍 blobs, apart from the main window's, and never writes the main project's file. Its guide line lists the steps and ticks them off.
+
+1. **Runs.** 📂 Open runs… (or From main window…, which ticks the runs typed as calibration). The period is the main window's, or the one in a `method.json` beside the runs; each run's phase is estimated, and 🔄 Phase estimates it again.
+2. **Compounds.** Load compounds… reads a CSV; a `target_table.csv` works as it is. Or click peaks with *Click: add a compound here* or *add an internal standard here*: the position snaps to the blob clicked. Edit any cell of the table: name, t₁, t₂, IS, quantifier ion (blank for the whole blob) and *Divide by* (the nearest internal standard unless you choose one).
+3. **Amounts.** One column per run. *Same amount in every run…* fills a row, which suits an internal standard. *Amounts in* sets the unit for labels and exports.
+4. **▶ Clean and find blobs.** 🧹 then 🔍 (TIC blobs) on every run, with the main window's settings to start with (🧹 Settings…, 🔍 Settings… change them). Both are cached, so running it again is quick. Each compound is matched in every run to the blob holding its position, otherwise to the nearest apex within 20 s of t₁ and 0.25 s of t₂ (*Matching…*).
+5. **➗ Normalise to IS.** Each compound's signal (blob volume, or its quantifier ion) is divided by its internal standard's in the same run. Everything after this updates at once.
+6. **Curves tab.** One curve per compound, with its residuals and a table of its points.
+   - Click a point (or a row) to select it. **Leave out** (or Delete, or untick *Use*) takes it out of the curve; **Put back** returns it. Retype the amount in the table to move it; blank removes it.
+   - **Show in chromatogram** opens that run with the compound selected and *Click: match the selected compound to this blob*. Click the right blob; a click away from every blob adds one there. **No peak here** removes the run's point; **Automatic match** forgets the hand match. Hand matches carry a ✋ on the chromatogram.
+   - Weights, model and *Through zero* can be set per compound, as in the Calibration tab. *x = amount / IS amount* is for an internal standard not added at the same amount to every run.
+
+Ctrl+Z and Ctrl+Shift+Z undo and redo every change to compounds, amounts, matches and curves. Blobs added by a click stay added.
+
+**Files.** Save compounds… writes the table with its amounts. Save session… writes everything needed to carry on (runs, fold, settings, compounds, hand matches, left-out points and curve choices); Open session… reads the runs again and replays it. 📤 Export… writes four CSV tables:
+
+| File | Contents |
+|---|---|
+| `calibration_curves.csv` | one row per compound: internal standard, model, weights, coefficients, R², Mandel and intercept p, worst back-calculation, pass or fail, LOD, LOQ, points left out and why |
+| `calibration_points.csv` | every compound in every run: amount, matched blob position, whether matched by hand, signal, internal standard and its signal, ratio, whether in the curve, back-calculated amount and error |
+| `calibration_compounds.csv` | the compound table, readable by Load compounds… |
+| `calibration_normalised_blobs.csv` | every blob in every run divided by the nearest matched internal standard in that run (whole-blob volumes) |
+
+A compound table looks like this. Amount columns are named after the runs, or after the part of the run name that differs between them (`L1` for `CAL_L1_mon`); `amount` applies to every run without its own value.
+
+```
+compound,t1_s,t2_s,role,quant_ion,istd,amount,L1,L2,L3
+phenanthrene-d10,2708,4.60,istd,188,,2.5,,,
+phenanthrene,2715,4.55,target,178,phenanthrene-d10,,0.1,0.5,1.0
+fluorene,2310,4.10,target,,,,0.1,0.5,1.0
+```
+
+`t1_min` may replace `t1_s`. The curves use the same fitting as 🧪 (`core/calibration.py`); the builder's own logic is in `core/calbuilder.py`.
+
 ### 📍 Alignment and compare
 
 Retention drifts a little from run to run: a few seconds in t1, a few hundredths of a second in t2. Alignment fits a map from one run's true coordinates onto a chosen reference run's, so images can be resampled onto the same grid and compared pixel for pixel.

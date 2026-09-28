@@ -6,6 +6,20 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**📈 Calibration builder, 2026-09-28** (branch `calibrate-2026-09-28`). A separate window (📈 Calibrate
+on the main toolbar) for a set of standard runs with its own project: compounds from a CSV (a
+`target_table.csv` also reads) or from clicks on the chromatogram, amounts per run, internal
+standards ticked in the table; ▶ runs 🧹 and legacy 🔍 blobs; each compound is matched to the blob
+holding its position or the nearest apex within 20 s / 0.25 s; ➗ divides by the named or nearest
+internal standard; one curve per compound with points left out, put back, retyped or rematched by
+a click (a click off every blob adds one). Hand matches are stored as positions, so they survive
+recomputing blobs. Sessions save as JSON; results export as four CSVs. Science in
+`core/calbuilder.py`, curves by the existing `fit_calibration`. Internal standards with a
+quantifier ion anchor the window's phase. Checked on synthetic standards (24 new tests) and, for
+matching only, on two real 70 eV runs with the five labelled internal standards (all found in both;
+5,000 to 6,000 blobs per run, outlines drawn in 0.08 s by a vectorised pass instead of 10 s blob by
+blob). Not yet run on a real calibration sequence, and the curves do not yet feed 🧪.
+
 **After the audit, 2026-09-24** (agreed with James). 🫧 blobs are scored against both measured
 references (bleed and cyclic) and keep the larger score; the threshold is 0.15 and blocking removes
 the siloxane ions only (on two runs: every siloxane-like blob caught, no hydrocarbon signal lost;

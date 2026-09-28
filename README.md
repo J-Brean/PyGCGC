@@ -27,6 +27,7 @@ right-hand column says what has been checked on real runs; the details are in
 | 9 🧪 Quantify | targets, internal standards, weighted calibration, bracketing | Planted standards in real matrix: within a few % on selective ions, 15–60% off on busy ones |
 | 10 🧩 Cluster | peaks or pixels grouped by spectrum, within and across runs | Checked on one earlier run; not on a sample set |
 | 11 🏷️ IS | label internal standards, find them on every run, write them to the target table | Five deuterated standards found with high confidence on all four runs |
+| 📈 Calibrate | separate window: standard runs, compounds from a table or clicks, IS-normalised blobs, curves edited point by point | Synthetic standards only; no real calibration sequence yet |
 | 🗂️ Batch, 📤 Reports | cached parallel pipeline, feature table, QC, PCA, volcano, Excel/HTML/PDF | Ran end to end on nine real-matrix runs |
 
 ## Install
