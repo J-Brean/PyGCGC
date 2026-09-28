@@ -16,14 +16,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+from scipy import ndimage as ndi
 from skimage.measure import find_contours
 from threadpoolctl import threadpool_limits
 
 from .candidates import (CandidateRegion, CandidateSet, CandidateSettings, candidate_cube,
                          candidate_regions, find_candidates)
 from .modelselect import select_components, separation_in_widths
-from .overlap import (BlobCube, OverlapFit, assess_components, component_profiles, fit_overlap,
-                      fit_shapes_fast, initialise_overlap, refit_spectra)
+from .overlap import (BlobCube, OverlapFit, _shape, assess_components, component_profiles,
+                      fit_overlap, fit_shapes_fast, initialise_overlap, refit_spectra,
+                      shape_params)
 from .peaks import PeakSettings, make_frame
 
 
@@ -207,18 +209,52 @@ class ComponentGroup:
 
     def contour(self, component_index: int, fraction: float = 0.10
                 ) -> tuple[np.ndarray, np.ndarray]:
-        """Return NaN-separated global-time contours for one component."""
-        contribution = self.contribution_map(component_index)
-        maximum = float(contribution.max()) if contribution.size else 0.0
-        if maximum <= 0:
+        """Global-time outline of one component at `fraction` of its own peak height.
+
+        The outline is taken from the fitted shape itself, not traced on the pixel
+        grid: one pixel is a whole modulation in t1, so a traced outline had only a
+        few points across and looked angular. A Gaussian's outline is an exact
+        ellipse. Other analytic shapes are traced on a grid 20 times finer in t1
+        and 4 times finer in t2, and a measured template is interpolated onto that
+        grid first. The outline is not cut off at the calculation window's edge.
+        Returned as NaN-separated (start, end, NaN) triples, which the drawing code
+        moves edge by edge across the t2 wrap.
+        """
+        component = self.components[component_index]
+        if float(np.sum(component.spectrum)) <= 0 or not 0 < fraction < 1:
             return np.array([]), np.array([])
+        curves = []                                   # (rows, cols) in window pixel units
+        if self.model == "gaussian" and not component.profile.size:
+            radius = np.sqrt(-2.0 * np.log(fraction))
+            angle = np.linspace(0.0, 2.0 * np.pi, 97)
+            curves.append((component.row0 + radius * component.sigma_row * np.sin(angle),
+                           component.col0 + radius * component.sigma_col * np.cos(angle)))
+        else:
+            step_r, step_c = 0.25, 0.05
+            if component.profile.size:
+                profile = ndi.zoom(component.profile, (1 / step_r, 1 / step_c), order=3)
+                offset = (0.0, 0.0)
+                scale = ((profile.shape[0] - 1) / max(component.profile.shape[0] - 1, 1),
+                         (profile.shape[1] - 1) / max(component.profile.shape[1] - 1, 1))
+            else:
+                rows = np.arange(-4.0, self.n_rows + 4.0, step_r)
+                cols = np.arange(-2.0, self.n_cols + 2.0, step_c)
+                rr, cc = np.meshgrid(rows, cols, indexing="ij")
+                profile = _shape(self.model, rr.ravel(), cc.ravel(),
+                                 shape_params(self.model, component)).reshape(rr.shape)
+                offset, scale = (rows[0], cols[0]), (1 / step_r, 1 / step_c)
+            maximum = float(profile.max()) if profile.size else 0.0
+            if maximum <= 0:
+                return np.array([]), np.array([])
+            for trace in find_contours(profile, fraction * maximum):
+                curves.append((offset[0] + trace[:, 0] / scale[0],
+                               offset[1] + trace[:, 1] / scale[1]))
         xs, ys = [], []
-        for contour in find_contours(contribution, fraction * maximum):
-            if len(contour) < 2:
+        for rows, cols in curves:
+            if len(rows) < 2:
                 continue
-            x = self.t1_start + (self.col0 + contour[:, 1]) * self.period
-            y = (self.row0 + contour[:, 0]) * self.pitch
-            # (start, end, NaN) triples: the drawing code moves whole edges across the wrap
+            x = self.t1_start + (self.col0 + cols + 0.5) * self.period   # mid-modulation, as BlobCube.t1_of
+            y = (self.row0 + rows) * self.pitch
             gap = np.full(len(x) - 1, np.nan)
             xs.append(np.column_stack((x[:-1], x[1:], gap)).ravel())
             ys.append(np.column_stack((y[:-1], y[1:], gap)).ravel())
