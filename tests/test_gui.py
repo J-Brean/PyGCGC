@@ -921,10 +921,11 @@ def test_clicking_an_ms_aware_component_shows_its_own_full_ion_spectrum(qtbot, w
     w.act_blob_overlay.setChecked(True)
     component_set = w.blobs.components_for(i)
     component = component_set.components[0]
-    fold = w.project.fold(i)
-    col, t2 = fold.to_fold(component.t1)
-    w._point_clicked(int(col), float(t2))
-    assert w.blobs_panel.selected_indices() != []
+    # click on the blob itself, as the 2D view reports a click: its position plus pixel
+    w.view2d.last_click = (component.t1 / 60.0, component.t2)
+    row, col = w.view2d.pixel_at(*w.view2d.last_click)
+    w._point_clicked(int(col), row * w.project.fold(i).row_pitch)
+    assert w.blobs_panel.selected_component_ids() == {component.id}
     qtbot.waitUntil(lambda: w.spectrum.mz.size > 0, timeout=TIMEOUT)
     assert "fitted peak" in w.spectrum.title
     assert f"{component.t1 / 60:.3f}" in w.spectrum.title
