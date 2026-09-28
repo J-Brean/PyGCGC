@@ -139,6 +139,9 @@ class Project(QtCore.QObject):
         self.blobs.changed.connect(self.clusters.mark_stale)
         # 🏷️ internal standards (click-labelled, matched by position and spectrum)
         self.istd = IstdState(self, self)
+        # 🏷️ confident library hits, run name -> [(t1, t2, name)], for ⚖️ to pair peaks by
+        # identity. Session only: identification itself is a one-shot dialog and is not saved.
+        self.identifications: dict[str, list[tuple[float, float, str]]] = {}
         # autosave: written silently once a step actually finishes, never mid-preview
         self._autosave_timer = QtCore.QTimer(self)
         self._autosave_timer.setSingleShot(True)

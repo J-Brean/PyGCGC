@@ -46,7 +46,7 @@ from .project import Project, SIDECAR_NAME
 from .render import Renderer
 from .theme import apply_theme
 from .workflow import IdentifyStepPanel, QuantStepPanel, WorkflowPanel
-from .views.compare import CompareView
+from .compare_window import CompareWindow
 from .views.image2d import SCALE_NAMES, SCALES, ChromatogramView
 from .views.review import ReviewView
 from .views.spectrum import SpectrumView
@@ -62,9 +62,10 @@ SHORTCUTS = [
     ("I", "In review: redraw the selected peak's integration footprint (then Ctrl+Enter)"),
     ("Space", "Show raw or 🧹 cleaned data"),
     ("O", "Show or hide 🧪 peak outlines and labels"),
-    ("3 / 4 / 5", "🧪 Review gallery / calibration curves / 📍 Compare"),
+    ("3 / 4", "🧪 Review gallery / calibration curves"),
+    ("5", "⚖️ Compare two runs: images, pixel spectra, peaks and classes"),
     ("A", "📍 Add anchor: click the reference, then the same peak here"),
-    ("B", "Jump to Compare in blink mode"),
+    ("B", "⚖️ Compare in blink mode"),
     ("G", "🔍 Merge the selected blobs"),
     ("Y / N / U", "In review or results: accept / reject / clear"),
     ("P", "In review: pick a different peak by clicking the 2D view"),
@@ -134,9 +135,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.calibration_panel = CalibrationPanel()
         self.tabs.addTab(self.review, "🧪 Review")
         self.tabs.addTab(self.calibration_panel, "Calibration")
-        self.compare = CompareView(self.align)
-        self.compare.image_source = self._compare_image
-        self.tabs.addTab(self.compare, "Compare")
+        self.compare_window: CompareWindow | None = None     # built on first use (⚖️)
         self.setCentralWidget(self.tabs)
 
         # ---- docks
@@ -368,8 +367,11 @@ class MainWindow(QtWidgets.QMainWindow):
                                  "Reference run, anchors, and batch alignment")
         self.act_add_anchor = A("➕ Add anchor", self.start_add_anchor, "A",
                                 "Click the peak on the reference, then the same peak here")
-        self.act_compare = A("Compare", lambda: self.tabs.setCurrentWidget(self.compare), "5")
-        self.act_blink = A("Blink compare", self._go_blink, "B", "Jump to Compare in blink mode")
+        self.act_compare = A("⚖️ Compare", lambda: self.show_compare_window(), "5",
+                             "Compare two runs in their own window: images, pixel-by-pixel spectra, "
+                             "paired peaks (identified ones first) and compound classes. Alignment is optional.")
+        self.act_blink = A("Blink compare", lambda: self.show_compare_window("blink"), "B",
+                           "⚖️ Compare in blink mode")
         self.act_quant = A("🧪 Quantify", self.run_quant, None,
                            "Find every target and internal standard in every run, fit the calibrations "
                            "and quantify the samples")
@@ -480,6 +482,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     "cluster", "istd"):
             tb.addAction(self.step_actions[key])
         tb.addSeparator()
+        tb.addAction(self.act_compare)
         tb.addAction(self.act_overlap)
         tb.addAction(self.act_batch)
         tb.addAction(self.act_export_figure)
@@ -1043,6 +1046,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ion_box.setEditText(expr.text())
         if expr.is_ratio and self.view2d.scale == "log":
             self.set_scale("linear")
+        if self.compare_window is not None:
+            self.compare_window.expression_changed()
         return True
 
     def ion_clicked(self, mz: int, add: bool):
@@ -1694,12 +1699,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def show_align_panel(self):
         self.workflow.show_step("align")
 
-    def _go_blink(self):
-        self.tabs.setCurrentWidget(self.compare)
-        i = self.compare.mode.findData("blink")
-        if i >= 0:
-            self.compare.mode.setCurrentIndex(i)
-
     def _current_single_ion(self) -> int:
         expr = self.renderer.expr
         if expr.numerator and len(expr.numerator) == 1 and not expr.is_ratio:
@@ -1793,24 +1792,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.say("Pick a reference run first (📍 Align)")
             return
         self.align.propagate_to(loaded, on_done=lambda: self.workflow.mark_done(
-            "align", "Anchors searched on every run. Check the residuals, or the Compare tab (5)."))
-
-    def _compare_image(self, index: int):
-        if index is None or not (0 <= index < len(self.project.entries)) or not self.align.reference:
-            return None
-        img = self.align.image_for(index, self.renderer.expr, extended=False)
-        if img is None:
-            return None
-        ref_i = self.project.index_of(self.align.reference)
-        ref_fold = self.project.fold(ref_i)
-        return img, ref_fold.t1, ref_fold.row_pitch, ref_fold.spec.period, self.project.entries[index].name
+            "align", "Anchors searched on every run. Check the residuals, or ⚖️ Compare (5)."))
 
     def _align_changed(self):
         self.align_panel.refresh_runs(self.project.entries)
         self.align_panel.set_current_run(self.project.entries[self.index].name if self.index >= 0 else None)
-        ref_i = self.project.index_of(self.align.reference) if self.align.reference else -1
-        self.compare.set_runs(self.index, ref_i if ref_i is not None else -1)
-        has = self.index >= 0 and self.renderer.aligned_available(self.index)
+        has =self.index >= 0 and self.renderer.aligned_available(self.index)
         self.act_aligned.setEnabled(has)
         if not has and self.act_aligned.isChecked():
             self.act_aligned.setChecked(False)
@@ -2784,6 +2771,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.batch_dialog.show()
         self.batch_dialog.raise_()
         self.batch_dialog.activateWindow()
+
+    # ================================================================ ⚖️
+    def show_compare_window(self, mode: str | None = None):
+        """Open ⚖️ Compare with A the 📍 reference (or the open run) and B the open run (or the next)."""
+        first = self.compare_window is None
+        if first:
+            self.compare_window = CompareWindow(self.project, lambda: self.renderer.expr, parent=self)
+            self.compare_window.navigateRequested.connect(self._batch_navigate)
+            apply_theme(self, self.dark)
+        w = self.compare_window
+        if first and 0 <= self.index < len(self.project.entries):
+            current = self.project.entries[self.index].name
+            loaded = [self.project.entries[i].name for i in self.project.loaded()]
+            ref = self.align.reference if self.align.reference in loaded else None
+            a = ref if ref and ref != current else current
+            b = current if a != current else next((n for n in loaded if n != a), a)
+            w.set_pair(a, b)
+        w.show()
+        if mode is not None:
+            w.show_images(mode)
+        w.raise_()
+        w.activateWindow()
 
     def _batch_navigate(self, run_name: str, t1: float, t2: float):
         i = self.project.index_of(run_name)

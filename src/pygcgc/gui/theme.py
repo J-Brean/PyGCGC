@@ -46,7 +46,7 @@ def apply_theme(window, dark: bool) -> None:
     bg = c["plot"]
     for view in (window.view2d, window.view1d, window.spectrum,
                  getattr(window, "calibration_panel", None), getattr(window, "batch_dialog", None),
-                 getattr(window, "overlap_dialog", None)):
+                 getattr(window, "overlap_dialog", None), getattr(window, "compare_window", None)):
         if view is not None:
             view.set_background(bg)
     if getattr(window, "results", None) is not None:
