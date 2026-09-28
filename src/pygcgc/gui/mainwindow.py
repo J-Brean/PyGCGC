@@ -410,6 +410,9 @@ class MainWindow(QtWidgets.QMainWindow):
                              "product, target-decoy confidence")
         self.act_batch = A("🗂️ Batch", self.show_batch_dialog, None,
                           "Process a whole folder: cached, parallel pipeline, feature table, QC, PCA and volcano")
+        self.act_calibrate = A("📈 Calibrate", self.show_calibrate_window, None,
+                               "Build calibration curves by hand from a separate set of standard runs: "
+                               "compounds from a table or clicks, IS-normalised blobs, editable curves")
         self.act_istd_panel = A("🏷️ Internal standards", self.show_istd_panel, None,
                                 "Label internal standards and match them across every run")
         self.act_label_istd = A("🏷️ Label internal standard", self.start_label_istd, None,
@@ -482,6 +485,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addSeparator()
         tb.addAction(self.act_overlap)
         tb.addAction(self.act_batch)
+        tb.addAction(self.act_calibrate)
         tb.addAction(self.act_export_figure)
         # Closed panels can always be brought back from here (also View → Panels),
         # kept on this bar because the View bar is full.
@@ -2785,6 +2789,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.batch_dialog.raise_()
         self.batch_dialog.activateWindow()
 
+    # ================================================================ 📈
+    def show_calibrate_window(self):
+        if getattr(self, "calibrate_window", None) is None:
+            from .calibrate_window import CalibrationWindow
+            self.calibrate_window = CalibrationWindow(self.project, dark=self.dark, parent=self)
+        self.calibrate_window.show()
+        self.calibrate_window.raise_()
+        self.calibrate_window.activateWindow()
+
     def _batch_navigate(self, run_name: str, t1: float, t2: float):
         i = self.project.index_of(run_name)
         if i is None or self.project.entries[i].run is None:
@@ -3044,6 +3057,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def set_dark(self, on: bool):
         self.dark = on
         apply_theme(self, on)
+        if getattr(self, "calibrate_window", None) is not None:
+            self.calibrate_window.set_dark(on)
 
     def show_shortcuts(self):
         rows = "".join(f"<tr><td><b>{k}</b></td><td>&nbsp;&nbsp;{v}</td></tr>" for k, v in SHORTCUTS)
