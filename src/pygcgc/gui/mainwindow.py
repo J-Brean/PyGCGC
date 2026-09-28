@@ -19,7 +19,7 @@ from ..core.peaks import make_frame
 from ..core.report import cluster_caption, plot_cluster_chromatogram, region_caption
 from ..core.segment import SegmentSettings
 from ..core.components import ComponentSet
-from ..core.peaktable import format_accounting, respectrum_components, signal_accounting
+from ..core.peaktable import format_accounting, model_on_frame, respectrum_components, signal_accounting
 from ..core.io import file_filter
 from ..core.istd import references_to_targets, write_istd_report_csv
 from ..core.targets import write_targets_csv
@@ -39,7 +39,7 @@ from .panels.calibration import CalibrationPanel
 from .panels.classes import ClassesPanel, group_colour
 from .panels.clusters import ClustersPanel
 from .panels.hydrocarbons import HydrocarbonsPanel
-from .panels.istd import IstdPanel
+from .panels.istd import IstdPanel, IstdResultsTable
 from .panels.results import ResultsPanel
 from .panels.siloxane import SiloxanePanel
 from .project import Project, SIDECAR_NAME
@@ -172,6 +172,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.istd_panel = IstdPanel()
         self.istd_panel.set_istd(self.istd)
         self.istd_panel.refresh()
+        self.istd_results = IstdResultsTable()
+        self.istd_results.set_istd(self.istd)
         self.spectrum = SpectrumView()
         self.jobs_panel = JobsPanel(self.jobs)
         self.results = ResultsPanel()
@@ -257,11 +259,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "compare runs. It sits last because it is analysis, not preparation: nothing else depends on it.",
             self.cluster_panel, "Cluster peaks")
         add("istd", "🏷️ Internal standards", "Internal standards",
-            "Select an internal standard, click its peak on whichever run is open, then find it on every "
-            "other run by position and mass spectrum together, with a confidence score per run.",
-            "It needs the blobs from step 4 on whichever runs it searches. Independent of everything after "
-            "step 4, so it can run any time once peaks are detected.",
-            self.istd_panel, "Find on all other chromatograms")
+            "Select an internal standard and click its peak on the run that is open. Set three thresholds: how "
+            "far in t1 and in t2 a peak may sit from where the standard is expected, and how well its mass "
+            "spectrum must match. Go searches every chromatogram; the table along the bottom shows the result.",
+            "It needs the peaks from step 4 on every run it searches. Nothing after step 4 is needed, so it can "
+            "run any time once peaks are detected; 📋 then hands the standards to 🧪.",
+            self.istd_panel, "Find in every chromatogram")
         # One left-hand dock with three tabs, so the run list, the layers and the open
         # step's settings share the space instead of competing for it.
         self.left_tabs = QtWidgets.QTabWidget()
@@ -274,7 +277,10 @@ class MainWindow(QtWidgets.QMainWindow):
         jobs_dock = self._dock("Jobs", self.jobs_panel, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
         hist_dock = self._dock("History", self.history, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
         log_dock = self._dock("Log", self.log, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
-        self.tabifyDockWidget(self.results_dock, jobs_dock)
+        self.istd_dock = self._dock("🏷️ Internal standards", self.istd_results,
+                                    QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.tabifyDockWidget(self.results_dock, self.istd_dock)
+        self.tabifyDockWidget(self.istd_dock, jobs_dock)
         self.tabifyDockWidget(jobs_dock, hist_dock)
         self.tabifyDockWidget(hist_dock, log_dock)
         jobs_dock.raise_()
@@ -351,7 +357,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 ("identify", "8 🏷️ Identify", "Library search"),
                 ("quant", "9 🧪 Quantify", "Targets, calibration and quantification"),
                 ("cluster", "10 🧩 Cluster", "Unsupervised peak clusters, within and between runs"),
-                ("istd", "11 🏷️ IS", "Internal standards: click-labelled, matched by position and spectrum")]):
+                ("istd", "11 🏷️ IS", "Internal standards: labelled once, found in every run by t1, t2 and spectrum")]):
             info = self.workflow.step_info(key)
             act = A(text, lambda _checked=False, k=key: self.workflow.show_step(k), None,
                     f"{tip}. Opens its settings on the left; press Go there to run it.\n"
@@ -810,7 +816,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.istd_panel.removeFromLibraryRequested.connect(self.istd.remove_from_library)
         self.istd_panel.exportRequested.connect(self.export_istd_report)
         self.istd_panel.targetsRequested.connect(lambda: self.istd_to_targets())
-        self.istd_panel.rowActivated.connect(self.relabel_istd)
+        self.istd_panel.settingsChanged.connect(self.istd.set_settings)
+        self.istd_results.cellChosen.connect(self.goto_istd)
+        self.istd_results.relabelRequested.connect(self.relabel_istd)
         # Layers tab: raw image visibility/alpha, and mirrors of the blob, stencil and
         # cluster overlay toggles that live in the top bar and the Cluster panel.
         self.layers_panel.raw.toggled.connect(self.view2d.set_image_visible)
@@ -2868,8 +2876,26 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.istd.references:
             self.say("Label at least one internal standard first")
             return
-        self.istd.propagate_to(loaded, on_done=lambda: self.workflow.mark_done(
-            "istd", "Internal standards searched on every run. Check the confidence report."))
+        self.istd.set_settings(self.istd_panel.settings())
+
+        def finished():
+            self.istd_dock.show()
+            self.istd_dock.raise_()
+            self.workflow.mark_done("istd", "Every chromatogram searched. The table along the bottom shows "
+                                            "where each standard passed; hover a ✗ for why.")
+
+        self.istd.propagate_to(loaded, on_done=finished)
+
+    def goto_istd(self, run: str, name: str):
+        """Open `run` on where `name` was found there (or its closest miss)."""
+        index = self.project.index_of(run)
+        m = self.istd.matches.get(run, {}).get(name)
+        if index is None or self.project.entries[index].run is None:
+            return
+        self.set_run(index)
+        if m is not None and m.t1 == m.t1:
+            self.tabs.setCurrentIndex(0)
+            self.view2d.centre_on(m.t1, m.t2)
 
     def export_istd_report(self):
         matches = self.istd.all_matches()
@@ -2877,9 +2903,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.say("Nothing to export yet")
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export internal-standard report", "istd_report.csv", "CSV (*.csv)")
+            self, "Export internal-standard results", "internal_standards.csv", "CSV (*.csv)")
         if path:
-            write_istd_report_csv(matches, path)
+            write_istd_report_csv(matches, path, self.istd.settings)
             self.say(f"Saved {Path(path).name}")
 
     def istd_to_targets(self, path=None):
@@ -2910,18 +2936,23 @@ class MainWindow(QtWidgets.QMainWindow):
     def _istd_changed(self):
         self.istd_panel.set_current_run(self.project.entries[self.index].name if self.index >= 0 else None)
         self.istd_panel.refresh()
+        self.istd_results.refresh()
         self._update_istd_overlay()
 
     def _update_istd_overlay(self):
+        """Found standards on this run (✓ and spectral match), and each labelled peak where no search has
+        been run here yet. Misses are not drawn: their closest candidate is not the standard."""
         markers = []
         if self.index >= 0:
             run = self.project.entries[self.index].name
+            found = self.istd.matches_for(self.index)
             for name, ref in self.istd.references.items():
-                if ref.run == run:
-                    markers.append(dict(t1=ref.t1, t2=ref.t2, label=name, tier="high"))
-            for m in self.istd.matches_for(self.index).values():
-                if m.tier != "not found":
-                    markers.append(dict(t1=m.t1, t2=m.t2, label=f"{m.name} {m.combined_score:.0%}", tier=m.tier))
+                if ref.run == run and name not in found:
+                    markers.append(dict(t1=ref.t1, t2=ref.t2, label=f"{name} (labelled)", tier="high"))
+            for m in found.values():
+                if m.found:
+                    markers.append(dict(t1=m.t1, t2=m.t2, label=f"✓ {m.name} {m.spectral_score:.2f}",
+                                        tier="medium" if m.n_passing > 1 else "high"))
         self.view2d.set_istd_overlay(markers)
 
     def _layers_changed(self):

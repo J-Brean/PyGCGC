@@ -54,8 +54,9 @@ for name, (q, quals, t1, t2) in STANDARDS.items():
                                     mz0=int(blobs.mz[0]), spectrum=peak_spectrum(blobs, i)))
 for key in ("BTWC", "T191", "T60"):
     for m in match_run(references, key, prepared[key][3]):
-        print(f"  {key:5} {m.name:18} {m.tier:9} score {m.combined_score:.2f} (spectral {m.spectral_score:.2f}), "
-              f"dt1 {m.dt1:+5.1f} s, dt2 {m.dt2:+.3f} s")
+        print(f"  {key:5} {m.name:18} {m.status:9} spectral {m.spectral_score:.2f}, "
+              f"dt1 {m.dt1:+5.1f} s, dt2 {m.dt2:+.3f} s (from expected {m.off_t1:+5.1f} s, {m.off_t2:+.3f} s) "
+              f"{m.reason}")
 print("  target rows the 🏷️ panel's 'Use as target table' would write:")
 for t in references_to_targets(references):
     print(f"    {t.compound:18} quantifier {t.quant_ion}, qualifiers {t.qual_ions} at {t.qual_ratios}")

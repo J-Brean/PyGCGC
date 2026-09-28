@@ -137,7 +137,7 @@ class Project(QtCore.QObject):
         self.clusters = ClusterState(self, self)
         self.foldChanged.connect(self.clusters.mark_stale)
         self.blobs.changed.connect(self.clusters.mark_stale)
-        # 🏷️ internal standards (click-labelled, matched by position and spectrum)
+        # 🏷️ internal standards (labelled once, found in every run by t1, t2 and spectrum)
         self.istd = IstdState(self, self)
         # autosave: written silently once a step actually finishes, never mid-preview
         self._autosave_timer = QtCore.QTimer(self)
