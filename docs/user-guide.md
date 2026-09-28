@@ -40,7 +40,7 @@ The eleven numbered buttons on the top toolbar are the steps, in working order. 
 | 8 🏷️ Identify | notes | opens the identifier window |
 | 9 🧪 Quantify | what is loaded, load buttons, settings | quantifies (disabled, with the reason, until a target table is loaded) |
 | 10 🧩 Cluster | scope, method, thresholds | groups peaks by spectrum, within or across runs |
-| 11 🏷️ Internal standards | IS library, labelled peaks, confidence report | finds every labelled standard on every other run |
+| 11 🏷️ Internal standards | IS library, labelled peaks, thresholds on Δt₁, Δt₂ and spectral match | finds every labelled standard in every run; results table in the bottom dock |
 
 **Why this order.** Each step's panel shows a "Why here" line, the toolbar tooltips repeat it, and Help → Workflow guide lists all eleven. In short:
 
@@ -386,14 +386,23 @@ Search every 🔍 blob on the current run against an MSP library (toolbar, or Pr
 
 ### 🏷️ Internal standards
 
-Step 11 on the toolbar. A small library of standards (the seven in the shipped mix; ➕ Add to library for your own, kept in `~/.pygcgc/istd_library.json`), each labelled once by clicking its peak, then found on every other run by position and mass spectrum together.
+Step 11 on the toolbar. A small library of standards (the seven in the shipped mix; ➕ Add to library for your own, kept in `~/.pygcgc/istd_library.json`), each labelled once by clicking its peak, then looked for in every chromatogram on the first dimension, the second dimension and the mass spectrum.
 
 1. Find peaks (step 4) first: labelling picks the detected peak nearest the click and keeps its spectrum.
-2. Select a standard in the table, press **🏷️ Label peak on this run** and click its peak.
-3. **Go** (🔎 Find on all other chromatograms) searches every run. Each match gets a combined score from position (relative to where the other standards on that run say it should be, so a run-wide drift costs nothing) and spectral similarity, and a tier: high, medium, low or not found. Double-click a row to label that run by hand.
-4. **📋 Use as target table…** writes the labelled standards as `istd` rows into the target table (the quantifier and two qualifiers are the strongest ions weighted by m/z, with their measured ratios), keeping any other rows, and loads it: the standards then anchor the phase and normalise 🧪.
+2. Select a standard in the table, press **🏷️ Label peak on this run** and click its peak. The table then shows where it was labelled, its t₁ and t₂, and later on how many runs it was found.
+3. Set the three **thresholds**. A peak counts as the standard only if it passes all three:
 
-On the September 2026 runs, five standards are present (acenaphthene-d10, phenanthrene-d10, n-tetracosane-d50, chrysene-d12, perylene-d12; perylene wraps, true t₂ about 9.1 s at an 8 s period) and every match on the other three runs was "high". n-Dotriacontane-d66 elutes after the end of those runs and di-n-octyl phthalate-d4 was not found.
+   | Threshold | Default | Tests |
+   |---|---|---|
+   | Max Δt₁ | 30 s | distance from the expected first-dimension time, either side |
+   | Max Δt₂ | 0.5 s | distance from the expected second-dimension time, either side |
+   | Min spectral match | 0.80 | weighted dot product (Stein and Scott, 1994) with the labelled peak's spectrum, 1 = identical |
+
+   With **Expect each standard where the others moved to** ticked (the default), the expected position on each run is the labelled one moved by the median offset of the *other* standards found there with a confident spectrum (0.90 or better), so a run-wide retention shift does not break tight position thresholds. Unticked, it is the labelled position. Of the peaks that pass, the best spectral match is taken.
+4. **Go** (🔎 Find in every chromatogram) searches every loaded run, the labelled one included. The **🏷️ Internal standards** dock along the bottom shows one row per standard and one column per run: ✓ where it passed (amber if more than one peak did), ✗ where it did not, · where the run has no peaks. **Show** picks what the cells display (spectral match, t₁, t₂, or Δt₁ and Δt₂ from the expected or labelled position); hover a cell for every number and, for a ✗, which threshold failed. Click a cell to open that run on the peak; double-click to label it there by hand. **Export results (CSV)…** writes one row per standard per run, with the thresholds used.
+5. **📋 Use as target table…** writes the labelled standards as `istd` rows into the target table (the quantifier and two qualifiers are the strongest ions weighted by m/z, with their measured ratios), keeping any other rows, and loads it: the standards then anchor the phase and normalise 🧪.
+
+On the September 2026 runs, five standards are present (acenaphthene-d10, phenanthrene-d10, n-tetracosane-d50, chrysene-d12, perylene-d12; perylene wraps, true t₂ about 9.1 s at an 8 s period). Labelled on ATWC, all five passed the default thresholds on the other three runs: within 2.3 s in t₁ and 0.09 s in t₂ of the expected position, spectral match 0.97 to 0.99. Twice a second peak also passed (phenanthrene-d10 on BTWC, perylene-d12 on T191), so check the amber cells. n-Dotriacontane-d66 elutes after the end of those runs and di-n-octyl phthalate-d4 was not found.
 
 ### 🧩 Peak clusters
 
