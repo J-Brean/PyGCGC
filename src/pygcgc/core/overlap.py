@@ -119,7 +119,9 @@ class BlobCube:
     t1_start: float
 
     def t1_of(self, col) -> np.ndarray:
-        return self.t1_start + (self.col0 + np.asarray(col, dtype=float)) * self.period
+        """t1 of a (fractional) column: a column sits at the middle of its modulation,
+        the convention of `Frame.mid_t1`, candidates, legacy blobs and quantification."""
+        return self.t1_start + (self.col0 + np.asarray(col, dtype=float) + 0.5) * self.period
 
     def t2_of(self, row) -> np.ndarray:
         return (self.row0 + np.asarray(row, dtype=float)) * self.pitch
@@ -505,21 +507,25 @@ def component_profiles(model: str, components: list[OverlapComponent],
     maps = np.zeros(shape + (len(components),), dtype=float)
     rr, cc = np.indices(shape, dtype=float)
     for j, component in enumerate(components):
-        params = [component.row0, component.col0,
-                  component.sigma_row, component.sigma_col]
-        if model == "emg":
-            params.append(component.tau)
-        elif model in ("emg_t2", "emg_t2_cell"):
-            params.append(component.tau_row)
-        elif model == "emg2":
-            params.extend((component.tau, component.tau_row))
-        elif model == "tilt":
-            params.append(component.rho)
-        elif model == "emg_t2_tilt":
-            params.extend((component.tau_row, component.rho))
         maps[:, :, j] = _shape(model, rr.ravel(), cc.ravel(),
-                               np.asarray(params)).reshape(shape)
+                               shape_params(model, component)).reshape(shape)
     return maps
+
+
+def shape_params(model: str, component) -> np.ndarray:
+    """The parameter vector `_shape` takes, read from a fitted component's fields."""
+    params = [component.row0, component.col0, component.sigma_row, component.sigma_col]
+    if model == "emg":
+        params.append(component.tau)
+    elif model in ("emg_t2", "emg_t2_cell"):
+        params.append(component.tau_row)
+    elif model == "emg2":
+        params.extend((component.tau, component.tau_row))
+    elif model == "tilt":
+        params.append(component.rho)
+    elif model == "emg_t2_tilt":
+        params.extend((component.tau_row, component.rho))
+    return np.asarray(params, dtype=float)
 
 
 def initialise_overlap(cube: BlobCube, k: int, model: str = "gaussian",

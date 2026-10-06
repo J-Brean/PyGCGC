@@ -16,10 +16,12 @@ background job, the same cost model `ClassState.classify` already accepts.
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import numpy as np
 from PySide6 import QtCore
 
-from ..core.istd import (IstdLibraryEntry, IstdMatch, IstdMatchSettings, IstdReference,
+from ..core.istd import (NO_PEAKS, IstdLibraryEntry, IstdMatch, IstdMatchSettings, IstdReference,
                          load_library, match_run, peak_spectrum, save_library)
 from ..core.peaktable import respectrum_components
 from .blob_state import MS_AWARE
@@ -125,17 +127,23 @@ class IstdState(QtCore.QObject):
         self.changed.emit()
 
     # ------------------------------------------------------------- batch
+    def set_settings(self, settings: IstdMatchSettings) -> None:
+        """New thresholds. Results already found stay until the search is run again."""
+        self.settings = settings
+        self.changed.emit()
+
     def propagate_to(self, indices: list[int], on_done=None) -> None:
+        """Search every run in `indices` (the labelling run included) for every
+        labelled standard, with the current thresholds."""
         if not self.references:
             self.project.message.emit("🏷️ Label at least one internal standard first")
             return
         p = self.project
-        entries = [p.entries[i] for i in indices
-                  if p.entries[i].run is not None and p.entries[i].name != self.reference_run]
+        entries = [p.entries[i] for i in indices if p.entries[i].run is not None]
         if not entries:
             return
         remaining = set(entries)
-        not_found: list[str] = []
+        missing: list[str] = []
         references = list(self.references.values())
         settings = self.settings
 
@@ -145,23 +153,22 @@ class IstdState(QtCore.QObject):
             def work(token, progress):
                 peaks = self._peaks_for(idx)
                 if peaks is None:
-                    return None
+                    return [IstdMatch(run=entry.name, name=r.name, status=NO_PEAKS,
+                                      reason="peak detection has not been run on this chromatogram")
+                            for r in references]
                 return match_run(references, entry.name, peaks, settings)
 
             def done(results) -> None:
-                if results is None:
-                    not_found.append(f"{entry.name} (no peaks detected)")
-                else:
-                    self.matches[entry.name] = {m.name: m for m in results}
-                    missing = [m.name for m in results if m.tier == "not found"]
-                    if missing:
-                        not_found.append(f"{entry.name} ({', '.join(missing)})")
+                self.matches[entry.name] = {m.name: m for m in results}
+                lost = [m.name for m in results if not m.found]
+                if lost:
+                    missing.append(f"{entry.name} ({', '.join(lost)})")
                 remaining.discard(entry)
                 if not remaining:
                     self.changed.emit()
-                    if not_found:
+                    if missing:
                         self.project.message.emit(
-                            "🏷️ Couldn't find every internal standard in: " + "; ".join(not_found))
+                            "🏷️ Not every internal standard passed the thresholds in: " + "; ".join(missing))
                     if on_done:
                         on_done()
 
@@ -186,12 +193,8 @@ class IstdState(QtCore.QObject):
             references={name: dict(name=r.name, cas=r.cas, run=r.run, t1=r.t1, t2=r.t2, mz0=r.mz0,
                                    spectrum=r.spectrum.tolist())
                        for name, r in self.references.items()},
-            matches={run: {name: dict(run=m.run, name=m.name, peak_id=m.peak_id, t1=m.t1, t2=m.t2,
-                                      dt1=m.dt1, dt2=m.dt2, position_score=m.position_score,
-                                      spectral_score=m.spectral_score, forward=m.forward, reverse=m.reverse,
-                                      combined_score=m.combined_score, tier=m.tier)
-                           for name, m in per_run.items()}
-                    for run, per_run in self.matches.items()},
+            matches={run: {name: asdict(m) for name, m in per_run.items()}
+                     for run, per_run in self.matches.items()},
             settings=self.settings.to_dict())
 
     def from_dict(self, d: dict) -> None:
@@ -203,8 +206,9 @@ class IstdState(QtCore.QObject):
             name: IstdReference(name=r["name"], cas=r.get("cas", ""), run=r["run"], t1=r["t1"], t2=r["t2"],
                                mz0=r["mz0"], spectrum=np.asarray(r["spectrum"], dtype=float))
             for name, r in d.get("references", {}).items()}
+        # Results saved before the three-threshold search (no "status") are dropped; Go re-finds them.
         self.matches = {
-            run: {name: IstdMatch(**m) for name, m in per_run.items()}
+            run: {name: IstdMatch.from_dict(m) for name, m in per_run.items() if "status" in m}
             for run, per_run in d.get("matches", {}).items()}
         self.settings = IstdMatchSettings.from_dict(d.get("settings", {}))
         self.changed.emit()

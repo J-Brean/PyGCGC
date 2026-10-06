@@ -1,6 +1,6 @@
-"""🏷️ Internal standards (GUI): click-to-label, cross-run propagation, and
-the confidence report, driven through MainWindow the way a user would --
-select a library row, click a peak, then find it on every other run."""
+"""🏷️ Internal standards (GUI): click to label, the three thresholds, the
+search of every chromatogram and the results table, driven through
+MainWindow the way a user would."""
 
 import os
 
@@ -49,18 +49,42 @@ def test_propagate_finds_the_shifted_peak_on_the_other_run(qtbot, window):
     w.propagate_istd()
     qtbot.waitUntil(lambda: "RUN_B" in w.istd.matches and name in w.istd.matches["RUN_B"], timeout=TIMEOUT)
     match = w.istd.matches["RUN_B"][name]
-    # RUN_B's peaks sit 1.5s later in t1 than RUN_A's (synthetic_folder fixture) with the
-    # same ion and a scaled amplitude -- close enough in position and spectrum for a
-    # confident match, not "not found".
-    assert match.tier in ("high", "medium")
+    # RUN_B's peaks sit 1.5 s later in t1 than RUN_A's (synthetic_folder fixture) with the
+    # same ion and a scaled amplitude: inside the default thresholds on all three.
+    assert match.found
     assert match.dt1 == pytest.approx(1.5, abs=1.0)
 
-    # The confidence report table reflects it.
-    w.istd_panel.refresh()
-    rows = w.istd_panel.report_table.rowCount()
-    assert rows >= 1
-    runs_in_table = {w.istd_panel.report_table.item(r, 0).text() for r in range(rows)}
-    assert "RUN_B" in runs_in_table
+    # Every chromatogram is searched, the labelled one included, and the table shows it:
+    # the standard down the side, the runs across the top, a tick where it passed.
+    table = w.istd_results
+    assert set(w.istd.matches) == {e.name for e in w.project.entries if e.run is not None}
+    assert table.standards() == [name]
+    col = table.runs().index("RUN_B")
+    assert table.table.item(0, col).text().startswith("✓")
+    assert "Spectral match" in table.table.item(0, col).toolTip()
+
+
+def test_thresholds_set_in_the_panel_decide_what_is_found(qtbot, window):
+    w = window
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.was_run, timeout=TIMEOUT)
+    name = _label_first_library_row(w, w.project.index_of("RUN_A"), 50)
+    qtbot.waitUntil(lambda: name in w.istd.references, timeout=TIMEOUT)
+    # RUN_B's standard is 1.5 s later in t1; with only one standard there is no drift
+    # to follow, so a 0.5 s first-dimension limit must reject it and say why.
+    w.istd_panel.max_dt1.setValue(0.5)
+    assert w.istd.settings.max_dt1 == pytest.approx(0.5)
+    w.go("istd")
+    qtbot.waitUntil(lambda: "RUN_B" in w.istd.matches and "RUN_A" in w.istd.matches, timeout=TIMEOUT)
+    assert w.istd.matches["RUN_A"][name].found                 # the labelled peak itself, at Δ 0
+    miss = w.istd.matches["RUN_B"][name]
+    assert not miss.found and "no peak within 0.5 s in t1" in miss.reason
+    col = w.istd_results.runs().index("RUN_B")
+    cell = w.istd_results.table.item(0, col)
+    assert cell.text().startswith("✗") and "no peak within" in cell.toolTip()
+    # Clicking the cell opens that run.
+    w.istd_results.cellChosen.emit("RUN_B", name)
+    assert w.project.entries[w.index].name == "RUN_B"
 
 
 def test_cancel_pick_clears_pending_label(qtbot, window):
@@ -102,7 +126,7 @@ def test_ms_aware_labelling_round_trips_through_respectrum(qtbot, window):
 
     w.propagate_istd()
     qtbot.waitUntil(lambda: "RUN_B" in w.istd.matches and name in w.istd.matches["RUN_B"], timeout=TIMEOUT)
-    assert w.istd.matches["RUN_B"][name].tier in ("high", "medium")
+    assert w.istd.matches["RUN_B"][name].found
 
 
 def test_go_on_the_internal_standard_step_searches_every_run(qtbot, window):

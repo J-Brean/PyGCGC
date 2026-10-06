@@ -71,9 +71,19 @@ def test_blob_cube_selects_the_blobs_own_significant_ions(overlap_scene):
 
 
 def test_blob_cube_time_conversion_matches_the_fold(overlap_scene):
-    _run, fold, _blobs, cube = overlap_scene
-    assert cube.t1_of(0) == pytest.approx(fold.t1[cube.col0])
+    # A column is placed at the middle of its modulation, as candidates, legacy
+    # blobs and quantification do; the start of the modulation put fitted peaks
+    # half a modulation early and drew their outlines half a column to the left.
+    _run, fold, blobs, cube = overlap_scene
+    assert cube.t1_of(0) == pytest.approx(fold.t1[cube.col0] + 0.5 * fold.spec.period)
     assert cube.t2_of(0) == pytest.approx(cube.row0 * fold.row_pitch)
+
+
+def test_fitted_component_t1_uses_the_same_convention_as_legacy_blobs(overlap_scene):
+    _run, _fold, blobs, cube = overlap_scene
+    fit = fit_overlap(cube, 1, include_background=True)
+    strongest = int(np.argmax(blobs.volume))
+    assert fit.components[0].t1 == pytest.approx(blobs.t1[strongest], abs=0.3 * cube.period)
 
 
 # ------------------------------------------------------------- 1. unique ions

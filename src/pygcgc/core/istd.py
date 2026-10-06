@@ -22,21 +22,22 @@ tier reported per run so a weak match can be spotted and corrected by hand.
    the way `identify.py` captures an accepted standard's spectrum
    (`identify.build_inhouse_entry`'s docstring: `BlobSet.apex_spectra[i]`,
    `mz0 = int(blobs.mz[0])`).
-3. **Matching** (`find_istd_on_run`). Candidates are every peak on the
-   target run within a generous position window of the reference (position
-   alone is not trusted -- that's the whole point of adding a spectral
-   term: it has to survive the retention drift a position-only search
-   can't). Each candidate is scored two ways and combined: a position
-   score (a scaled-distance falloff, the same idea as `BlobSet.nearest`)
-   and a spectral score (`identify.search`'s Stein and Scott (1994)
-   dot-product scoring, candidate as the query, the reference as a
-   one-entry library -- exactly the role `identify.py` normally has query
-   and library play, so its asymmetric reverse score means what it always
-   means: ignore channels the *reference* doesn't have, i.e. don't
-   penalise a candidate for a co-eluting neighbour's extra ions).
-4. **Confidence** (`IstdMatchSettings` tiers). A simple threshold on the
-   combined score -- "high"/"medium"/"low", or "not found" when nothing
-   at all falls inside the position window.
+3. **Matching** (`find_istd_on_run`, `match_run`). Three thresholds, one
+   per dimension, all of which a peak must pass to count as the standard:
+   its first-dimension time within `max_dt1` seconds of where the standard
+   is expected, its second-dimension time within `max_dt2`, and its mass
+   spectrum matching the reference at `min_spectral` or better. Of the peaks
+   that pass, the best spectral match is taken. The spectral match is
+   `identify.search`'s Stein and Scott (1994) weighted dot-product score,
+   candidate as the query and the reference as a one-entry library, so its
+   reverse score ignores ions the reference does not have (a co-eluting
+   neighbour's extra ions are not held against the candidate).
+4. **Drift** (`match_run`). Internal standards drift together, so the
+   expected position of each standard on a run is, by default, its
+   reference position moved by the median offset of the *other* standards
+   found there with a confident spectrum. A whole run shifted by a minute
+   therefore still passes tight position thresholds, and a standard never
+   vouches for its own position.
 5. **Target table** (`references_to_targets`). The labelled standards become
    `role="istd"` rows, so the same peaks anchor the phase and normalise 🧪.
 """
@@ -56,10 +57,9 @@ from .targets import Target
 
 PRESET_LIBRARY_PATH = Path(__file__).resolve().parents[1] / "presets" / "istd_library.json"
 
-# The candidate/reference search itself should never drop or re-threshold a
-# hit -- that's `find_istd_on_run`'s own job, via the combined score and its
-# tiers -- so every prefilter `identify.search` would otherwise apply is
-# switched off here.
+# The candidate/reference search itself should never drop a hit -- thresholding
+# is `find_istd_on_run`'s own job -- so every prefilter `identify.search` would
+# otherwise apply is switched off here.
 _SEARCH_SETTINGS = IdentifySettings(min_score=0.0, min_shared_top_ions=0)
 
 
@@ -129,21 +129,26 @@ class IstdReference:
     spectrum: np.ndarray
 
 
+FOUND = "found"
+NOT_FOUND = "not found"
+NO_PEAKS = "no peaks"
+
+
 @dataclass
 class IstdMatchSettings:
-    t1_window: float = 90.0     # s either side of the reference, for the candidate search box
-    t2_window: float = 1.5      # s either side
-    t1_scale: float = 60.0      # scaled-distance denominator, same idea as BlobSet.nearest's default
-    t2_scale: float = 0.5
-    position_weight: float = 0.4
-    spectral_weight: float = 0.6
-    tier_high: float = 0.75
-    tier_medium: float = 0.45
-    # First pass (`match_run`): a wider box and a spectrum-only criterion for the
-    # confident matches whose drift predicts where every other IS should be.
-    anchor_t1_window: float = 180.0
-    anchor_t2_window: float = 2.5
-    anchor_min_spectral: float = 0.75
+    """The three thresholds a peak must pass to be taken as the standard.
+
+    Defaults, from the four real runs of September 2026 (labelled on one run,
+    drift followed): correct matches sat within 1.5 s in t1 and 0.1 s in t2
+    of the expected position, with spectral matches of 0.97 to 0.99."""
+    max_dt1: float = 30.0               # s either side of the expected first-dimension time
+    max_dt2: float = 0.5                # s either side of the expected second-dimension time
+    min_spectral: float = 0.80          # weighted dot-product match to the reference spectrum, 0 to 1
+    follow_drift: bool = True           # expect each standard where the other standards' offset puts it
+    # Only for estimating that offset: a wide box, and a spectrum confident on its own.
+    drift_t1_window: float = 180.0
+    drift_t2_window: float = 2.5
+    drift_min_spectral: float = 0.90
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -155,34 +160,42 @@ class IstdMatchSettings:
 
 @dataclass
 class IstdMatch:
+    """One standard on one run. When it is not found, t1/t2 and the scores
+    describe the closest miss (the best spectrum inside the position box), if
+    there was one, and `reason` says which threshold it failed."""
     run: str
     name: str
-    peak_id: object                     # component id (MS-aware) or blob index (legacy), or None if not found
-    t1: float
-    t2: float
-    dt1: float
-    dt2: float
-    position_score: float
-    spectral_score: float
-    forward: float
-    reverse: float
-    combined_score: float
-    tier: str                           # "high", "medium", "low", "not found"
-    expected_t1: float = float("nan")   # where the other ISs' drift predicts it; the reference position if none
+    status: str = NOT_FOUND             # FOUND, NOT_FOUND or NO_PEAKS
+    peak_id: object = None              # component id (MS-aware) or blob index (legacy)
+    t1: float = float("nan")
+    t2: float = float("nan")
+    dt1: float = float("nan")           # from the reference peak
+    dt2: float = float("nan")
+    expected_t1: float = float("nan")   # the reference position, moved by the drift if followed
     expected_t2: float = float("nan")
-    n_drift_anchors: int = 0            # how many other ISs that prediction came from
+    spectral_score: float = 0.0
+    forward: float = 0.0
+    reverse: float = 0.0
+    n_passing: int = 0                  # peaks passing all three thresholds; more than one is worth a look
+    n_drift_anchors: int = 0            # other standards the expected position came from
+    reason: str = ""
 
+    @property
+    def found(self) -> bool:
+        return self.status == FOUND
 
-def position_score(dt1: float, dt2: float, settings: IstdMatchSettings = IstdMatchSettings()) -> float:
-    return float(np.exp(-np.hypot(dt1 / settings.t1_scale, dt2 / settings.t2_scale)))
+    @property
+    def off_t1(self) -> float:
+        """Distance from the expected first-dimension time: what `max_dt1` is tested against."""
+        return self.t1 - self.expected_t1
 
+    @property
+    def off_t2(self) -> float:
+        return self.t2 - self.expected_t2
 
-def _tier(score: float, settings: IstdMatchSettings) -> str:
-    if score >= settings.tier_high:
-        return "high"
-    if score >= settings.tier_medium:
-        return "medium"
-    return "low"
+    @classmethod
+    def from_dict(cls, d: dict) -> "IstdMatch":
+        return cls(**{k: v for k, v in (d or {}).items() if k in cls.__dataclass_fields__})
 
 
 def peak_spectrum(peaks, i: int) -> np.ndarray:
@@ -216,67 +229,66 @@ def _spectral_scores(reference: IstdReference, peaks, indices) -> list[tuple[flo
 def find_istd_on_run(reference: IstdReference, run_name: str, peaks,
                      settings: IstdMatchSettings = IstdMatchSettings(),
                      expected: tuple[float, float] | None = None, n_drift_anchors: int = 0) -> IstdMatch:
-    """The best-matching peak for `reference` on `peaks` (a `BlobSet` or a
-    `ComponentPeaks` -- anything with the same `t1`/`t2`/`mz`/`spectra`
-    shape), by position and spectral similarity combined. The search box
-    and the position score are centred on `expected` (where this IS is
-    predicted to sit on this run), or on the reference position if none is
-    given. `dt1`/`dt2` are always reported against the reference. `tier="not
-    found"` if nothing at all falls inside the box."""
+    """`reference` on one run's `peaks` (a `BlobSet` or a `ComponentPeaks`:
+    anything with `t1`, `t2`, `mz` and `spectra`), by the three thresholds.
+
+    The position box is centred on `expected`, or on the reference position if
+    none is given. Of the peaks inside it whose spectrum passes `min_spectral`,
+    the best spectral match is taken. If none passes, the result is NOT_FOUND
+    and carries the closest miss so the table can say why."""
     e1, e2 = expected if expected is not None else (reference.t1, reference.t2)
-    not_found = IstdMatch(run=run_name, name=reference.name, peak_id=None,
-                          t1=float("nan"), t2=float("nan"), dt1=float("nan"), dt2=float("nan"),
-                          position_score=0.0, spectral_score=0.0, forward=0.0, reverse=0.0,
-                          combined_score=0.0, tier="not found", expected_t1=float(e1), expected_t2=float(e2),
-                          n_drift_anchors=n_drift_anchors)
+    base = dict(run=run_name, name=reference.name, expected_t1=float(e1), expected_t2=float(e2),
+                n_drift_anchors=n_drift_anchors)
     if len(peaks) == 0:
-        return not_found
+        return IstdMatch(status=NO_PEAKS, reason="no peaks detected on this run", **base)
     t1 = np.asarray(peaks.t1, dtype=float)
     t2 = np.asarray(peaks.t2, dtype=float)
-    r1, r2 = t1 - e1, t2 - e2
-    in_window = np.flatnonzero((np.abs(r1) <= settings.t1_window) & (np.abs(r2) <= settings.t2_window))
-    if in_window.size == 0:
-        return not_found
-
-    best = None
-    for i, (spectral, forward, reverse) in zip(in_window, _spectral_scores(reference, peaks, in_window)):
-        pos = position_score(float(r1[i]), float(r2[i]), settings)
-        combined = settings.position_weight * pos + settings.spectral_weight * spectral
-        if best is None or combined > best.combined_score:
-            best = IstdMatch(run=run_name, name=reference.name, peak_id=_peak_id(peaks, int(i)),
-                             t1=float(t1[i]), t2=float(t2[i]),
-                             dt1=float(t1[i] - reference.t1), dt2=float(t2[i] - reference.t2),
-                             position_score=float(pos), spectral_score=float(spectral),
-                             forward=float(forward), reverse=float(reverse),
-                             combined_score=float(combined), tier=_tier(combined, settings),
-                             expected_t1=float(e1), expected_t2=float(e2), n_drift_anchors=n_drift_anchors)
-    return best
+    box = np.flatnonzero((np.abs(t1 - e1) <= settings.max_dt1) & (np.abs(t2 - e2) <= settings.max_dt2))
+    if box.size == 0:
+        return IstdMatch(reason=f"no peak within {settings.max_dt1:g} s in t1 and {settings.max_dt2:g} s in t2",
+                         **base)
+    scores = _spectral_scores(reference, peaks, box)
+    best = int(np.argmax([s for s, _f, _r in scores]))
+    i = int(box[best])
+    spectral, forward, reverse = scores[best]
+    n_passing = sum(s >= settings.min_spectral for s, _f, _r in scores)
+    if n_passing:
+        status = FOUND
+        reason = "" if n_passing == 1 else f"{n_passing} peaks pass; the best spectral match was taken"
+    else:
+        status = NOT_FOUND
+        reason = (f"{box.size} peak(s) in position, best spectral match {spectral:.2f} "
+                  f"below {settings.min_spectral:.2f}")
+    return IstdMatch(status=status, peak_id=_peak_id(peaks, i), t1=float(t1[i]), t2=float(t2[i]),
+                     dt1=float(t1[i] - reference.t1), dt2=float(t2[i] - reference.t2),
+                     spectral_score=float(spectral), forward=float(forward), reverse=float(reverse),
+                     n_passing=int(n_passing), reason=reason, **base)
 
 
 def match_run(references: list[IstdReference], run_name: str, peaks,
               settings: IstdMatchSettings = IstdMatchSettings()) -> list[IstdMatch]:
-    """Every reference on one run, allowing for the run's own retention drift.
+    """Every reference on one run.
 
-    Internal standards drift together, so an absolute position penalty
-    would mark every correct match on a shifted run as doubtful. First,
-    each IS's best spectral match inside a wide box is taken as an anchor
-    if its spectral score alone clears `anchor_min_spectral`. Then each IS
-    is scored against where the *other* anchors predict it should be: their
-    median t1/t2 offset (`core.align.fit_alignment(..., "shift")`, fitted
-    leave-one-out, so an IS never vouches for its own position). With no
-    other anchor the reference position is used."""
+    With `follow_drift`, each standard is first looked for in a wide box, and
+    kept as a drift anchor if its best spectral match alone reaches
+    `drift_min_spectral`. Each standard is then expected at its reference
+    position moved by the median t1/t2 offset of the *other* anchors
+    (`core.align.fit_alignment(..., "shift")`; a median shift, not an affine
+    fit, because with a handful of anchors, one possibly wrong, anything more
+    flexible extrapolates wildly). With no other anchor, or `follow_drift`
+    off, it is expected at its reference position."""
     anchors = []
-    if len(peaks):
+    if settings.follow_drift and len(peaks):
         t1 = np.asarray(peaks.t1, dtype=float)
         t2 = np.asarray(peaks.t2, dtype=float)
         for ref in references:
-            box = np.flatnonzero((np.abs(t1 - ref.t1) <= settings.anchor_t1_window)
-                                 & (np.abs(t2 - ref.t2) <= settings.anchor_t2_window))
+            box = np.flatnonzero((np.abs(t1 - ref.t1) <= settings.drift_t1_window)
+                                 & (np.abs(t2 - ref.t2) <= settings.drift_t2_window))
             if box.size == 0:
                 continue
             scores = [s for s, _f, _r in _spectral_scores(ref, peaks, box)]
             k = int(np.argmax(scores))
-            if scores[k] >= settings.anchor_min_spectral:
+            if scores[k] >= settings.drift_min_spectral:
                 anchors.append(AnchorPoint(ref.name, ref.t1, ref.t2, float(t1[box[k]]), float(t2[box[k]])))
 
     out = []
@@ -285,10 +297,7 @@ def match_run(references: list[IstdReference], run_name: str, peaks,
         expected = None
         if others:
             try:
-                # A median shift, not "auto": with a handful of anchors, one of them
-                # possibly mislabelled, an affine or smooth fit extrapolates wildly.
-                tf = fit_alignment(others, "shift")
-                p1, p2 = tf.inverse(ref.t1, ref.t2)
+                p1, p2 = fit_alignment(others, "shift").inverse(ref.t1, ref.t2)
                 expected = (float(p1), float(p2))
             except AlignmentError:
                 expected = None
@@ -324,22 +333,26 @@ def references_to_targets(references: list[IstdReference], n_quals: int = 2, min
 
 
 # ------------------------------------------------------------------ report
-def build_report(matches: list[IstdMatch]) -> list[dict]:
-    return [dict(run=m.run, name=m.name, t1=m.t1, t2=m.t2, dt1=m.dt1, dt2=m.dt2,
-                position_score=m.position_score, spectral_score=m.spectral_score,
-                forward=m.forward, reverse=m.reverse, combined_score=m.combined_score, tier=m.tier,
-                expected_t1=m.expected_t1, expected_t2=m.expected_t2, n_drift_anchors=m.n_drift_anchors)
+REPORT_FIELDS = ["run", "name", "status", "t1_min", "t2_s", "dt1_s", "dt2_s", "off_expected_t1_s",
+                 "off_expected_t2_s", "spectral_match", "forward", "reverse", "n_passing", "n_drift_anchors",
+                 "max_dt1_s", "max_dt2_s", "min_spectral", "reason"]
+
+
+def build_report(matches: list[IstdMatch], settings: IstdMatchSettings = IstdMatchSettings()) -> list[dict]:
+    """One row per standard per run, with the thresholds it was judged against."""
+    return [dict(run=m.run, name=m.name, status=m.status, t1_min=m.t1 / 60.0, t2_s=m.t2, dt1_s=m.dt1, dt2_s=m.dt2,
+                 off_expected_t1_s=m.off_t1, off_expected_t2_s=m.off_t2, spectral_match=m.spectral_score,
+                 forward=m.forward, reverse=m.reverse, n_passing=m.n_passing, n_drift_anchors=m.n_drift_anchors,
+                 max_dt1_s=settings.max_dt1, max_dt2_s=settings.max_dt2, min_spectral=settings.min_spectral,
+                 reason=m.reason)
             for m in matches]
 
 
-def write_istd_report_csv(matches: list[IstdMatch], path) -> Path:
+def write_istd_report_csv(matches: list[IstdMatch], path, settings: IstdMatchSettings = IstdMatchSettings()) -> Path:
     import csv
     path = Path(path)
-    rows = build_report(matches)
-    fieldnames = ["run", "name", "t1", "t2", "dt1", "dt2", "position_score", "spectral_score",
-                 "forward", "reverse", "combined_score", "tier", "expected_t1", "expected_t2", "n_drift_anchors"]
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=REPORT_FIELDS)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(build_report(matches, settings))
     return path

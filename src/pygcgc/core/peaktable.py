@@ -120,22 +120,32 @@ def respectrum_components(run, fold, component_set: ComponentSet, wrap_below_s: 
     return peaks, model_tic, footprint
 
 
-def signal_accounting(tic: np.ndarray, model_tic: np.ndarray, footprint: np.ndarray,
-                      pitch: float, period: float, t1_start: float, top: int = 10) -> dict:
-    """How much of the run's signal the fitted peaks explain, and where the rest is.
+def model_on_frame(model_tic: np.ndarray, footprint: np.ndarray, n_rows: int
+                   ) -> tuple[np.ndarray, np.ndarray]:
+    """Extended-frame model and footprint images folded back onto one modulation's rows.
 
-    ``tic`` is the cleaned run's folded total-ion image (rows x modulations);
-    ``model_tic`` and ``footprint`` are extended-frame images from
-    :func:`respectrum_components`. Rows beyond one modulation hold the wrapped
-    part of a peak and are folded back onto the following modulation first.
+    Rows beyond one modulation hold the wrapped part of a peak, which was recorded
+    at the bottom of the following modulation.
     """
-    n_rows, n_cols = tic.shape
     model = model_tic[:n_rows].copy()
     mask = footprint[:n_rows].copy()
     extra = model_tic.shape[0] - n_rows
     if extra > 0:
         model[:extra, 1:] += model_tic[n_rows:n_rows + extra, :-1]
         mask[:extra, 1:] |= footprint[n_rows:n_rows + extra, :-1]
+    return model, mask
+
+
+def signal_accounting(tic: np.ndarray, model_tic: np.ndarray, footprint: np.ndarray,
+                      pitch: float, period: float, t1_start: float, top: int = 10) -> dict:
+    """How much of the run's signal the fitted peaks explain, and where the rest is.
+
+    ``tic`` is the cleaned run's folded total-ion image (rows x modulations);
+    ``model_tic`` and ``footprint`` are extended-frame images from
+    :func:`respectrum_components`.
+    """
+    n_rows, n_cols = tic.shape
+    model, mask = model_on_frame(model_tic, footprint, n_rows)
     positive = np.clip(tic, 0.0, None)
     residual = tic - model
     total = float(positive.sum())

@@ -19,7 +19,7 @@ from ..core.peaks import make_frame
 from ..core.report import cluster_caption, plot_cluster_chromatogram, region_caption
 from ..core.segment import SegmentSettings
 from ..core.components import ComponentSet
-from ..core.peaktable import format_accounting, respectrum_components, signal_accounting
+from ..core.peaktable import format_accounting, model_on_frame, respectrum_components, signal_accounting
 from ..core.io import file_filter
 from ..core.istd import references_to_targets, write_istd_report_csv
 from ..core.targets import write_targets_csv
@@ -30,6 +30,7 @@ from .commands import (ApplyBackground, ApplySiloxane, EditAlignment, EditBlobs,
 from .dialogs import QuantSettingsDialog, SettingsDialog
 from .identify_dialog import IdentifyDialog
 from .jobs import JobManager, JobsPanel
+from .fit_map_dialog import FitMapWindow
 from .overlap_dialog import OverlapDialog
 from .panels import FoldPanel, LayersPanel, RunsPanel
 from .panels.align import AlignPanel
@@ -39,7 +40,7 @@ from .panels.calibration import CalibrationPanel
 from .panels.classes import ClassesPanel, group_colour
 from .panels.clusters import ClustersPanel
 from .panels.hydrocarbons import HydrocarbonsPanel
-from .panels.istd import IstdPanel
+from .panels.istd import IstdPanel, IstdResultsTable
 from .panels.results import ResultsPanel
 from .panels.siloxane import SiloxanePanel
 from .project import Project, SIDECAR_NAME
@@ -172,6 +173,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.istd_panel = IstdPanel()
         self.istd_panel.set_istd(self.istd)
         self.istd_panel.refresh()
+        self.istd_results = IstdResultsTable()
+        self.istd_results.set_istd(self.istd)
         self.spectrum = SpectrumView()
         self.jobs_panel = JobsPanel(self.jobs)
         self.results = ResultsPanel()
@@ -257,11 +260,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "compare runs. It sits last because it is analysis, not preparation: nothing else depends on it.",
             self.cluster_panel, "Cluster peaks")
         add("istd", "🏷️ Internal standards", "Internal standards",
-            "Select an internal standard, click its peak on whichever run is open, then find it on every "
-            "other run by position and mass spectrum together, with a confidence score per run.",
-            "It needs the blobs from step 4 on whichever runs it searches. Independent of everything after "
-            "step 4, so it can run any time once peaks are detected.",
-            self.istd_panel, "Find on all other chromatograms")
+            "Select an internal standard and click its peak on the run that is open. Set three thresholds: how "
+            "far in t1 and in t2 a peak may sit from where the standard is expected, and how well its mass "
+            "spectrum must match. Go searches every chromatogram; the table along the bottom shows the result.",
+            "It needs the peaks from step 4 on every run it searches. Nothing after step 4 is needed, so it can "
+            "run any time once peaks are detected; 📋 then hands the standards to 🧪.",
+            self.istd_panel, "Find in every chromatogram")
         # One left-hand dock with three tabs, so the run list, the layers and the open
         # step's settings share the space instead of competing for it.
         self.left_tabs = QtWidgets.QTabWidget()
@@ -274,7 +278,10 @@ class MainWindow(QtWidgets.QMainWindow):
         jobs_dock = self._dock("Jobs", self.jobs_panel, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
         hist_dock = self._dock("History", self.history, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
         log_dock = self._dock("Log", self.log, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
-        self.tabifyDockWidget(self.results_dock, jobs_dock)
+        self.istd_dock = self._dock("🏷️ Internal standards", self.istd_results,
+                                    QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.tabifyDockWidget(self.results_dock, self.istd_dock)
+        self.tabifyDockWidget(self.istd_dock, jobs_dock)
         self.tabifyDockWidget(jobs_dock, hist_dock)
         self.tabifyDockWidget(hist_dock, log_dock)
         jobs_dock.raise_()
@@ -351,7 +358,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 ("identify", "8 🏷️ Identify", "Library search"),
                 ("quant", "9 🧪 Quantify", "Targets, calibration and quantification"),
                 ("cluster", "10 🧩 Cluster", "Unsupervised peak clusters, within and between runs"),
-                ("istd", "11 🏷️ IS", "Internal standards: click-labelled, matched by position and spectrum")]):
+                ("istd", "11 🏷️ IS", "Internal standards: labelled once, found in every run by t1, t2 and spectrum")]):
             info = self.workflow.step_info(key)
             act = A(text, lambda _checked=False, k=key: self.workflow.show_step(k), None,
                     f"{tip}. Opens its settings on the left; press Go there to run it.\n"
@@ -814,7 +821,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.istd_panel.removeFromLibraryRequested.connect(self.istd.remove_from_library)
         self.istd_panel.exportRequested.connect(self.export_istd_report)
         self.istd_panel.targetsRequested.connect(lambda: self.istd_to_targets())
-        self.istd_panel.rowActivated.connect(self.relabel_istd)
+        self.istd_panel.settingsChanged.connect(self.istd.set_settings)
+        self.istd_results.cellChosen.connect(self.goto_istd)
+        self.istd_results.relabelRequested.connect(self.relabel_istd)
         # Layers tab: raw image visibility/alpha, and mirrors of the blob, stencil and
         # cluster overlay toggles that live in the top bar and the Cluster panel.
         self.layers_panel.raw.toggled.connect(self.view2d.set_image_visible)
@@ -1634,14 +1643,28 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.blobs.method == MS_AWARE:
             component_set = self.blobs.components_for(self.index)
             if component_set is not None and component_set.components:
+                # Pick the blob whose outline the click falls inside, measuring distance in
+                # that blob's own fitted widths (its 10% outline is 2.1 widths out), and in
+                # display coordinates so wrapped blobs are picked where they are drawn.
                 fold = self.project.fold(self.index)
-                t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
+                period, pitch = fold.spec.period, fold.row_pitch
+                click = self.view2d.last_click
+                clicked = self.view2d.pixel_at(*click) if click is not None else None
+                if clicked is not None and clicked[1] == col:
+                    x, y = click                      # exact position, not just the column
+                else:
+                    x, y = float(fold.t1[col] + 0.5 * period) / 60.0, float(t2)
                 components = component_set.components
-                distance = np.asarray([
-                    np.hypot((component.t1 - t1) / 60.0, (component.t2 - t2) / 0.5)
-                    for component in components])
+                shown_x, shown_y = self.view2d._to_display([c.t1 for c in components],
+                                                           [c.t2 for c in components])
+                sigma_col = np.asarray([c.sigma_col for c in components], dtype=float)
+                sigma_row = np.asarray([c.sigma_row for c in components], dtype=float)
+                sigma_col = np.where(np.isfinite(sigma_col) & (sigma_col > 0), sigma_col, 1.0)
+                sigma_row = np.where(np.isfinite(sigma_row) & (sigma_row > 0), sigma_row, 3.0)
+                distance = np.hypot((shown_x - x) * 60.0 / period / sigma_col,
+                                    (shown_y - y) / pitch / sigma_row)
                 nearest = int(np.argmin(distance))
-                if distance[nearest] < 1.5:
+                if distance[nearest] <= 3.0:
                     # select_component/select_row suppress their own selectionChanged signal
                     # (it exists for genuine table clicks), so the overlay and spectrum are
                     # refreshed here explicitly.
@@ -1889,11 +1912,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 (np.array([]), np.array([])), (np.array([]), np.array([])))
             colours = ((0, 220, 255), (255, 105, 180), (255, 205, 60),
                        (120, 235, 120), (190, 130, 255), (255, 140, 70))
-            selected_regions = set(self.blobs_panel.selected_region_indices())
+            selected = self.blobs_panel.selected_component_ids()
             component_overlays, used = [], set()
             if component_set is not None:
                 for group in component_set.groups:
-                    for component_index, _component in enumerate(group.components):
+                    for component_index, component in enumerate(group.components):
                         colour = colours[component_index % len(colours)]
                         for fraction, style in ((0.10, QtCore.Qt.PenStyle.SolidLine),
                                                 (0.50, QtCore.Qt.PenStyle.DotLine)):
@@ -1903,7 +1926,9 @@ class MainWindow(QtWidgets.QMainWindow):
                                 # Any width above 1 sends Qt down its slow wide-line stroker:
                                 # ~1,600 contours at 1.8 cost 0.1-1.7 s per pan frame, at 1 about
                                 # 8 ms. Only the few selected contours are drawn wide.
-                                "width": 3.0 if group.region_index in selected_regions else 1.0})
+                                # The selected blob alone is drawn wide, not every blob fitted
+                                # in the same group as it.
+                                "width": 3.0 if component.id in selected else 1.0})
             # forget contours of groups that no longer exist (re-fits replace group objects)
             self._contour_cache = {k: v for k, v in getattr(self, '_contour_cache', {}).items() if k in used}
             self.view2d.set_component_overlay(component_overlays + self._class_overlays() + self._cluster_overlays())
@@ -2089,21 +2114,33 @@ class MainWindow(QtWidgets.QMainWindow):
         wrap = self.blobs.component_settings.candidates.wrap_below_s
 
         def work(token, progress):
-            _peaks, model, footprint = respectrum_components(
+            _peaks, model_tic, footprint = respectrum_components(
                 base_run, fold, component_set, wrap_below_s=wrap,
                 progress=lambda done, total: progress(done, total, "Fitting full spectra"),
                 cancel=token.check)
-            return signal_accounting(fold.tic_image(base_run), model, footprint, fold.row_pitch,
-                                     fold.spec.period, float(fold.t1[0]))
+            tic = fold.tic_image(base_run)
+            report = signal_accounting(tic, model_tic, footprint, fold.row_pitch,
+                                       fold.spec.period, float(fold.t1[0]))
+            model, _mask = model_on_frame(model_tic, footprint, tic.shape[0])
+            outlines = [group.contour(j, 0.10) for group in component_set.groups
+                        for j in range(len(group.components))]
+            return report, tic, model, outlines
 
-        def done(report):
+        def done(out):
+            report, tic, model, outlines = out
             self._accounting = getattr(self, "_accounting", {})
             self._accounting[entry.name] = report
             text = format_accounting(report)
             self.blobs_panel.show_accounting(text)
             self.say("📊 " + text)
+            if getattr(self, "fit_map", None) is None:
+                self.fit_map = FitMapWindow(self)
+            self.fit_map.set_data(entry.name, tic, model, float(fold.t1[0]), fold.spec.period,
+                                  fold.row_pitch, report, outlines)
+            self.fit_map.show()
+            self.fit_map.raise_()
 
-        self.project.jobs.submit(f"📊 Signal accounting: {entry.name}", work, done,
+        self.project.jobs.submit(f"📊 Fit and residual map: {entry.name}", work, done,
                                  lambda message: self.say(f"📊 {entry.name}: {message}"))
     def export_components(self, path=None) -> None:
         """Export the current run's component estimates and their warnings."""
@@ -2881,8 +2918,26 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.istd.references:
             self.say("Label at least one internal standard first")
             return
-        self.istd.propagate_to(loaded, on_done=lambda: self.workflow.mark_done(
-            "istd", "Internal standards searched on every run. Check the confidence report."))
+        self.istd.set_settings(self.istd_panel.settings())
+
+        def finished():
+            self.istd_dock.show()
+            self.istd_dock.raise_()
+            self.workflow.mark_done("istd", "Every chromatogram searched. The table along the bottom shows "
+                                            "where each standard passed; hover a ✗ for why.")
+
+        self.istd.propagate_to(loaded, on_done=finished)
+
+    def goto_istd(self, run: str, name: str):
+        """Open `run` on where `name` was found there (or its closest miss)."""
+        index = self.project.index_of(run)
+        m = self.istd.matches.get(run, {}).get(name)
+        if index is None or self.project.entries[index].run is None:
+            return
+        self.set_run(index)
+        if m is not None and m.t1 == m.t1:
+            self.tabs.setCurrentIndex(0)
+            self.view2d.centre_on(m.t1, m.t2)
 
     def export_istd_report(self):
         matches = self.istd.all_matches()
@@ -2890,9 +2945,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.say("Nothing to export yet")
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export internal-standard report", "istd_report.csv", "CSV (*.csv)")
+            self, "Export internal-standard results", "internal_standards.csv", "CSV (*.csv)")
         if path:
-            write_istd_report_csv(matches, path)
+            write_istd_report_csv(matches, path, self.istd.settings)
             self.say(f"Saved {Path(path).name}")
 
     def istd_to_targets(self, path=None):
@@ -2923,18 +2978,23 @@ class MainWindow(QtWidgets.QMainWindow):
     def _istd_changed(self):
         self.istd_panel.set_current_run(self.project.entries[self.index].name if self.index >= 0 else None)
         self.istd_panel.refresh()
+        self.istd_results.refresh()
         self._update_istd_overlay()
 
     def _update_istd_overlay(self):
+        """Found standards on this run (✓ and spectral match), and each labelled peak where no search has
+        been run here yet. Misses are not drawn: their closest candidate is not the standard."""
         markers = []
         if self.index >= 0:
             run = self.project.entries[self.index].name
+            found = self.istd.matches_for(self.index)
             for name, ref in self.istd.references.items():
-                if ref.run == run:
-                    markers.append(dict(t1=ref.t1, t2=ref.t2, label=name, tier="high"))
-            for m in self.istd.matches_for(self.index).values():
-                if m.tier != "not found":
-                    markers.append(dict(t1=m.t1, t2=m.t2, label=f"{m.name} {m.combined_score:.0%}", tier=m.tier))
+                if ref.run == run and name not in found:
+                    markers.append(dict(t1=ref.t1, t2=ref.t2, label=f"{name} (labelled)", tier="high"))
+            for m in found.values():
+                if m.found:
+                    markers.append(dict(t1=m.t1, t2=m.t2, label=f"✓ {m.name} {m.spectral_score:.2f}",
+                                        tier="medium" if m.n_passing > 1 else "high"))
         self.view2d.set_istd_overlay(markers)
 
     def _layers_changed(self):
