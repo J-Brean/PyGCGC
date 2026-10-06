@@ -528,6 +528,138 @@ def normalised_blob_rows(session: CalSession, blobs_by_run: dict, resolved: dict
     return rows
 
 
+# ------------------------------------------------------------- suggestions
+@dataclass(frozen=True)
+class SuggestSettings:
+    """How compounds are found from the standards alone (`suggest_compounds`)."""
+    min_snr: float = 30.0          # blobs in the highest level considered
+    t1_window_s: float = 30.0      # the same compound in another run: this close in t1...
+    t2_window_s: float = 0.3       # ...and t2...
+    min_cosine: float = 0.85       # ...with spectra at least this alike
+    slope_min: float = 0.7         # a calibrant: log volume rises with log amount at this slope or more...
+    slope_max: float = 1.3         # ...and no more
+    min_r2: float = 0.95           # ...along a straight line in log-log
+    constant_slope: float = 0.2    # an internal-standard candidate: |slope| below this...
+    constant_cv: float = 0.35      # ...and volumes within this coefficient of variation
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SuggestSettings":
+        return cls(**{k: v for k, v in (d or {}).items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
+class Suggestion:
+    kind: str                       # "calibrant" or "constant"
+    t1: float                       # s, in the reference (highest-level) run
+    t2: float
+    base_peak: int                  # most intense ion of the reference blob
+    blobs: dict                     # run -> blob index
+    volumes: dict                   # run -> blob volume
+    slope: float                    # of log volume against log amount
+    r2: float
+    cv: float                       # coefficient of variation of the volumes
+    min_cosine: float               # worst spectral match to the reference blob
+
+    @property
+    def label(self) -> str:
+        return f"m/z {self.base_peak} @ {self.t1 / 60:.2f} min, {self.t2:.2f} s"
+
+
+def amount_from_name(name: str) -> float | None:
+    """The amount written into a run name, as in "L6_5ng_on_tube" (5) or "L2_5uL_025ng"
+    (0.25: a leading zero marks a decimal, as written on the vials). None if absent."""
+    m = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:ng|pg|ug|µg)", name, re.IGNORECASE)
+    if m is None:
+        return None
+    text = m[1]
+    if len(text) > 1 and text.startswith("0") and "." not in text:
+        text = "0." + text[1:]
+    return float(text)
+
+
+def _unit(spectra: np.ndarray) -> np.ndarray:
+    s = np.asarray(spectra, dtype=float)
+    n = np.linalg.norm(s, axis=-1, keepdims=True)
+    return s / np.where(n > 0, n, 1.0)
+
+
+def suggest_compounds(blobs_by_run: dict, amounts: dict,
+                      settings: SuggestSettings = SuggestSettings(),
+                      exclude=None) -> list[Suggestion]:
+    """Compounds that behave like calibrants, or like internal standards, across a set of standards.
+
+    The idea in plain terms: in a calibration series every standard compound grows
+    with the level and an internal standard stays the same, while most other peaks
+    (bleed, contaminants, noise) do neither in a tidy way. Each strong blob of the
+    highest level is looked for in every other run (nearest apex inside the search
+    window whose spectrum matches it best, if alike enough; each blob is used once,
+    the largest reference blobs claiming first). Its volumes are then compared with
+    the amounts on a log-log line. A slope near 1 with a good fit marks a calibrant
+    (found in at least three runs and all but one); a slope near 0 with little
+    scatter, found in every run, marks a constant peak, which is what an internal
+    standard looks like (so is a steady contaminant: check before ticking IS).
+
+    `amounts` maps run name to its level amount. `exclude(run, blobs)` may return a
+    boolean mask of blobs to ignore (siloxane-like ones, say).
+    """
+    s = settings
+    runs = [r for r in amounts if blobs_by_run.get(r) is not None and np.isfinite(amounts[r]) and amounts[r] > 0]
+    if len(runs) < 3:
+        return []
+    ref = max(runs, key=lambda r: amounts[r])
+    rb = blobs_by_run[ref]
+    usable = {r: (~np.asarray(exclude(r, blobs_by_run[r]), dtype=bool) if exclude else
+                  np.ones(len(blobs_by_run[r]), dtype=bool)) for r in runs}
+    units = {r: _unit(blobs_by_run[r].spectra) for r in runs}
+    used = {r: np.zeros(len(blobs_by_run[r]), dtype=bool) for r in runs}
+    order = [i for i in np.argsort(-rb.volume) if rb.snr[i] >= s.min_snr and usable[ref][i]]
+    x_all = {r: np.log10(amounts[r]) for r in runs}
+    out = []
+    for i in order:
+        found, cos = {ref: int(i)}, [1.0]
+        for r in runs:
+            if r == ref:
+                continue
+            b = blobs_by_run[r]
+            d = np.hypot((b.t1 - rb.t1[i]) / s.t1_window_s, (b.t2 - rb.t2[i]) / s.t2_window_s)
+            cand = np.flatnonzero((d <= 1.0) & usable[r] & ~used[r])
+            if cand.size == 0:
+                continue
+            c = units[r][cand] @ units[ref][i]
+            k = int(np.argmax(c))
+            if c[k] >= s.min_cosine:
+                found[r] = int(cand[k])
+                cos.append(float(c[k]))
+        vols = {r: float(blobs_by_run[r].volume[j]) for r, j in found.items()}
+        x = np.array([x_all[r] for r in found])
+        y = np.log10(np.array([max(vols[r], 1e-12) for r in found]))
+        if len(found) < 3 or np.ptp(x) == 0:
+            continue
+        slope, intercept = np.polyfit(x, y, 1)
+        resid = y - (intercept + slope * x)
+        ss = float(np.sum((y - y.mean()) ** 2))
+        r2 = 1.0 - float(np.sum(resid ** 2)) / ss if ss > 0 else 0.0
+        v = np.array(list(vols.values()))
+        cv = float(v.std(ddof=1) / v.mean()) if v.mean() > 0 else float("inf")
+        kind = None
+        if (len(found) >= max(3, len(runs) - 1) and s.slope_min <= slope <= s.slope_max and r2 >= s.min_r2):
+            kind = "calibrant"
+        elif len(found) == len(runs) and abs(slope) < s.constant_slope and cv <= s.constant_cv:
+            kind = "constant"
+        if kind is None:
+            continue
+        for r, j in found.items():
+            used[r][j] = True
+        out.append(Suggestion(kind=kind, t1=float(rb.t1[i]), t2=float(rb.t2[i]),
+                              base_peak=int(rb.mz[int(np.argmax(rb.spectra[i]))]), blobs=found,
+                              volumes=vols, slope=float(slope), r2=float(r2), cv=cv, min_cosine=min(cos)))
+    out.sort(key=lambda g: g.t1)
+    return out
+
+
 def save_session(path, session: CalSession, extra: dict | None = None) -> Path:
     path = Path(path)
     path.write_text(json.dumps(dict(kind="pygcgc-calibration", version=1, session=session.to_dict(),

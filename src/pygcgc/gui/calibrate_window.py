@@ -35,9 +35,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..core import BackgroundSettings, CalibrationFit, PeakSettings
 from ..core.phase import Anchor
-from ..core.calbuilder import (CalBuilderSettings, CalCompound, CalSession, curve_rows, load_compounds,
-                               load_session, match_blob, normalised_blob_rows, point_rows,
-                               save_session, write_compounds)
+from ..core.calbuilder import (CalBuilderSettings, CalCompound, CalSession, SuggestSettings,
+                               amount_from_name, curve_rows, load_compounds, load_session, match_blob,
+                               normalised_blob_rows, point_rows, save_session, suggest_compounds,
+                               write_compounds)
+from ..core.siloxane import SiloxaneSettings, flag_siloxane_blobs
 from ..core.quant import write_dicts
 from .blob_state import LEGACY
 from .dialogs import SettingsDialog
@@ -501,6 +503,114 @@ class _PickRunsDialog(QtWidgets.QDialog):
 
 
 # ======================================================================== window
+class SuggestDialog(QtWidgets.QDialog):
+    """🔎 Find compounds from the standards alone: type each run's level amount, Find,
+    tick what to keep. Calibrants grow with the level; constant peaks are what an
+    internal standard looks like (so is a steady contaminant: check before keeping)."""
+    COLUMNS = ["Use", "Kind", "t₁ (min)", "t₂ (s)", "Base peak", "Slope", "R²", "CV (%)", "Runs", "Worst cosine"]
+
+    def __init__(self, runs: list[str], amounts: dict, blobs_by_run: dict,
+                 settings: SuggestSettings = SuggestSettings(), parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🔎 Suggest compounds from the standards")
+        self.resize(900, 640)
+        self.runs, self.blobs_by_run, self.settings = runs, blobs_by_run, settings
+        self.found = []
+        self.levels = QtWidgets.QTableWidget(len(runs), 2)
+        self.levels.setHorizontalHeaderLabels(["Run", "Level amount"])
+        self.levels.verticalHeader().setVisible(False)
+        self.levels.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        for r, run in enumerate(runs):
+            name = QtWidgets.QTableWidgetItem(run)
+            name.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled)
+            self.levels.setItem(r, 0, name)
+            v = amounts.get(run)
+            self.levels.setItem(r, 1, QtWidgets.QTableWidgetItem("" if v is None else f"{v:g}"))
+        self.levels.setMaximumHeight(40 + 30 * min(len(runs), 8))
+        find = QtWidgets.QPushButton("🔎 Find")
+        find.clicked.connect(self.find)
+        options = QtWidgets.QPushButton("Settings…")
+        options.clicked.connect(self._edit_settings)
+        self.table = QtWidgets.QTableWidget(0, len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(self.COLUMNS)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSortingEnabled(False)
+        self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.summary = QtWidgets.QLabel("Type the amount of each level (read from the run names where they say), "
+                                        "then Find. Siloxane-like blobs are left out.")
+        self.summary.setWordWrap(True)
+        buttons = QtWidgets.QDialogButtonBox()
+        self.add_btn = buttons.addButton("Add ticked compounds", QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        self.add_btn.setEnabled(False)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(find)
+        row.addWidget(options)
+        row.addStretch(1)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.addWidget(self.levels)
+        lay.addLayout(row)
+        lay.addWidget(self.summary)
+        lay.addWidget(self.table, 1)
+        lay.addWidget(buttons)
+
+    def amounts(self) -> dict:
+        out = {}
+        for r, run in enumerate(self.runs):
+            item = self.levels.item(r, 1)
+            try:
+                v = float(item.text()) if item and item.text().strip() else None
+            except ValueError:
+                v = None
+            if v is not None and v > 0:
+                out[run] = v
+        return out
+
+    def _edit_settings(self) -> None:
+        dlg = SettingsDialog("Suggestion settings", self.settings, parent=self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self.settings = dlg.settings()
+
+    def find(self) -> None:
+        amounts = self.amounts()
+        if len(amounts) < 3:
+            self.summary.setText("Give an amount for at least three runs")
+            return
+        sil = SiloxaneSettings()
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            self.found = suggest_compounds(self.blobs_by_run, amounts, self.settings,
+                                           exclude=lambda _r, b: flag_siloxane_blobs(b, sil))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        self.table.setRowCount(len(self.found))
+        for k, g in enumerate(self.found):
+            use = QtWidgets.QTableWidgetItem()
+            use.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            use.setCheckState(QtCore.Qt.CheckState.Checked if g.kind == "calibrant"
+                              else QtCore.Qt.CheckState.Unchecked)
+            cells = [use, "calibrant" if g.kind == "calibrant" else "constant (IS?)", f"{g.t1 / 60:.2f}",
+                     f"{g.t2:.3f}", str(g.base_peak), f"{g.slope:.2f}", f"{g.r2:.3f}", f"{100 * g.cv:.0f}",
+                     f"{len(g.blobs)}/{len(amounts)}", f"{g.min_cosine:.2f}"]
+            for c, v in enumerate(cells):
+                item = v if isinstance(v, QtWidgets.QTableWidgetItem) else QtWidgets.QTableWidgetItem(v)
+                if c:
+                    item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsSelectable)
+                self.table.setItem(k, c, item)
+        n_cal = sum(g.kind == "calibrant" for g in self.found)
+        self.summary.setText(
+            f"{n_cal} calibrants (ticked) and {len(self.found) - n_cal} constant peaks. Tick the constant "
+            "peaks that are your internal standards: they are added as IS. Names are placeholders; "
+            "rename them in the compound table.")
+        self.add_btn.setEnabled(bool(self.found))
+
+    def chosen(self) -> list:
+        return [g for k, g in enumerate(self.found)
+                if self.table.item(k, 0).checkState() == QtCore.Qt.CheckState.Checked]
+
+
 class CalibrationWindow(QtWidgets.QMainWindow):
     """📈 Build calibration curves from a separate set of standard runs."""
     changed = QtCore.Signal()
@@ -522,6 +632,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.project.blobs.method = LEGACY
         self.renderer = Renderer(self.project, self.jobs, parent=self)
         self.session = CalSession()
+        self.suggest_settings = SuggestSettings()
         self.normalised = False
         self.resolved: dict = {}
         self.points: dict = {}
@@ -704,6 +815,9 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.act_peak_settings = act("🔍 Settings…", self.edit_peak_settings, "Blob detection settings")
         self.act_run = act("▶ Clean and find blobs", self.run_pipeline,
                            "🧹 background removal then 🔍 TIC blobs on every run")
+        self.act_suggest = act("🔎 Suggest compounds…", self.suggest_dialog,
+                               "Find the calibrants (grow with the level) and constant peaks (internal "
+                               "standards?) from the standards alone, with no compound table")
         self.act_normalise = act("➗ Normalise to IS", self.normalise,
                                  "Divide every compound's blob by its internal standard's in the same run")
         tb.addSeparator()
@@ -882,6 +996,36 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.say(f"🔍 {n} blobs in {len(self.project.blobs.by_run)} runs; compounds matched")
         self._runs_changed()
         self.recompute()
+
+    def suggest_dialog(self) -> None:
+        if not self.project.blobs.by_run:
+            self.say("▶ Clean and find blobs first")
+            return
+        runs = self.session.runs
+        # Level amounts: what the compounds already say, else what the run names say.
+        known = {r: next((c.amounts[r] for c in self.session.analytes() if r in c.amounts), None) for r in runs}
+        amounts = {r: known[r] if known[r] is not None else amount_from_name(r) for r in runs}
+        dlg = SuggestDialog(runs, amounts, self.blobs_by_run(), self.suggest_settings, self)
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self.suggest_settings = dlg.settings
+            self.add_suggestions(dlg.chosen(), dlg.amounts())
+
+    def add_suggestions(self, chosen: list, amounts: dict) -> None:
+        """Add suggested compounds, each matched by hand to the blobs the suggestion
+        found (by spectrum, which follows drift between days better than position)."""
+        blobs = self.blobs_by_run()
+
+        def change(s):
+            for g in chosen:
+                is_istd = g.kind == "constant"
+                c = s.add_compound(CalCompound(
+                    name=("IS " if is_istd else "") + g.label, t1=g.t1, t2=g.t2, is_istd=is_istd,
+                    amounts={r: 1.0 for r in s.runs} if is_istd else dict(amounts)))
+                for run, j in g.blobs.items():
+                    s.pin_blob(c.name, run, blobs[run], j)
+        self._edit(change)
+        n_is = sum(g.kind == "constant" for g in chosen)
+        self.say(f"Added {len(chosen) - n_is} calibrants and {n_is} internal standards")
 
     def normalise(self) -> None:
         if not self.project.blobs.by_run:

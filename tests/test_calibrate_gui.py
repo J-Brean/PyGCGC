@@ -165,6 +165,31 @@ def test_click_adds_compounds_and_internal_standards(qtbot, cal_folder, monkeypa
     w.jobs.wait(5000)
 
 
+def test_suggested_compounds_give_curves_without_a_table(qtbot, cal_folder):
+    from PySide6 import QtCore
+    from pygcgc.core.calbuilder import SuggestSettings
+    from pygcgc.gui.calibrate_window import SuggestDialog
+    w = _open(qtbot, cal_folder)
+    _process(qtbot, w)
+    dlg = SuggestDialog(w.session.runs, {}, w.blobs_by_run(), SuggestSettings(min_snr=10), w)
+    qtbot.addWidget(dlg)
+    for r, v in enumerate(CAL_LEVELS.values()):
+        dlg.levels.item(r, 1).setText(f"{v:g}")
+    dlg.find()
+    kinds = sorted(g.kind for g in dlg.found)
+    assert kinds.count("calibrant") == 3 and "constant" in kinds
+    for k, g in enumerate(dlg.found):                     # keep the constant peak as the IS
+        if g.kind == "constant":
+            dlg.table.item(k, 0).setCheckState(QtCore.Qt.CheckState.Checked)
+    w.add_suggestions(dlg.chosen(), dlg.amounts())
+    assert len(w.session.analytes()) == 3 and len(w.session.istds()) >= 1
+    assert all(p.blob is not None for p in w.points.values())
+    w.normalise()
+    assert all(isinstance(f, CalibrationFit) and f.ok for f in w.fits.values())
+    w.jobs.cancel_all()
+    w.jobs.wait(5000)
+
+
 def test_export_and_session_round_trip(qtbot, cal_window, tmp_path):
     from pygcgc.gui.calibrate_window import CalibrationWindow
     w = cal_window

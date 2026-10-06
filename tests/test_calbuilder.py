@@ -182,6 +182,30 @@ def test_a_target_table_reads_as_a_compound_table(tmp_path):
         load_compounds(tmp_path / "bad.csv", ["r1"])
 
 
+def test_amounts_read_from_run_names():
+    from pygcgc.core.calbuilder import amount_from_name
+    assert amount_from_name("2026-08-25_Cal_L2_5uL_025ng_on_tube_1_70eV") == 0.25
+    assert amount_from_name("2026-08-24_L4_1ng_on_tube_1_70eV") == 1.0
+    assert amount_from_name("2026-08-24_L8_25ng_on_tube_1_70eV") == 25.0
+    assert amount_from_name("CAL_L1_2.5 ng") == 2.5
+    assert amount_from_name("SAMPLE_A") is None
+
+
+def test_suggestions_find_calibrants_and_the_internal_standard(blobs_by_run):
+    from pygcgc.core.calbuilder import SuggestSettings, suggest_compounds
+    amounts = {f"CAL_{lv}": v for lv, v in CAL_LEVELS.items()}
+    found = suggest_compounds(blobs_by_run, amounts, SuggestSettings(min_snr=10))
+    kinds = {(round(g.t1 / 10) * 10, g.kind) for g in found}
+    # IS at 60 s (constant), A 110, B 170, C 200 (one unit per unit amount)
+    assert (60, "constant") in kinds
+    for t1 in (110, 170, 200):
+        assert (t1, "calibrant") in kinds, kinds
+    cal = next(g for g in found if g.kind == "calibrant")
+    assert cal.slope == pytest.approx(1.0, abs=0.05) and len(cal.blobs) == len(RUNS)
+    # Too few levels to say anything.
+    assert suggest_compounds(blobs_by_run, dict(list(amounts.items())[:2])) == []
+
+
 def test_session_round_trip_and_exports(tmp_path, blobs_by_run):
     s = _session()
     s.pin("A", "CAL_L2", 110.0, 2.0)
