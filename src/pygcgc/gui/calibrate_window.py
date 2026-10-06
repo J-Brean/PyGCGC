@@ -1491,18 +1491,23 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         run = e.name
         selected = self.selected_compound()
         markers, matched = [], set()
+        # With many compounds (a suggested set runs to dozens) only the selected one and
+        # the internal standards are labelled; the rest keep their markers.
+        crowded = len(self.session.compounds) > 25
         for c in self.session.compounds:
             p = self.points.get((c.name, run))
             colour = ISTD_COLOUR if c.is_istd else TARGET_COLOUR
             if c.name == selected:
                 colour = SELECTED_COLOUR
+            show = not crowded or c.is_istd or c.name == selected
             if p is not None and p.blob is not None:
                 matched.add(p.blob)
                 markers.append(dict(t1=p.t1, t2=p.t2, colour=colour, symbol="t" if c.is_istd else "o",
-                                    label=c.name + (" ✋" if p.pinned else "")))
+                                    label=(c.name + (" ✋" if p.pinned else "")) if show else ""))
             else:
+                label = c.name + " (no match)" if blobs is not None else c.name
                 markers.append(dict(t1=c.t1, t2=c.t2, colour=MISSING_COLOUR if c.name != selected else colour,
-                                    symbol="x", label=c.name + " (no match)" if blobs is not None else c.name))
+                                    symbol="x", label=label if show else ""))
         self.view.set_overlay(markers, empty)
         if blobs is None or len(blobs) == 0:
             self.view.set_blob_overlay(empty, empty)

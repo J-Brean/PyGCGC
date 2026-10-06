@@ -6,6 +6,20 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**📈 Calibration builder on real standards, 2026-10-06** (same branch). Run end to end on four
+August 2026 standard levels (0.25 to 25 ng, 10 s method) supplied without a compound list
+([report](docs/validation/calibration-standards-2026-10-06.md)). New: 🔎 Suggest compounds (blobs
+that grow with every level are calibrants; flat ones are IS candidates, named and ticked when their
+spectrum carries a shipped internal standard's signature); level amounts read from run names;
+phases lined up from blob pairs after the first blob search (one run's bleed-method phase was
+0.73 s off, leaving 6 of 800 blobs matchable, 123 after); solvent front and t2 smears left out of
+matching; wrap-aware matching; largest raw point per blob with an optional saturation flag; 📂 Open
+folder; the main window's period no longer carried over as confirmed. Fixed: folder opening listed
+TOF-DS SD01 re-exports and then failed to load them. Findings: four internal standards found in
+every level, about half their signal at 25 ng; calibrant signal rose 5 to 15-fold over the 100-fold
+range (tube background, plateau near 3e5 counts); 3 of 59 curves pass on all levels, 24 without
+25 ng. 591 tests pass.
+
 **📈 Calibration builder, 2026-09-28** (branch `calibrate-2026-09-28`). A separate window (📈 Calibrate
 on the main toolbar) for a set of standard runs with its own project: compounds from a CSV (a
 `target_table.csv` also reads) or from clicks on the chromatogram, amounts per run, internal

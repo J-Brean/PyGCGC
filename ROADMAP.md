@@ -8,9 +8,12 @@ is done, and record it in CHANGELOG.md.
 
 These block validation, not development.
 
-1. **A real calibration sequence**: standards of known composition at several levels, with the
-   internal standards spiked, run with the 8 s method. Everything in 🧪 has so far been checked
-   only on planted peaks. Types and levels can now be set in the Runs table.
+1. **The composition of the August 2026 standards** (four levels, 0.25 to 25 ng, 10 s method):
+   compound names and amounts, IS amount per tube, and whether "025ng" means 0.25 ng. The 📈
+   builder found 59 calibrants and four internal standards in them without a list
+   ([report](docs/validation/calibration-standards-2026-10-06.md)), but nothing can be checked
+   against a known answer yet. A fifth level between 5 and 25 ng would show where the response
+   bends. 🧪 itself has still only been checked on planted peaks.
 2. **Internal-standard concentrations**, and whether the mix always contains the five standards
    found in the current runs (acenaphthene-d10, phenanthrene-d10, n-tetracosane-d50,
    chrysene-d12, perylene-d12). n-Dotriacontane-d66 elutes after the end of these 76-minute

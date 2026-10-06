@@ -632,11 +632,16 @@ def usable_blobs(blobs: BlobSet, period: float, solvent: tuple[float, float] | N
     if solvent is not None:
         keep &= ~((blobs.t1 >= solvent[0]) & (blobs.t1 <= solvent[1] + 2 * period))
     if n:
-        base = blobs.mz[np.argmax(blobs.spectra, axis=1)]
+        unit = _unit(blobs.spectra)
         col = np.round((blobs.t1 - blobs.t1_start) / period).astype(int)
         for i in range(n):
-            near = (base == base[i]) & (np.abs(col - col[i]) <= 1)
-            if near.sum() >= 3 and np.ptp(blobs.t2[near]) > period / 3:
+            near = np.flatnonzero(np.abs(col - col[i]) <= 1)
+            same = near[unit[near] @ unit[i] > 0.98]
+            # The same spectrum in three or more blobs spread over more than a second up the
+            # second dimension is a smear. A big peak whose tail breaks into pieces keeps its
+            # main blob (half or more of the group's signal); a smear has no such blob.
+            if (same.size >= 3 and np.ptp(blobs.t2[same]) > 1.0
+                    and blobs.volume[i] < 0.5 * blobs.volume[same].sum()):
                 keep[i] = False
     return keep
 
@@ -770,7 +775,7 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
     used = {r: np.zeros(len(blobs_by_run[r]), dtype=bool) for r in runs}
     order = [i for i in np.argsort(-rb.volume) if usable[ref][i]][:s.max_blobs]
     x_all = {r: np.log10(amounts[r]) for r in runs}
-    out = []
+    out, named = [], set()
     for i in order:
         found, cos = {ref: int(i)}, [1.0]
         for r in runs:
@@ -800,6 +805,8 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
         by_amount = [vols[r] for r in sorted(found, key=lambda r: amounts[r])]
         rising = bool(np.all(np.diff(by_amount) > 0))
         name = recognise_istd(rb.spectra[i], rb.mz)
+        if name in named:
+            name = ""              # a smaller piece of a standard already found (largest blobs come first)
         kind = None
         if name and len(found) == len(runs):
             # A known internal standard is kept whatever its trend: on the August 2026
@@ -814,6 +821,8 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
             continue
         for r, j in found.items():
             used[r][j] = True
+        if kind == "constant" and name:
+            named.add(name)
         out.append(Suggestion(kind=kind, t1=float(rb.t1[i]), t2=float(rb.t2[i]),
                               base_peak=int(rb.mz[int(np.argmax(rb.spectra[i]))]), blobs=found,
                               volumes=vols, slope=float(slope), r2=float(r2), cv=cv, min_cosine=min(cos),

@@ -236,6 +236,12 @@ def test_streaks_and_the_solvent_front_are_not_matched(blobs_by_run):
                     volume=np.r_[b.volume, b.volume[idx]])
     keep = usable_blobs(smear, 4.0)
     assert not keep[-3:].any() and keep[np.flatnonzero(~near_a)].all()
+    # a big peak whose tail broke into two small pieces up the second dimension keeps its main blob
+    tail = replace(b, t1=np.r_[b.t1, b.t1[[k, k]]], t2=np.r_[b.t2, b.t2[k] + 1.5, b.t2[k] + 2.5],
+                   spectra=np.vstack([b.spectra, b.spectra[[k, k]]]), width_t2=np.r_[b.width_t2, [0.1] * 2],
+                   volume=np.r_[b.volume, 0.05 * b.volume[[k, k]]])
+    keep = usable_blobs(tail, 4.0)
+    assert keep[k] and not keep[-2:].any()
 
 
 def test_shipped_internal_standards_are_recognised_by_spectrum():
