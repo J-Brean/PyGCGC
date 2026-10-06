@@ -171,7 +171,7 @@ def test_suggested_compounds_give_curves_without_a_table(qtbot, cal_folder):
     from pygcgc.gui.calibrate_window import SuggestDialog
     w = _open(qtbot, cal_folder)
     _process(qtbot, w)
-    dlg = SuggestDialog(w.session.runs, {}, w.blobs_by_run(), SuggestSettings(min_snr=10), w)
+    dlg = SuggestDialog(w.session.runs, {}, w.blobs_by_run(), SuggestSettings(), w)
     qtbot.addWidget(dlg)
     for r, v in enumerate(CAL_LEVELS.values()):
         dlg.levels.item(r, 1).setText(f"{v:g}")
@@ -258,4 +258,42 @@ def test_main_window_opens_the_builder_with_its_period(qtbot, window):
     assert cw.isVisible() and cw.project is not w.project
     assert cw.project.period == pytest.approx(w.project.period)
     assert cw.project.request_autosave() is None             # never writes the main project's file
+    cw.close()
+
+
+def test_a_run_at_the_wrong_phase_is_lined_up_with_the_others(qtbot, cal_folder):
+    w = _open(qtbot, cal_folder)
+    wrong = w.project.index_of("CAL_L3")
+    w.project.set_phase(wrong, GUI_PHASE + 0.4)          # as an independent estimate can be off
+    _process(qtbot, w)
+    assert w.line_up_phases(min_pairs=3)
+    assert w.project.entries[wrong].phase == pytest.approx(GUI_PHASE, abs=0.03)
+    assert w.project.entries[wrong].phase_method == "lined up"
+    assert all(e.phase == pytest.approx(GUI_PHASE) for i, e in enumerate(w.project.entries) if i != wrong)
+    _process(qtbot, w)                                   # clean and find blobs again at the new phase
+    assert not w.line_up_phases(min_pairs=3)             # nothing left to move
+    w.jobs.cancel_all()
+    w.jobs.wait(5000)
+
+
+def test_standards_get_their_own_period_not_the_main_windows(qtbot, window, cal_folder, tmp_path):
+    # The main window's runs are at one period (set by hand here); standards in a folder
+    # without a method.json are folded at the period estimated from themselves.
+    import shutil
+    w = window
+    w.project.set_period(6.0)
+    folder = tmp_path / "standards"
+    folder.mkdir()
+    for r in RUNS:
+        shutil.copy(cal_folder / "data" / f"{r}.cdf", folder)
+    w.show_calibrate_window()
+    cw = w.calibrate_window
+    loaded = []
+    cw.open_folder(folder, on_loaded=lambda: loaded.append(True))
+    qtbot.waitUntil(lambda: bool(loaded) and cw.jobs.active_count() == 0, timeout=TIMEOUT)
+    assert cw.session.runs == RUNS
+    assert cw.project.period == pytest.approx(4.0, abs=0.01)
+    assert cw.period.value() == pytest.approx(cw.project.period, abs=1e-4)     # the box shows it
+    cw.jobs.cancel_all()
+    cw.jobs.wait(5000)
     cw.close()

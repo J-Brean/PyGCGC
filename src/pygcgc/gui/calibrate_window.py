@@ -34,11 +34,13 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..core import BackgroundSettings, CalibrationFit, PeakSettings
+from ..core.io import discover_runs
 from ..core.phase import Anchor
 from ..core.calbuilder import (CalBuilderSettings, CalCompound, CalSession, SuggestSettings,
-                               amount_from_name, curve_rows, load_compounds, load_session, match_blob,
-                               normalised_blob_rows, point_rows, save_session, suggest_compounds,
-                               write_compounds)
+                               amount_from_name, blob_heights, curve_rows, load_compounds, load_session,
+                               match_blob, normalised_blob_rows, point_rows, save_session,
+                               suggest_compounds, t2_offsets, usable_blobs, write_compounds)
+from ..core.solvent import find_solvent_front
 from ..core.siloxane import SiloxaneSettings, flag_siloxane_blobs
 from ..core.quant import write_dicts
 from .blob_state import LEGACY
@@ -105,7 +107,8 @@ class CurvePanel(QtWidgets.QWidget):
     overrideRequested = QtCore.Signal(str, dict)           # compound, overrides ({} clears)
     amountRatioToggled = QtCore.Signal(bool)
 
-    COLUMNS = ["Use", "Run", "Amount", "Signal", "IS", "IS signal", "Ratio", "Back-calc.", "Error (%)", "Match"]
+    COLUMNS = ["Use", "Run", "Amount", "Signal", "Max point", "IS", "IS signal", "Ratio", "Back-calc.",
+               "Error (%)", "Match"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -289,7 +292,7 @@ class CurvePanel(QtWidgets.QWidget):
         passes = {}
         if isinstance(fit, CalibrationFit):
             passes = dict(zip(fit.labels, fit.passes()))
-        ux, uy, ulab, ubr, ox, oy, olab = [], [], [], [], [], [], []
+        ux, uy, ulab, ubr, usym, ox, oy, olab = [], [], [], [], [], [], [], []
         for run in s.runs:
             p = self.points.get((c, run))
             if p is None or not (np.isfinite(p.x) and np.isfinite(p.ratio)):
@@ -303,7 +306,8 @@ class CurvePanel(QtWidgets.QWidget):
                 uy.append(p.ratio)
                 ulab.append(run)
                 ubr.append(pg.mkBrush(*(OK if passes.get(run, True) else BAD)) if passes else pg.mkBrush(*GREY))
-        self.used.setData(ux, uy, brush=ubr, data=ulab)
+                usym.append("t" if p.saturated else "o")      # a triangle: possibly saturated
+        self.used.setData(ux, uy, brush=ubr, symbol=usym, data=ulab)
         self.left_out.setData(ox, oy, data=olab)
         sel = self.points.get((c, self.selected)) if self.selected else None
         if sel is not None and np.isfinite(sel.x) and np.isfinite(sel.ratio):
@@ -364,7 +368,11 @@ class CurvePanel(QtWidgets.QWidget):
                 ratio, istd, istd_sig = _fmt(p.ratio), p.istd, _fmt(p.istd_signal)
                 back_s, err_s = _fmt(back), (f"{err:+.1f}" if np.isfinite(err) else "")
             cells += [QtWidgets.QTableWidgetItem(x) for x in
-                      (_fmt(p.signal), istd, istd_sig, ratio, back_s, err_s, match)]
+                      (_fmt(p.signal), _fmt(p.height, 3), istd, istd_sig, ratio, back_s, err_s, match)]
+            if p.saturated:
+                cells[4].setForeground(QtGui.QBrush(QtGui.QColor(*BAD)))
+                cells[4].setToolTip("At or above the saturation setting (Matching…): the detector may be "
+                                    "near its limit, so this point may sit below the curve")
             for k, item in enumerate(cells):
                 if k == 2:
                     item.setFlags(editable | QtCore.Qt.ItemFlag.ItemIsEditable)
@@ -510,11 +518,11 @@ class SuggestDialog(QtWidgets.QDialog):
     COLUMNS = ["Use", "Kind", "t₁ (min)", "t₂ (s)", "Base peak", "Slope", "R²", "CV (%)", "Runs", "Worst cosine"]
 
     def __init__(self, runs: list[str], amounts: dict, blobs_by_run: dict,
-                 settings: SuggestSettings = SuggestSettings(), parent=None):
+                 settings: SuggestSettings = SuggestSettings(), parent=None, usable: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle("🔎 Suggest compounds from the standards")
         self.resize(900, 640)
-        self.runs, self.blobs_by_run, self.settings = runs, blobs_by_run, settings
+        self.runs, self.blobs_by_run, self.settings, self.usable = runs, blobs_by_run, settings, usable
         self.found = []
         self.levels = QtWidgets.QTableWidget(len(runs), 2)
         self.levels.setHorizontalHeaderLabels(["Run", "Level amount"])
@@ -578,20 +586,19 @@ class SuggestDialog(QtWidgets.QDialog):
         if len(amounts) < 3:
             self.summary.setText("Give an amount for at least three runs")
             return
-        sil = SiloxaneSettings()
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
         try:
-            self.found = suggest_compounds(self.blobs_by_run, amounts, self.settings,
-                                           exclude=lambda _r, b: flag_siloxane_blobs(b, sil))
+            self.found = suggest_compounds(self.blobs_by_run, amounts, self.settings, self.usable)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         self.table.setRowCount(len(self.found))
         for k, g in enumerate(self.found):
             use = QtWidgets.QTableWidgetItem()
             use.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
-            use.setCheckState(QtCore.Qt.CheckState.Checked if g.kind == "calibrant"
+            use.setCheckState(QtCore.Qt.CheckState.Checked if (g.kind == "calibrant" or g.name)
                               else QtCore.Qt.CheckState.Unchecked)
-            cells = [use, "calibrant" if g.kind == "calibrant" else "constant (IS?)", f"{g.t1 / 60:.2f}",
+            kind = "calibrant" if g.kind == "calibrant" else (f"IS: {g.name}" if g.name else "constant (IS?)")
+            cells = [use, kind, f"{g.t1 / 60:.2f}",
                      f"{g.t2:.3f}", str(g.base_peak), f"{g.slope:.2f}", f"{g.r2:.3f}", f"{100 * g.cv:.0f}",
                      f"{len(g.blobs)}/{len(amounts)}", f"{g.min_cosine:.2f}"]
             for c, v in enumerate(cells):
@@ -600,10 +607,12 @@ class SuggestDialog(QtWidgets.QDialog):
                     item.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsSelectable)
                 self.table.setItem(k, c, item)
         n_cal = sum(g.kind == "calibrant" for g in self.found)
+        n_is = sum(bool(g.name) for g in self.found)
         self.summary.setText(
-            f"{n_cal} calibrants (ticked) and {len(self.found) - n_cal} constant peaks. Tick the constant "
-            "peaks that are your internal standards: they are added as IS. Names are placeholders; "
-            "rename them in the compound table.")
+            f"{n_cal} calibrants and {n_is} recognised internal standards (ticked), and "
+            f"{len(self.found) - n_cal - n_is} other constant peaks. Tick any other internal standards: "
+            "constant peaks are added as IS. Calibrant names are placeholders; rename them in the "
+            "compound table.")
         self.add_btn.setEnabled(bool(self.found))
 
     def chosen(self) -> list:
@@ -624,15 +633,18 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.jobs = JobManager(self)
         self.project = _CalProject(self.jobs, self)
         if main_project is not None:
+            # The main window's period is only a starting point: standards may have been run with
+            # another method (the August 2026 standards at 10 s, the exhaust runs at 8 s), so the
+            # period is estimated from the standards themselves unless a method.json sits beside them.
             self.project.period = main_project.period
-            self.project.period_confirmed = main_project.period_confirmed
-            self.project.period_method, self.project.period_detail = main_project.period_method, main_project.period_detail
+            self.project.period_confirmed = False
             self.project.bg_settings = main_project.bg_settings
             self.project.blobs.settings = main_project.blobs.settings
         self.project.blobs.method = LEGACY
         self.renderer = Renderer(self.project, self.jobs, parent=self)
         self.session = CalSession()
         self.suggest_settings = SuggestSettings()
+        self.heights: dict = {}           # run name -> largest raw point of each blob
         self.normalised = False
         self.resolved: dict = {}
         self.points: dict = {}
@@ -767,7 +779,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.project.message.connect(lambda m: self.statusBar().showMessage(m, 8000))
         self.project.blobs.changed.connect(self.recompute)
         self.project.blobs.runningChanged.connect(lambda _b: self._update_guide())
-        self.project.foldChanged.connect(lambda _i: self._update_guide())
+        self.project.foldChanged.connect(self._fold_changed)
         self.jobs.jobChanged.connect(self._job_changed)
         self.jobs.busyChanged.connect(lambda n: self.busy.setText("" if n == 0 else f"⏳ {n} job(s)"))
         QtGui.QShortcut(QtGui.QKeySequence.StandardKey.Undo, self, self.undo)
@@ -787,7 +799,9 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             tb.addAction(a)
             return a
 
-        self.act_open = act("📂 Open runs…", self.open_runs_dialog, "Choose the standard runs")
+        self.act_open_folder = act("📂 Open folder…", self.open_folder_dialog,
+                                   "Every run in a folder (the untreated 70 eV channel of native files)")
+        self.act_open = act("Open runs…", self.open_runs_dialog, "Choose the standard runs one by one")
         self.act_from_main = act("From main window…", self.runs_from_main,
                                  "Use runs already open in the main window (calibration runs are ticked)")
         tb.addSeparator()
@@ -813,6 +827,11 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         tb.addSeparator()
         self.act_bg_settings = act("🧹 Settings…", self.edit_background_settings, "Background removal settings")
         self.act_peak_settings = act("🔍 Settings…", self.edit_peak_settings, "Blob detection settings")
+        self.act_line_up = act("Line up phases", lambda: None,
+                               "After finding blobs, move any run whose second dimension sits apart from the "
+                               "others (judged from blobs of the same spectrum) and find its blobs again")
+        self.act_line_up.setCheckable(True)
+        self.act_line_up.setChecked(True)
         self.act_run = act("▶ Clean and find blobs", self.run_pipeline,
                            "🧹 background removal then 🔍 TIC blobs on every run")
         self.act_suggest = act("🔎 Suggest compounds…", self.suggest_dialog,
@@ -856,6 +875,31 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(self, "Standard runs", "", RUN_FILES)
         if paths:
             self.add_runs(paths)
+
+    def open_folder_dialog(self) -> None:
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Folder of standard runs", self._folder())
+        if folder:
+            self.open_folder(folder)
+
+    def open_folder(self, folder, on_loaded=None) -> None:
+        """Every run in a folder, the untreated 70 eV channel of each native acquisition
+        (as the main window's folder opening chooses)."""
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        try:
+            paths = discover_runs(folder)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        if not paths:
+            self.say(f"No supported runs in {folder}")
+            return
+        self.add_runs(paths, on_loaded)
+
+    def _fold_changed(self, _index: int) -> None:
+        if abs(self.period.value() - self.project.period) > 1e-9:
+            self.period.blockSignals(True)
+            self.period.setValue(self.project.period)
+            self.period.blockSignals(False)
+        self._update_guide()
 
     def runs_from_main(self) -> None:
         entries = self.main_project.entries if self.main_project is not None else []
@@ -956,7 +1000,10 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             "t2_window_s": "…and this close in t₂",
             "t1_scale": "For the nearest internal standard: this many seconds of t₁…",
             "t2_scale": "…count the same as this many seconds of t₂",
-            "amount_ratio": "x = amount / IS amount"}, parent=self)
+            "amount_ratio": "x = amount / IS amount",
+            "saturation": "Flag a point (triangle, amber Max point) whose largest raw value reaches this. "
+                          "0 turns it off. The August 2026 standards levelled off near 3e5 counts."},
+            parent=self)
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             new = dlg.settings()
             self._edit(lambda s: setattr(s, "settings", new))
@@ -967,8 +1014,10 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             new = dlg.settings()
             self._edit(lambda s: setattr(s, "calibration", new))
 
-    def run_pipeline(self, on_ready=None) -> None:
-        """🧹 then 🔍 on every run (both come from the cache when nothing changed)."""
+    def run_pipeline(self, on_ready=None, line_up: bool | None = None) -> None:
+        """🧹 then 🔍 on every run (both come from the cache when nothing changed), then,
+        if "Line up phases" is on, the phases are lined up (`line_up_phases`) and any
+        run whose phase moved is cleaned and searched again."""
         idx = self.project.loaded()
         if not idx:
             self.say("Open the standard runs first")
@@ -976,12 +1025,16 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         if self.project.blobs.running:
             self.say("Blob detection is already running")
             return
+        line_up = self.act_line_up.isChecked() if line_up is None else line_up
         settings = self.project.bg_settings
 
         def cleaned(results):
             self.project.set_backgrounds(results, settings, None)
 
             def found():
+                if line_up and self.line_up_phases():
+                    self.run_pipeline(on_ready, line_up=False)
+                    return
                 self._blobs_done()
                 if on_ready:
                     on_ready()
@@ -990,12 +1043,79 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.say("🧹 Cleaning the standard runs…")
         self.project.compute_background(idx, settings, None, on_done=cleaned)
 
+    def line_up_phases(self, min_shift: float = 0.1, min_pairs: int = 10) -> bool:
+        """Give every standard the same second-dimension position for the same compound.
+
+        Each run's phase is estimated on its own and can come out tenths of a second
+        apart (0.73 s for one of the four August 2026 standards), so blobs no longer
+        line up between runs. `core.calbuilder.t2_offsets` measures each run's offset
+        from blobs of the same spectrum; the runs are moved by their offset less the
+        median offset, so the majority stays where it is. Only moves larger than
+        `min_shift` are made. Returns whether any phase moved (blobs must then be found
+        again)."""
+        p = self.project
+        names = [e.name for e in p.entries if p.blobs.by_run.get(e) is not None]
+        if len(names) < 2:
+            return False
+        blobs = self.blobs_by_run()
+        offsets = t2_offsets({n: blobs[n] for n in names}, names[0], self.usable_masks(), min_pairs=min_pairs)
+        good = {n: o for n, (o, _pairs) in offsets.items() if np.isfinite(o)}
+        if len(good) < 2:
+            return False
+        centre = float(np.median(list(good.values())))
+        moves = {n: o - centre for n, o in good.items() if abs(o - centre) > min_shift}
+        if not moves:
+            return False
+        phases = {}
+        for n, move in moves.items():
+            i = p.index_of(n)
+            e = p.entries[i]
+            # A run whose t2 must rise by `move` starts its modulations `move` earlier.
+            phases[i] = ((e.phase - move) % p.period, "lined up",
+                         f"{e.phase_detail}; moved {-move:+.3f} s to line up with the other standards "
+                         f"({offsets[n][1]} blob pairs)")
+        for e in p.entries:
+            e.background = None          # recomputed by the next pass, not by the fold change as well
+        p.blobs.by_run = {}
+        p.set_phases(phases)
+        self.say("Phases lined up: " + ", ".join(f"{n} {-m:+.2f} s" for n, m in moves.items())
+                 + "; cleaning and finding blobs again")
+        return True
+
+    def usable_masks(self) -> dict:
+        """Run name -> blobs worth matching across runs: no streaks, solvent front or siloxane."""
+        p = self.project
+        out = {}
+        sil = SiloxaneSettings()
+        for e in p.entries:
+            b = p.blobs.by_run.get(e)
+            if b is None or e.run is None:
+                continue
+            solvent = find_solvent_front(e.run.times, np.asarray(e.run.tic, dtype=float))
+            out[e.name] = usable_blobs(b, p.period, solvent) & ~flag_siloxane_blobs(b, sil)
+        return out
+
     def _blobs_done(self) -> None:
         self._outline_cache = None
+        self.heights = {}
         n = sum(len(b) for b in self.project.blobs.by_run.values())
         self.say(f"🔍 {n} blobs in {len(self.project.blobs.by_run)} runs; compounds matched")
         self._runs_changed()
         self.recompute()
+        # Largest raw point in every blob, for the saturation check (a second or two a run).
+        p = self.project
+        for e in p.entries:
+            b = p.blobs.by_run.get(e)
+            if b is None or e.run is None:
+                continue
+            run, fold, name = e.run, p.fold(p.entries.index(e)), e.name
+
+            def done(h, name=name, b=b):
+                if self.blobs_by_run().get(name) is b:
+                    self.heights[name] = h
+                    self.recompute(refresh_table=False)
+            self.jobs.submit(f"Peak heights: {name}", lambda _t, _p, run=run, fold=fold, b=b:
+                             blob_heights(run, fold, b), done, quiet=True)
 
     def suggest_dialog(self) -> None:
         if not self.project.blobs.by_run:
@@ -1005,7 +1125,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         # Level amounts: what the compounds already say, else what the run names say.
         known = {r: next((c.amounts[r] for c in self.session.analytes() if r in c.amounts), None) for r in runs}
         amounts = {r: known[r] if known[r] is not None else amount_from_name(r) for r in runs}
-        dlg = SuggestDialog(runs, amounts, self.blobs_by_run(), self.suggest_settings, self)
+        dlg = SuggestDialog(runs, amounts, self.blobs_by_run(), self.suggest_settings, self, self.usable_masks())
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             self.suggest_settings = dlg.settings
             self.add_suggestions(dlg.chosen(), dlg.amounts())
@@ -1019,7 +1139,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             for g in chosen:
                 is_istd = g.kind == "constant"
                 c = s.add_compound(CalCompound(
-                    name=("IS " if is_istd else "") + g.label, t1=g.t1, t2=g.t2, is_istd=is_istd,
+                    name=("IS " if is_istd and not g.name else "") + g.label, t1=g.t1, t2=g.t2, is_istd=is_istd,
                     amounts={r: 1.0 for r in s.runs} if is_istd else dict(amounts)))
                 for run, j in g.blobs.items():
                     s.pin_blob(c.name, run, blobs[run], j)
@@ -1076,7 +1196,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.project.anchors = anchors or None
         blobs = self.blobs_by_run()
         self.resolved = self.session.resolve(blobs)
-        self.points = self.session.points(blobs, self.resolved)
+        self.points = self.session.points(blobs, self.resolved, self.heights)
         self.fits = self.session.fits(self.points) if self.normalised else {}
         if refresh_table:
             self._fill_table()

@@ -57,6 +57,7 @@ class CalBuilderSettings:
     t1_scale: float = 60.0         # s of t1 that count as one unit of "nearest IS" distance
     t2_scale: float = 0.5          # s of t2 that count as one unit
     amount_ratio: bool = False     # x = amount / IS amount, for an IS not spiked equally into every run
+    saturation: float = 0.0        # a point whose largest raw value reaches this is flagged (0: never)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -101,6 +102,8 @@ class CalPoint:
     istd_signal: float
     ratio: float                    # signal / istd_signal
     x: float                        # amount, or amount / IS amount
+    height: float = float("nan")    # largest raw single-ion value in the blob, when known
+    saturated: bool = False         # height at or above the saturation setting
 
 
 # ------------------------------------------------------------------ matching
@@ -131,7 +134,7 @@ def match_blob(blobs: BlobSet | None, t1: float, t2: float,
         hit = blobs.at_pixel(*blob_pixel(blobs, t1, t2))
         if hit is not None:
             return hit
-    d = np.hypot((blobs.t1 - t1) / settings.t1_window_s, (blobs.t2 - t2) / settings.t2_window_s)
+    d = _wrapped_distance(blobs.t1, blobs.t2, t1, t2, settings.t1_window_s, settings.t2_window_s, blobs.period)
     i = int(np.argmin(d))
     return i if d[i] <= 1.0 else None
 
@@ -254,8 +257,9 @@ class CalSession:
                     out[key] = match_blob(blobs, c.t1, c.t2, self.settings)
         return out
 
-    def points(self, blobs_by_run: dict, resolved: dict | None = None) -> dict:
-        """(compound, run) -> CalPoint for every compound and run."""
+    def points(self, blobs_by_run: dict, resolved: dict | None = None, heights: dict | None = None) -> dict:
+        """(compound, run) -> CalPoint for every compound and run. `heights` maps run
+        name to `blob_heights` of its blobs, for the saturation flag."""
         resolved = self.resolve(blobs_by_run) if resolved is None else resolved
         raw = {}
         for c in self.compounds:
@@ -280,10 +284,13 @@ class CalSession:
                 if self.settings.amount_ratio and std is not None:
                     std_amount = float(std.amounts.get(run, nan))
                     x = amount / std_amount if std_amount > 0 else nan
+                h = heights.get(run) if heights else None
+                height = float(h[i]) if (h is not None and i is not None and i < len(h)) else nan
                 out[(c.name, run)] = CalPoint(
                     compound=c.name, run=run, amount=amount, blob=i, pinned=(c.name, run) in self.pins,
                     t1=t1, t2=t2, signal=sig, istd=std.name if std is not None else "",
-                    istd_signal=std_sig, ratio=ratio, x=x)
+                    istd_signal=std_sig, ratio=ratio, x=x, height=height,
+                    saturated=bool(self.settings.saturation > 0 and height >= self.settings.saturation))
         return out
 
     # ---------------------------------------------------------------- curves
@@ -468,7 +475,8 @@ def point_rows(session: CalSession, points: dict, fits: dict) -> list[dict]:
             rows.append(dict(compound=c.name, role="istd" if c.is_istd else "target", run=run,
                              amount=p.amount, x=p.x, matched=p.blob is not None, by_hand=p.pinned,
                              t1_s=p.t1, t2_s=p.t2, signal=p.signal, istd=p.istd,
-                             istd_signal=p.istd_signal, ratio=p.ratio,
+                             istd_signal=p.istd_signal, ratio=p.ratio, max_point=p.height,
+                             saturated=p.saturated,
                              in_curve=(not c.is_istd and run not in session.excluded.get(c.name, {})
                                        and np.isfinite(p.x) and np.isfinite(p.ratio)),
                              excluded_because=session.excluded.get(c.name, {}).get(run, ""),
@@ -531,15 +539,20 @@ def normalised_blob_rows(session: CalSession, blobs_by_run: dict, resolved: dict
 # ------------------------------------------------------------- suggestions
 @dataclass(frozen=True)
 class SuggestSettings:
-    """How compounds are found from the standards alone (`suggest_compounds`)."""
-    min_snr: float = 30.0          # blobs in the highest level considered
+    """How compounds are found from the standards alone (`suggest_compounds`).
+
+    The calibrant slope range is wide on purpose. On the August 2026 standards
+    (0.25 to 25 ng, a 100-fold range) the standard compounds grew only 5 to 15-fold:
+    the tubes carry a background of the same compounds at the low end and the
+    detector saturates at the top, giving log-log slopes of 0.4 to 0.9."""
+    max_blobs: int = 1500          # the largest blobs of the highest level considered
     t1_window_s: float = 30.0      # the same compound in another run: this close in t1...
     t2_window_s: float = 0.3       # ...and t2...
     min_cosine: float = 0.85       # ...with spectra at least this alike
-    slope_min: float = 0.7         # a calibrant: log volume rises with log amount at this slope or more...
-    slope_max: float = 1.3         # ...and no more
-    min_r2: float = 0.95           # ...along a straight line in log-log
-    constant_slope: float = 0.2    # an internal-standard candidate: |slope| below this...
+    slope_min: float = 0.3         # a calibrant: rises with every level, log volume against log amount
+    slope_max: float = 1.5         # ...at a slope in this range...
+    min_r2: float = 0.85           # ...along a fairly straight line
+    constant_slope: float = 0.15   # an internal-standard candidate: |slope| below this...
     constant_cv: float = 0.35      # ...and volumes within this coefficient of variation
 
     def to_dict(self) -> dict:
@@ -562,10 +575,135 @@ class Suggestion:
     r2: float
     cv: float                       # coefficient of variation of the volumes
     min_cosine: float               # worst spectral match to the reference blob
+    name: str = ""                  # a library internal standard its spectrum matches, if any
 
     @property
     def label(self) -> str:
-        return f"m/z {self.base_peak} @ {self.t1 / 60:.2f} min, {self.t2:.2f} s"
+        return self.name or f"m/z {self.base_peak} @ {self.t1 / 60:.2f} min, {self.t2:.2f} s"
+
+
+# Spectral signatures of the shipped internal standards (presets/istd_library.json):
+# quantifier ion, qualifier ions and their ratios to it, measured on the five standards
+# found in the September 2026 exhaust runs (benchmarks/real_data_audit/internal_standards.py).
+ISTD_SIGNATURES = {
+    "acenaphthene-d10": (164, (162, 160), (0.963, 0.492)),
+    "phenanthrene-d10": (188, (184, 160), (0.186, 0.13)),
+    "n-tetracosane-d50": (66, (82, 98), (0.723, 0.512)),
+    "chrysene-d12": (240, (236, 120), (0.277, 0.15)),
+    "perylene-d12": (264, (260, 132), (0.199, 0.187)),
+}
+
+
+def recognise_istd(spectrum: np.ndarray, mz: np.ndarray, tolerance: float = 0.5) -> str:
+    """The shipped internal standard whose signature this spectrum carries, or "".
+
+    The quantifier ion must be among the spectrum's five largest, and each qualifier
+    ratio within `tolerance` (relative) of the measured one: loose enough for a blob
+    that shares its footprint with something else, tight enough that an undeuterated
+    compound (whose ions are 8 to 12 mass units lower) never qualifies."""
+    spectrum = np.asarray(spectrum, dtype=float)
+    top = set(np.asarray(mz)[np.argsort(-spectrum)[:5]].tolist())
+    lo = int(mz[0])
+    for name, (quant, quals, ratios) in ISTD_SIGNATURES.items():
+        if quant not in top or not lo <= quant <= int(mz[-1]):
+            continue
+        q = spectrum[quant - lo]
+        ok = all(lo <= ion <= int(mz[-1]) and abs(spectrum[ion - lo] / q - r) <= tolerance * r
+                 for ion, r in zip(quals, ratios))
+        if q > 0 and ok:
+            return name
+    return ""
+
+
+def usable_blobs(blobs: BlobSet, period: float, solvent: tuple[float, float] | None = None,
+                 max_width_fraction: float = 0.06) -> np.ndarray:
+    """Blobs worth matching across runs: not part of a streak along t2 and not inside
+    the solvent front, `(start, end)` in seconds.
+
+    A streak is a solvent tail or an overloaded compound smeared up the second
+    dimension. It shows as one blob wider than `max_width_fraction` of the period at
+    half height, or as three or more blobs with the same base peak within one
+    modulation of each other spread over more than a third of the period (on the
+    August 2026 standards, toluene-like m/z 91 streaks 9 to 14 min after injection)."""
+    n = len(blobs)
+    keep = np.ones(n, dtype=bool)
+    if blobs.width_t2.size == n:
+        keep &= blobs.width_t2 < max_width_fraction * period
+    if solvent is not None:
+        keep &= ~((blobs.t1 >= solvent[0]) & (blobs.t1 <= solvent[1] + 2 * period))
+    if n:
+        base = blobs.mz[np.argmax(blobs.spectra, axis=1)]
+        col = np.round((blobs.t1 - blobs.t1_start) / period).astype(int)
+        for i in range(n):
+            near = (base == base[i]) & (np.abs(col - col[i]) <= 1)
+            if near.sum() >= 3 and np.ptp(blobs.t2[near]) > period / 3:
+                keep[i] = False
+    return keep
+
+
+def blob_heights(run, fold, blobs: BlobSet) -> np.ndarray:
+    """The largest single-ion value recorded inside each blob, from the raw run.
+
+    A detector near its limit stops growing with the amount: on the August 2026
+    standards the largest point of the calibrants rose from about 2.1e5 counts at
+    5 ng to only 2.5e5 at 25 ng (none above 3e5), and their curves bent over at the
+    top. The height lets such points be seen and left out."""
+    from .peaks import make_frame
+    frame = make_frame(fold, blobs.settings)
+    r, c = frame.scan_pixels()
+    ok = (c >= 0) & (c < blobs.labels.shape[1]) & (r >= 0) & (r < blobs.labels.shape[0])
+    lab = np.zeros(run.n_scans, dtype=np.int64)
+    lab[ok] = blobs.labels[r[ok], c[ok]]
+    top = np.asarray(run.data.max(axis=1).todense()).ravel()
+    out = np.zeros(len(blobs) + 1)
+    np.maximum.at(out, lab, top)
+    return out[1:]
+
+
+def t2_offsets(blobs_by_run: dict, ref: str, usable: dict | None = None, t1_window_s: float = 30.0,
+               min_cosine: float = 0.95, top: int = 400, min_pairs: int = 10) -> dict:
+    """How far each run's second dimension sits from the reference run's: {run: (offset s, pairs)}.
+
+    The same compound in two runs of one method should have the same t2. The phase of
+    each run is estimated on its own, and on the August 2026 standards it came out 0.73 s
+    apart for one of four runs (the bleed method), so blobs no longer lined up. Here the
+    largest blobs of each run are paired with the reference blob of the most similar
+    spectrum (cosine at least `min_cosine`) within `t1_window_s`, whatever its t2; the
+    offset is the most common t2 difference (reference minus run, the median of the
+    pairs within 0.1 s of the mode of a 0.05 s histogram). Adding it to the run's t2,
+    by moving the run's phase back by as much, lines the run up with the reference.
+    Fewer than `min_pairs` pairs gives no offset (NaN)."""
+    rb = blobs_by_run[ref]
+    ru = _unit(rb.spectra)
+    period = rb.period
+    out = {}
+    for run, b in blobs_by_run.items():
+        if b is None or run == ref:
+            out[run] = (0.0, len(rb)) if run == ref else (float("nan"), 0)
+            continue
+        ok = usable.get(run) if usable else None
+        ok_ref = usable.get(ref) if usable else None
+        u = _unit(b.spectra)
+        order = [i for i in np.argsort(-b.volume) if ok is None or ok[i]][:top]
+        dts = []
+        for i in order:
+            cand = np.flatnonzero((np.abs(rb.t1 - b.t1[i]) < t1_window_s) &
+                                  (True if ok_ref is None else ok_ref))
+            if cand.size == 0:
+                continue
+            c = ru[cand] @ u[i]
+            j = int(np.argmax(c))
+            if c[j] >= min_cosine:
+                dts.append((rb.t2[cand[j]] - b.t2[i] + period / 2) % period - period / 2)
+        if len(dts) < min_pairs:
+            out[run] = (float("nan"), len(dts))
+            continue
+        dts = np.asarray(dts)
+        hist, edges = np.histogram(dts, bins=np.arange(-period / 2, period / 2 + 0.05, 0.05))
+        mode = edges[int(np.argmax(hist))] + 0.025
+        near = dts[np.abs(dts - mode) < 0.1]
+        out[run] = (float(np.median(near)), int(near.size))
+    return out
 
 
 def amount_from_name(name: str) -> float | None:
@@ -580,6 +718,18 @@ def amount_from_name(name: str) -> float | None:
     return float(text)
 
 
+def _wrapped_distance(t1, t2, t1_ref: float, t2_ref: float, w1: float, w2: float, period: float) -> np.ndarray:
+    """Scaled distance from (t1_ref, t2_ref), the smaller of reading each blob as it is or
+    across the wrap boundary (one modulation earlier with t2 one period longer, or the
+    reverse). A peak with t2 near the boundary is recorded on either side of it from run
+    to run, by a few hundredths of a second of phase."""
+    dt1 = np.asarray(t1) - t1_ref
+    dt2 = np.asarray(t2) - t2_ref
+    return np.minimum.reduce([np.hypot(dt1 / w1, dt2 / w2),
+                              np.hypot((dt1 + period) / w1, (dt2 - period) / w2),
+                              np.hypot((dt1 - period) / w1, (dt2 + period) / w2)])
+
+
 def _unit(spectra: np.ndarray) -> np.ndarray:
     s = np.asarray(spectra, dtype=float)
     n = np.linalg.norm(s, axis=-1, keepdims=True)
@@ -588,22 +738,25 @@ def _unit(spectra: np.ndarray) -> np.ndarray:
 
 def suggest_compounds(blobs_by_run: dict, amounts: dict,
                       settings: SuggestSettings = SuggestSettings(),
-                      exclude=None) -> list[Suggestion]:
+                      usable: dict | None = None) -> list[Suggestion]:
     """Compounds that behave like calibrants, or like internal standards, across a set of standards.
 
     The idea in plain terms: in a calibration series every standard compound grows
     with the level and an internal standard stays the same, while most other peaks
-    (bleed, contaminants, noise) do neither in a tidy way. Each strong blob of the
-    highest level is looked for in every other run (nearest apex inside the search
-    window whose spectrum matches it best, if alike enough; each blob is used once,
-    the largest reference blobs claiming first). Its volumes are then compared with
-    the amounts on a log-log line. A slope near 1 with a good fit marks a calibrant
-    (found in at least three runs and all but one); a slope near 0 with little
-    scatter, found in every run, marks a constant peak, which is what an internal
-    standard looks like (so is a steady contaminant: check before ticking IS).
+    (bleed, contaminants, noise) do neither in a tidy way. Each of the largest blobs
+    of the highest level is looked for in every other run (nearest apex inside the
+    search window whose spectrum matches it best, if alike enough; each blob is used
+    once, the largest reference blobs claiming first). Its volumes are then compared
+    with the amounts on a log-log line. A calibrant is found in at least three runs
+    and all but one, grows with every level, and lies on a fairly straight log-log
+    line of positive slope. A constant peak is found in every run with a slope near
+    zero and little scatter: that is what an internal standard looks like (so is a
+    steady contaminant, so constant peaks are only named and ticked when their
+    spectrum carries a shipped internal standard's signature, `recognise_istd`).
 
-    `amounts` maps run name to its level amount. `exclude(run, blobs)` may return a
-    boolean mask of blobs to ignore (siloxane-like ones, say).
+    Runs must share one phase (see `t2_offsets`). `amounts` maps run name to its
+    level amount; `usable` maps run name to a boolean mask of blobs worth matching
+    (`usable_blobs`, and not siloxane-like, say).
     """
     s = settings
     runs = [r for r in amounts if blobs_by_run.get(r) is not None and np.isfinite(amounts[r]) and amounts[r] > 0]
@@ -611,11 +764,11 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
         return []
     ref = max(runs, key=lambda r: amounts[r])
     rb = blobs_by_run[ref]
-    usable = {r: (~np.asarray(exclude(r, blobs_by_run[r]), dtype=bool) if exclude else
+    usable = {r: (np.asarray(usable[r], dtype=bool) if usable and r in usable else
                   np.ones(len(blobs_by_run[r]), dtype=bool)) for r in runs}
     units = {r: _unit(blobs_by_run[r].spectra) for r in runs}
     used = {r: np.zeros(len(blobs_by_run[r]), dtype=bool) for r in runs}
-    order = [i for i in np.argsort(-rb.volume) if rb.snr[i] >= s.min_snr and usable[ref][i]]
+    order = [i for i in np.argsort(-rb.volume) if usable[ref][i]][:s.max_blobs]
     x_all = {r: np.log10(amounts[r]) for r in runs}
     out = []
     for i in order:
@@ -624,7 +777,7 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
             if r == ref:
                 continue
             b = blobs_by_run[r]
-            d = np.hypot((b.t1 - rb.t1[i]) / s.t1_window_s, (b.t2 - rb.t2[i]) / s.t2_window_s)
+            d = _wrapped_distance(b.t1, b.t2, rb.t1[i], rb.t2[i], s.t1_window_s, s.t2_window_s, rb.period)
             cand = np.flatnonzero((d <= 1.0) & usable[r] & ~used[r])
             if cand.size == 0:
                 continue
@@ -644,8 +797,16 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
         r2 = 1.0 - float(np.sum(resid ** 2)) / ss if ss > 0 else 0.0
         v = np.array(list(vols.values()))
         cv = float(v.std(ddof=1) / v.mean()) if v.mean() > 0 else float("inf")
+        by_amount = [vols[r] for r in sorted(found, key=lambda r: amounts[r])]
+        rising = bool(np.all(np.diff(by_amount) > 0))
+        name = recognise_istd(rb.spectra[i], rb.mz)
         kind = None
-        if (len(found) >= max(3, len(runs) - 1) and s.slope_min <= slope <= s.slope_max and r2 >= s.min_r2):
+        if name and len(found) == len(runs):
+            # A known internal standard is kept whatever its trend: on the August 2026
+            # standards they lost about half their signal in the 25 ng run.
+            kind = "constant"
+        elif (len(found) >= max(3, len(runs) - 1) and rising and s.slope_min <= slope <= s.slope_max
+                and r2 >= s.min_r2):
             kind = "calibrant"
         elif len(found) == len(runs) and abs(slope) < s.constant_slope and cv <= s.constant_cv:
             kind = "constant"
@@ -655,7 +816,8 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
             used[r][j] = True
         out.append(Suggestion(kind=kind, t1=float(rb.t1[i]), t2=float(rb.t2[i]),
                               base_peak=int(rb.mz[int(np.argmax(rb.spectra[i]))]), blobs=found,
-                              volumes=vols, slope=float(slope), r2=float(r2), cv=cv, min_cosine=min(cos)))
+                              volumes=vols, slope=float(slope), r2=float(r2), cv=cv, min_cosine=min(cos),
+                              name=name if kind == "constant" else ""))
     out.sort(key=lambda g: g.t1)
     return out
 

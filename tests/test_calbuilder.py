@@ -194,7 +194,7 @@ def test_amounts_read_from_run_names():
 def test_suggestions_find_calibrants_and_the_internal_standard(blobs_by_run):
     from pygcgc.core.calbuilder import SuggestSettings, suggest_compounds
     amounts = {f"CAL_{lv}": v for lv, v in CAL_LEVELS.items()}
-    found = suggest_compounds(blobs_by_run, amounts, SuggestSettings(min_snr=10))
+    found = suggest_compounds(blobs_by_run, amounts, SuggestSettings())
     kinds = {(round(g.t1 / 10) * 10, g.kind) for g in found}
     # IS at 60 s (constant), A 110, B 170, C 200 (one unit per unit amount)
     assert (60, "constant") in kinds
@@ -204,6 +204,71 @@ def test_suggestions_find_calibrants_and_the_internal_standard(blobs_by_run):
     assert cal.slope == pytest.approx(1.0, abs=0.05) and len(cal.blobs) == len(RUNS)
     # Too few levels to say anything.
     assert suggest_compounds(blobs_by_run, dict(list(amounts.items())[:2])) == []
+
+
+def test_t2_offsets_find_a_run_folded_at_the_wrong_phase():
+    from pygcgc.core.calbuilder import t2_offsets
+    blobs = {}
+    for k, (lv, amt) in enumerate(CAL_LEVELS.items()):
+        run = make_cal_run({n: amt for n in ("A", "B", "C")}, seed=k)
+        # CAL_L4 folded 0.3 s late: everything in it reads 0.3 s low in t2
+        phase = GUI_PHASE + (0.3 if lv == "L4" else 0.0)
+        blobs[f"CAL_{lv}"] = find_blobs(run, fold(run, 4.0, phase))
+    off = t2_offsets(blobs, "CAL_L1", min_cosine=0.9, min_pairs=3)
+    assert off["CAL_L4"][0] == pytest.approx(0.3, abs=0.03)
+    for r in ("CAL_L2", "CAL_L3", "CAL_L5"):
+        assert abs(off[r][0]) < 0.03
+    assert np.isnan(t2_offsets(blobs, "CAL_L1")["CAL_L4"][0])      # too few pairs to say
+
+
+def test_streaks_and_the_solvent_front_are_not_matched(blobs_by_run):
+    from dataclasses import replace
+    from pygcgc.core.calbuilder import usable_blobs
+    b = blobs_by_run["CAL_L3"]
+    assert usable_blobs(b, 4.0).all()
+    near_a = np.abs(b.t1 - 110) < 10
+    assert not usable_blobs(b, 4.0, solvent=(100.0, 105.0))[near_a].any()
+    # three blobs of one base peak stacked up a modulation: a smear
+    k = int(np.flatnonzero(near_a)[np.argmax(b.volume[near_a])])
+    idx = np.array([k, k, k])
+    smear = replace(b, t1=np.r_[b.t1, b.t1[idx]], t2=np.r_[b.t2, [0.6, 2.0, 3.4]],
+                    spectra=np.vstack([b.spectra, b.spectra[idx]]), width_t2=np.r_[b.width_t2, [0.1] * 3],
+                    volume=np.r_[b.volume, b.volume[idx]])
+    keep = usable_blobs(smear, 4.0)
+    assert not keep[-3:].any() and keep[np.flatnonzero(~near_a)].all()
+
+
+def test_shipped_internal_standards_are_recognised_by_spectrum():
+    from pygcgc.core.calbuilder import recognise_istd
+    mz = np.arange(38, 301)
+    s = np.zeros(mz.size)
+    s[[188 - 38, 184 - 38, 160 - 38, 80 - 38]] = [100, 19, 13, 8]       # phenanthrene-d10
+    assert recognise_istd(s, mz) == "phenanthrene-d10"
+    s2 = np.zeros(mz.size)
+    s2[[178 - 38, 176 - 38, 152 - 38]] = [100, 20, 8]                    # phenanthrene, undeuterated
+    assert recognise_istd(s2, mz) == ""
+
+
+def test_blob_heights_are_the_largest_raw_point():
+    from pygcgc.core.calbuilder import blob_heights
+    run = make_cal_run({"A": 5.0, "B": 5.0, "C": 5.0}, seed=3)
+    f = fold(run, 4.0, GUI_PHASE)
+    b = find_blobs(run, f)
+    h = blob_heights(run, f, b)
+    assert h.shape == (len(b),) and np.all(h > 0)
+    assert h.max() == pytest.approx(run.data.max())
+
+
+def test_saturated_points_are_flagged(blobs_by_run):
+    from dataclasses import replace
+    s = _session()
+    heights = {r: np.full(len(b), 1e5) for r, b in blobs_by_run.items()}
+    i = s.resolve(blobs_by_run)[("A", "CAL_L5")]
+    heights["CAL_L5"][i] = 3e5
+    s.settings = replace(s.settings, saturation=2.5e5)
+    p = s.points(blobs_by_run, heights=heights)
+    assert p[("A", "CAL_L5")].saturated and p[("A", "CAL_L5")].height == 3e5
+    assert not p[("A", "CAL_L4")].saturated
 
 
 def test_session_round_trip_and_exports(tmp_path, blobs_by_run):
