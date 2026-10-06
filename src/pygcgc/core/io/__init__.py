@@ -54,8 +54,11 @@ def discover_runs(folder, *, include_alternatives=False, check_cancel=None):
         try:
             with LSCFile(path, check_cancel, validate_index=False) as source:
                 identity = source.identity()
-        except (ValueError, OSError):
-            selected.append(path)
+        except (ValueError, OSError) as exc:
+            # A TOF-DS re-export ("Open TOF Data File", SD01 spectra) is a copy in a format
+            # we don't read, saved beside the original; it is left out, not reported as broken.
+            if 'no SD04 spectra' not in str(exc):
+                selected.append(path)
             continue
         groups.setdefault(identity['acquisition_id'], []).append((path, identity))
     for group in groups.values():
