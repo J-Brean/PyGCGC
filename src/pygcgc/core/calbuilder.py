@@ -161,6 +161,15 @@ class CalSession:
     settings: CalBuilderSettings = field(default_factory=CalBuilderSettings)
     calibration: CalibrationSettings = field(default_factory=CalibrationSettings)
     unit: str = ""                                    # of the amounts, for labels and exports
+    levels: dict = field(default_factory=dict)        # run -> level amount, for every compound without its own
+
+    def amount(self, compound: "CalCompound", run: str) -> float:
+        """A compound's amount in a run: its own, else (not for an internal standard) the run's level."""
+        if run in compound.amounts:
+            return float(compound.amounts[run])
+        if not compound.is_istd and run in self.levels:
+            return float(self.levels[run])
+        return float("nan")
 
     # ----------------------------------------------------------- compounds
     def compound(self, name: str) -> CalCompound | None:
@@ -277,7 +286,7 @@ class CalSession:
             std = c if c.is_istd else self.istd_for(c.name)
             for run in self.runs:
                 i, t1, t2, sig = raw[(c.name, run)]
-                amount = float(c.amounts.get(run, nan))
+                amount = self.amount(c, run)
                 std_sig = raw[(std.name, run)][3] if std is not None else nan
                 ratio = sig / std_sig if (np.isfinite(std_sig) and std_sig > 0) else nan
                 x = amount
@@ -333,7 +342,7 @@ class CalSession:
                     excluded={k: dict(v) for k, v in self.excluded.items()},
                     overrides={k: dict(v) for k, v in self.overrides.items()},
                     settings=self.settings.to_dict(), calibration=self.calibration.to_dict(),
-                    unit=self.unit)
+                    unit=self.unit, levels={k: float(v) for k, v in self.levels.items()})
 
     @classmethod
     def from_dict(cls, d: dict) -> "CalSession":
@@ -346,7 +355,8 @@ class CalSession:
                    overrides={k: dict(v) for k, v in d.get("overrides", {}).items()},
                    settings=CalBuilderSettings.from_dict(d.get("settings", {})),
                    calibration=CalibrationSettings.from_dict(d.get("calibration", {})),
-                   unit=str(d.get("unit", "")))
+                   unit=str(d.get("unit", "")),
+                   levels={k: float(v) for k, v in d.get("levels", {}).items()})
 
     def copy(self) -> "CalSession":
         return CalSession.from_dict(json.loads(json.dumps(self.to_dict())))
@@ -829,6 +839,164 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
                               name=name if kind == "constant" else ""))
     out.sort(key=lambda g: g.t1)
     return out
+
+
+# ------------------------------------------------------- applying the curves
+@dataclass
+class SampleResult:
+    run: str
+    compound: str
+    found: bool
+    t1: float
+    t2: float
+    signal: float
+    istd: str
+    istd_signal: float
+    ratio: float
+    amount: float                   # in the standards' unit; NaN when it cannot be read off the curve
+    se: float
+    cosine: float                   # spectral match to the compound in the standards
+    flags: list = field(default_factory=list)
+
+
+@dataclass
+class CompoundTemplate:
+    """What a compound looks like in the standards: where, and with what spectrum."""
+    t1: float
+    t2: float
+    spectrum: np.ndarray            # unit vector over the standards' m/z axis
+    mz0: int
+
+
+def compound_templates(session: CalSession, blobs_by_run: dict, resolved: dict | None = None) -> dict:
+    """Each compound's mean position and mean (unit) spectrum over its matched blobs in the standards."""
+    resolved = session.resolve(blobs_by_run) if resolved is None else resolved
+    out = {}
+    for c in session.compounds:
+        pos, spec, mz0 = [], [], None
+        for run in session.runs:
+            i, b = resolved.get((c.name, run)), blobs_by_run.get(run)
+            if i is None or b is None:
+                continue
+            pos.append((b.t1[i], b.t2[i]))
+            spec.append(_unit(b.spectra[i]))
+            mz0 = int(b.mz[0])
+        if pos:
+            p = np.array(pos)
+            out[c.name] = CompoundTemplate(t1=float(p[:, 0].mean()), t2=float(p[:, 1].mean()),
+                                           spectrum=_unit(np.mean(spec, axis=0)), mz0=mz0)
+    return out
+
+
+def _on_axis(spectrum: np.ndarray, mz0: int, mz: np.ndarray) -> np.ndarray:
+    """A template spectrum moved onto another run's m/z axis (zero where it has no ion)."""
+    out = np.zeros(mz.size)
+    src = np.arange(spectrum.size) + mz0
+    keep = (src >= mz[0]) & (src <= mz[-1])
+    out[src[keep] - int(mz[0])] = spectrum[keep]
+    return out
+
+
+def find_in_sample(template: CompoundTemplate, blobs: BlobSet, t2_offset: float = 0.0,
+                   settings: CalBuilderSettings = CalBuilderSettings(), min_cosine: float = 0.8):
+    """(blob index, cosine) of a compound in a sample run, or (None, best cosine).
+
+    A sample holds far more than a standard, so position alone is not enough: among
+    the blobs inside the search window around the compound's position in the
+    standards (moved by the run's `t2_offset` from the standards, see `t2_offsets`),
+    the one whose spectrum is most like the compound's is taken, if at least
+    `min_cosine` alike."""
+    if blobs is None or len(blobs) == 0:
+        return None, float("nan")
+    d = _wrapped_distance(blobs.t1, blobs.t2, template.t1, template.t2 - t2_offset,
+                          settings.t1_window_s, settings.t2_window_s, blobs.period)
+    cand = np.flatnonzero(d <= 1.0)
+    if cand.size == 0:
+        return None, float("nan")
+    ref = _on_axis(template.spectrum, template.mz0, blobs.mz)
+    cos = _unit(blobs.spectra[cand]) @ ref
+    k = int(np.argmax(cos))
+    return (int(cand[k]) if cos[k] >= min_cosine else None), float(cos[k])
+
+
+def quantify_samples(session: CalSession, fits: dict, templates: dict, samples: dict,
+                     t2_offsets_by_run: dict | None = None, min_cosine: float = 0.8) -> list[SampleResult]:
+    """Read every compound in every sample run off its curve.
+
+    Each compound and its internal standard are found by `find_in_sample`; the ratio
+    of their volumes (or quantifier-ion volumes) is turned into an amount by inverse
+    prediction on the compound's curve, with its standard error. With "x = amount /
+    IS amount", the result is multiplied by the internal standard's median amount in
+    the standards, which assumes the samples were spiked like them. Flags say when a
+    result cannot be trusted as it stands: not found, internal standard not found,
+    no curve, a curve that fails its own check, or an amount outside the range of the
+    standards that made the curve (extrapolated)."""
+    out = []
+    for run, blobs in samples.items():
+        offset = (t2_offsets_by_run or {}).get(run, 0.0)
+        offset = 0.0 if not np.isfinite(offset) else offset
+        hits = {}
+        for c in session.compounds:
+            tpl = templates.get(c.name)
+            hits[c.name] = find_in_sample(tpl, blobs, offset, session.settings, min_cosine) if tpl else (None, np.nan)
+        for c in session.analytes():
+            i, cos = hits[c.name]
+            std = session.istd_for(c.name)
+            j = hits[std.name][0] if std is not None else None
+            flags = []
+            sig = blob_signal(blobs, i, c.quant_ion) if i is not None else float("nan")
+            std_sig = blob_signal(blobs, j, std.quant_ion) if j is not None else float("nan")
+            if i is None:
+                flags.append("not found")
+            if std is None:
+                flags.append("no internal standard")
+            elif j is None:
+                flags.append(f"{std.name} not found")
+            ratio = sig / std_sig if (np.isfinite(std_sig) and std_sig > 0 and np.isfinite(sig)) else float("nan")
+            fit = fits.get(c.name)
+            amount = se = float("nan")
+            if not isinstance(fit, CalibrationFit):
+                flags.append("no curve")
+            else:
+                if not fit.ok:
+                    flags.append("curve fails its check")
+                if np.isfinite(ratio):
+                    a, e = fit.amount_with_se(np.array([ratio]))
+                    amount, se = float(a[0]), float(e[0])
+                    if session.settings.amount_ratio and std is not None:
+                        std_amounts = [v for v in std.amounts.values() if np.isfinite(v)]
+                        k = float(np.median(std_amounts)) if std_amounts else float("nan")
+                        amount, se = amount * k, se * k
+                        lo, hi = fit.x.min() * k, fit.x.max() * k
+                    else:
+                        lo, hi = fit.x.min(), fit.x.max()
+                    if not np.isfinite(amount):
+                        flags.append("beyond the curve")
+                    elif amount < lo:
+                        flags.append("below the lowest standard")
+                    elif amount > hi:
+                        flags.append("above the highest standard")
+            out.append(SampleResult(
+                run=run, compound=c.name, found=i is not None,
+                t1=float(blobs.t1[i]) if i is not None else float("nan"),
+                t2=float(blobs.t2[i]) if i is not None else float("nan"),
+                signal=sig, istd=std.name if std is not None else "", istd_signal=std_sig, ratio=ratio,
+                amount=amount, se=se, cosine=cos, flags=flags))
+    return out
+
+
+def sample_rows(results: list[SampleResult], unit: str = "", volumes: dict | None = None) -> list[dict]:
+    """One row per sample and compound, with a concentration where the run has a volume (m³)."""
+    rows = []
+    for r in results:
+        vol = (volumes or {}).get(r.run)
+        conc = r.amount / vol if (vol and np.isfinite(r.amount)) else float("nan")
+        rows.append(dict(run=r.run, compound=r.compound, amount=r.amount, se=r.se, unit=unit,
+                         volume_m3=vol if vol else "", concentration=conc,
+                         concentration_unit=f"{unit} m-3" if unit else "per m3",
+                         ratio=r.ratio, istd=r.istd, signal=r.signal, istd_signal=r.istd_signal,
+                         t1_s=r.t1, t2_s=r.t2, spectral_match=r.cosine, flags="; ".join(r.flags)))
+    return rows
 
 
 def save_session(path, session: CalSession, extra: dict | None = None) -> Path:

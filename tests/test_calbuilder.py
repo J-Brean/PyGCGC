@@ -277,6 +277,50 @@ def test_saturated_points_are_flagged(blobs_by_run):
     assert not p[("A", "CAL_L4")].saturated
 
 
+def test_level_amounts_stand_in_for_every_compound_without_its_own(blobs_by_run):
+    s = _session()
+    for c in s.compounds:
+        if not c.is_istd:
+            c.amounts = {}
+    s.levels = {f"CAL_{lv}": v for lv, v in CAL_LEVELS.items()}
+    s.compound("B").amounts = {"CAL_L1": 0.6}            # its own amount wins where given
+    p = s.points(blobs_by_run)
+    assert p[("A", "CAL_L5")].amount == 10.0 and p[("B", "CAL_L1")].amount == 0.6
+    assert np.isnan(p[("IS", "CAL_L5")].amount) or p[("IS", "CAL_L5")].amount == 1.0
+    assert CalSession.from_dict(s.to_dict()).levels == s.levels
+
+
+def test_curves_applied_to_samples_recover_the_planted_amounts(blobs_by_run):
+    from tests.conftest import SAMPLE_AMOUNTS
+    from pygcgc.core.calbuilder import compound_templates, quantify_samples, sample_rows, t2_offsets
+    s = _session()
+    resolved = s.resolve(blobs_by_run)
+    fits = s.fits(s.points(blobs_by_run, resolved))
+    templates = compound_templates(s, blobs_by_run, resolved)
+    samples = {}
+    for k, (name, amts) in enumerate(SAMPLE_AMOUNTS.items()):
+        run = make_cal_run(amts, shift=(1.5, 0.02), seed=10 + k)
+        samples[name] = find_blobs(run, fold(run, 4.0, GUI_PHASE))
+    offsets = {r: t2_offsets({"CAL_L3": blobs_by_run["CAL_L3"], r: b}, "CAL_L3", min_cosine=0.9,
+                             min_pairs=3)[r][0] for r, b in samples.items()}
+    results = quantify_samples(s, fits, templates, samples, offsets)
+    assert len(results) == len(samples) * 3
+    for r in results:
+        truth = SAMPLE_AMOUNTS[r.run][r.compound]
+        assert r.found and r.istd == "IS"
+        assert r.amount == pytest.approx(truth, rel=0.05), (r.run, r.compound, r.amount, truth)
+        assert r.se > 0
+    rows = sample_rows(results, "ng", {"S1": 2.0})
+    s1a = next(x for x in rows if x["run"] == "S1" and x["compound"] == "A")
+    assert s1a["concentration"] == pytest.approx(s1a["amount"] / 2.0)
+    # A compound missing from a sample, and amounts beyond the standards, are flagged.
+    run = make_cal_run({"A": 30.0, "B": 0.0, "C": 1.0}, seed=20)
+    out = quantify_samples(s, fits, templates, {"X": find_blobs(run, fold(run, 4.0, GUI_PHASE))})
+    flags = {r.compound: r.flags for r in out}
+    assert "above the highest standard" in flags["A"]
+    assert "not found" in flags["B"] and not flags["C"]
+
+
 def test_session_round_trip_and_exports(tmp_path, blobs_by_run):
     s = _session()
     s.pin("A", "CAL_L2", 110.0, 2.0)
