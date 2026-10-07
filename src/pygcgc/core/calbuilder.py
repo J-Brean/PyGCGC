@@ -564,6 +564,7 @@ class SuggestSettings:
     min_r2: float = 0.85           # ...along a fairly straight line
     constant_slope: float = 0.15   # an internal-standard candidate: |slope| below this...
     constant_cv: float = 0.35      # ...and volumes within this coefficient of variation
+    min_volume_fraction: float = 1e-3   # blobs smaller than this share of the largest are noise, not compounds
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -676,7 +677,8 @@ def blob_heights(run, fold, blobs: BlobSet) -> np.ndarray:
 
 
 def t2_offsets(blobs_by_run: dict, ref: str, usable: dict | None = None, t1_window_s: float = 30.0,
-               min_cosine: float = 0.95, top: int = 400, min_pairs: int = 10) -> dict:
+               min_cosine: float = 0.95, top: int = 400, min_pairs: int = 10,
+               min_volume_fraction: float = 1e-3) -> dict:
     """How far each run's second dimension sits from the reference run's: {run: (offset s, pairs)}.
 
     The same compound in two runs of one method should have the same t2. The phase of
@@ -699,10 +701,13 @@ def t2_offsets(blobs_by_run: dict, ref: str, usable: dict | None = None, t1_wind
         ok = usable.get(run) if usable else None
         ok_ref = usable.get(ref) if usable else None
         u = _unit(b.spectra)
-        order = [i for i in np.argsort(-b.volume) if ok is None or ok[i]][:top]
+        # Only real peaks: single-ion noise blobs pair up at random t2 and can outvote them.
+        floor = min_volume_fraction * float(b.volume.max()) if len(b) else 0.0
+        ref_floor = min_volume_fraction * float(rb.volume.max()) if len(rb) else 0.0
+        order = [i for i in np.argsort(-b.volume) if (ok is None or ok[i]) and b.volume[i] >= floor][:top]
         dts = []
         for i in order:
-            cand = np.flatnonzero((np.abs(rb.t1 - b.t1[i]) < t1_window_s) &
+            cand = np.flatnonzero((np.abs(rb.t1 - b.t1[i]) < t1_window_s) & (rb.volume >= ref_floor) &
                                   (True if ok_ref is None else ok_ref))
             if cand.size == 0:
                 continue
@@ -783,7 +788,8 @@ def suggest_compounds(blobs_by_run: dict, amounts: dict,
                   np.ones(len(blobs_by_run[r]), dtype=bool)) for r in runs}
     units = {r: _unit(blobs_by_run[r].spectra) for r in runs}
     used = {r: np.zeros(len(blobs_by_run[r]), dtype=bool) for r in runs}
-    order = [i for i in np.argsort(-rb.volume) if usable[ref][i]][:s.max_blobs]
+    floor = s.min_volume_fraction * float(rb.volume[usable[ref]].max()) if usable[ref].any() else 0.0
+    order = [i for i in np.argsort(-rb.volume) if usable[ref][i] and rb.volume[i] >= floor][:s.max_blobs]
     x_all = {r: np.log10(amounts[r]) for r in runs}
     out, named = [], set()
     for i in order:

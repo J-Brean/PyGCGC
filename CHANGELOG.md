@@ -6,6 +6,21 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**📈 Calibration builder: usability pass and applying the curves, 2026-10-06** (same branch). The
+window is now four tabs that say what to do next and tick themselves off: 1 Standards (the runs
+selected in the main window, reused without reading them again; loading cleans them, finds blobs and
+lines up phases with no button; a level amount per run, read from the name, stands in for every
+compound without its own), 2 Compounds (Suggest, load or click; divided by the internal standard as
+soon as there is one), 3 Curves, 4 Apply to samples (new: the main window's other runs are cleaned and
+searched with the same settings, each compound found by position and spectrum, read off its curve
+with its standard error and flags, as amounts, concentrations or ratios; results follow every curve
+edit; CSV export). Settings and session moved into two menus. Fixed: with noisy data, hundreds of
+single-ion noise blobs were suggested as internal standards and could move a run's phase; blobs
+smaller than a thousandth of the largest are now left out of both. The solvent-front window was
+dropped from matching: a large early peak passed for one on short runs, and on the real standards the
+streak rules alone left the same blobs. On the synthetic pack the whole route recovers the planted
+sample amounts within 0.2%.
+
 **📈 Calibration builder on real standards, 2026-10-06** (same branch). Run end to end on four
 August 2026 standard levels (0.25 to 25 ng, 10 s method) supplied without a compound list
 ([report](docs/validation/calibration-standards-2026-10-06.md)). New: 🔎 Suggest compounds (blobs

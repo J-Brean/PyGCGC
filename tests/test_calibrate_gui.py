@@ -29,6 +29,7 @@ def _compound_csv(path):
 def _open(qtbot, cal_folder):
     from pygcgc.gui.calibrate_window import CalibrationWindow
     w = CalibrationWindow()
+    w.auto_process = False          # phases are set by hand below, before processing
     qtbot.addWidget(w)
     w.show()
     loaded = []
@@ -61,9 +62,10 @@ def test_table_to_curves(cal_window):
     assert w.session.runs == RUNS
     assert w.session.compound("A").amounts == {f"CAL_{lv}": v for lv, v in CAL_LEVELS.items()}
     assert w.session.compound("IS").is_istd
-    assert not w.fits                                     # nothing divided until asked
+    assert w.normalised and w.fits                        # divided as soon as there are blobs and an IS
     w.normalise()
-    assert w.tabs.currentWidget() is w.curves
+    assert w.tabs.currentIndex() == 2
+    assert w.tabs.tabText(2).startswith("✓")
     fit = w.fits["A"]
     assert isinstance(fit, CalibrationFit) and fit.ok
     assert fit.slope == pytest.approx(SCALE * 1.3 / (IS_AREA * 1.5), rel=0.05)
@@ -98,6 +100,7 @@ def test_divide_by_chooses_an_internal_standard(qtbot, cal_window):
     combo.setCurrentIndex(combo.findData("IS2"))
     qtbot.waitUntil(lambda: w.session.compound("A").istd == "IS2", timeout=TIMEOUT)
     assert w.points[("A", "CAL_L1")].istd == "IS2"
+    w.tabs.setCurrentIndex(1)
     combos = [c for c in w.table.findChildren(QtWidgets.QComboBox) if c.isVisible()]
     assert len(combos) == len(w.session.compounds)
     w.undo()
@@ -274,6 +277,87 @@ def test_a_run_at_the_wrong_phase_is_lined_up_with_the_others(qtbot, cal_folder)
     assert not w.line_up_phases(min_pairs=3)             # nothing left to move
     w.jobs.cancel_all()
     w.jobs.wait(5000)
+
+
+def test_whole_workflow_from_the_main_window_to_sample_amounts(qtbot, cal_folder, tmp_path):
+    """Select the calibration runs in the main window, open 📈, give level amounts, let the
+    compounds be suggested, then quantify the main window's samples."""
+    import csv
+    from PySide6 import QtCore
+    from pygcgc.core.calbuilder import SuggestSettings
+    from pygcgc.gui.calibrate_window import SuggestDialog
+    from pygcgc.gui.mainwindow import MainWindow
+    from tests.conftest import SAMPLE_AMOUNTS
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    mw.show()
+    loaded = []
+    mw.open_folder(cal_folder, on_loaded=lambda: loaded.append(True))
+    qtbot.waitUntil(lambda: bool(loaded) and mw.jobs.active_count() == 0, timeout=TIMEOUT)
+    qtbot.waitUntil(lambda: all(e.phase_method != "unset" for e in mw.project.entries), timeout=TIMEOUT)
+    # 1: highlight the calibration runs in the main window's Runs table
+    table = mw.runs_panel.table
+    table.clearSelection()
+    mode = table.selectionMode()
+    table.setSelectionMode(table.SelectionMode.MultiSelection)
+    for i, e in enumerate(mw.project.entries):
+        if e.name.startswith("CAL_"):
+            table.selectRow(i)
+    table.setSelectionMode(mode)
+    mw.act_calibrate.trigger()
+    cw = mw.calibrate_window
+    assert len(cw.main_selection()) == len(RUNS)
+    assert "5 runs selected" in cw.from_main_btn.text()
+    cw.runs_from_main()
+    qtbot.waitUntil(lambda: bool(cw.project.blobs.by_run) and not cw.project.blobs.running
+                    and cw.jobs.active_count() == 0, timeout=TIMEOUT * 3)
+    assert cw.session.runs == RUNS
+    assert all(e.run is mw.project.entries[mw.project.index_of(e.name)].run for e in cw.project.entries)
+    assert cw.tabs.currentIndex() == 1                       # moved on to the compounds by itself
+    for r, v in zip(RUNS, CAL_LEVELS.values()):              # names say no amount here: type the levels
+        cw.set_level(r, v)
+    # 2: compounds suggested, the constant one kept as the internal standard
+    dlg = SuggestDialog(cw.session.runs, cw.session.levels, cw.blobs_by_run(), SuggestSettings(), cw,
+                        cw.usable_masks())
+    qtbot.addWidget(dlg)
+    dlg.find()
+    for k, g in enumerate(dlg.found):
+        if g.kind == "constant":
+            dlg.table.item(k, 0).setCheckState(QtCore.Qt.CheckState.Checked)
+    cw.add_suggestions(dlg.chosen(), dlg.amounts())
+    # 3: curves, with nothing to press
+    assert sorted(g.kind for g in dlg.found) == ["calibrant"] * 3 + ["constant"], [
+        (g.kind, round(g.t1), round(g.slope, 2), len(g.blobs)) for g in dlg.found]
+    assert len(cw.fits) == 3 and all(isinstance(f, CalibrationFit) and f.ok for f in cw.fits.values())
+    # 4: the main window's samples, ticked by default (the calibration runs are not offered)
+    cw.tabs.setCurrentIndex(3)
+    assert set(cw.apply.ticked()) == set(SAMPLE_AMOUNTS)
+    done = []
+    cw.quantify_samples(cw.apply.ticked(), on_done=lambda: done.append(True))
+    qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT * 2)
+    assert cw.tabs.tabText(3).startswith("✓")
+    truth = {}
+    for g in cw.session.analytes():          # which suggested compound is A, B or C: by position
+        name = min((("A", 110.0), ("B", 170.0), ("C", 200.0)), key=lambda p: abs(p[1] - g.t1))[0]
+        truth[g.name] = name
+    for r in cw.sample_results:
+        assert r.found and not r.flags, (r.run, r.compound, r.flags)
+        assert r.amount == pytest.approx(SAMPLE_AMOUNTS[r.run][truth[r.compound]], rel=0.08)
+    path = cw.export_results(tmp_path / "results.csv")
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    assert len(rows) == 6 and all(float(x["concentration"]) == pytest.approx(float(x["amount"]) / 2.0)
+                                  for x in rows)
+    # A curve change updates the sample results by itself.
+    before = {(r.run, r.compound): r.amount for r in cw.sample_results}
+    name = cw.session.analytes()[0].name
+    cw._toggle_point(name, RUNS[-1])
+    after = {(r.run, r.compound): r.amount for r in cw.sample_results}
+    assert after[("S1", name)] != before[("S1", name)]
+    cw.jobs.cancel_all()
+    cw.jobs.wait(5000)
+    mw.jobs.cancel_all()
+    mw.jobs.wait(5000)
+    mw.undo.clear()
 
 
 def test_standards_get_their_own_period_not_the_main_windows(qtbot, window, cal_folder, tmp_path):

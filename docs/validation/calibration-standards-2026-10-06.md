@@ -26,9 +26,10 @@ exhaust runs.
    6 of the 800 largest L8 blobs could be matched in every level, and 123 with L8 moved. The
    builder now lines the phases up itself (L8 moved to 2.078 s, 122 pairs).
 2. **Streaks.** The solvent front and an overloaded m/z 91 compound smear up the whole second
-   dimension from 6.5 to 14 min and were the first "calibrants" suggested. Blobs in the solvent
-   front and pieces of a smear (three or more blobs of the same spectrum spread over more than
-   1 s of t2 in one modulation, none holding half the signal) are no longer matched.
+   dimension from 6.5 to 14 min and were the first "calibrants" suggested. Pieces of a smear
+   (three or more blobs of the same spectrum spread over more than 1 s of t2 in one modulation,
+   none holding half the signal) and blobs wider than 6% of the period are no longer matched;
+   excluding the solvent front as well changed nothing, so it is not done.
 3. **Internal standards.** Acenaphthene-d10, phenanthrene-d10, n-tetracosane-d50 and
    chrysene-d12 were found in every level and recognised by spectrum. Perylene-d12 was present
    but too weak and its qualifier ratios too far off to recognise. In the 25 ng run the IS

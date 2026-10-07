@@ -277,6 +277,22 @@ def test_saturated_points_are_flagged(blobs_by_run):
     assert not p[("A", "CAL_L4")].saturated
 
 
+def test_noise_blobs_are_neither_suggested_nor_used_to_line_up_phases():
+    # With noise, hundreds of single-ion noise blobs are "constant" across levels and
+    # pair up at random t2; before the size floor they were offered as internal
+    # standards and moved one run's phase.
+    from pygcgc.core.calbuilder import SuggestSettings, suggest_compounds, t2_offsets
+    blobs = {}
+    for k, (lv, amt) in enumerate(CAL_LEVELS.items()):
+        run = make_cal_run({n: amt for n in ("A", "B", "C")}, seed=k, noise=3.0)
+        blobs[f"CAL_{lv}"] = find_blobs(run, fold(run, 4.0, GUI_PHASE))
+    assert min(len(b) for b in blobs.values()) > 100
+    found = suggest_compounds(blobs, {f"CAL_{lv}": v for lv, v in CAL_LEVELS.items()}, SuggestSettings())
+    assert sorted(g.kind for g in found) == ["calibrant"] * 3 + ["constant"]
+    off = t2_offsets(blobs, "CAL_L1")
+    assert all(np.isnan(o) or abs(o) < 0.05 for o, _ in off.values())
+
+
 def test_level_amounts_stand_in_for_every_compound_without_its_own(blobs_by_run):
     s = _session()
     for c in s.compounds:

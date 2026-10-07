@@ -1,20 +1,21 @@
 """📈 Calibration builder: a separate window for a set of standard runs.
 
-Work from left to right along its toolbar:
+Four tabs, worked left to right, each saying what to do on it:
 
-1. 📂 Open the standard runs (or take them from the main window). They are
-   folded at the main window's period, or the one in a `method.json` beside
-   them, and each run's phase is estimated.
-2. Say which compounds are in them: load a compound table, or click peaks
-   in the chromatogram ("Click: add a compound" or "add an internal
-   standard"), then type each compound's amount per run in the table.
-3. ▶ Clean and find blobs: 🧹 background removal and 🔍 TIC blobs on every
-   run. Each compound is matched to a blob in each run automatically.
-4. ➗ Normalise to IS: every compound's blob is divided by its internal
-   standard's (the named one, otherwise the nearest) in the same run.
-5. Curves: one per compound. Click a point to select it; leave it out or put
+1. Standards: the runs selected in the main window (or a folder, or files),
+   with each run's level amount (read from its name where it says, as in
+   "L6_5ng"). Loading cleans them (🧹), finds their blobs (🔍) and lines
+   their phases up, with no button to press.
+2. Compounds: 🔎 suggested from the standards alone, loaded from a table, or
+   clicked on the chromatogram. Tick IS for internal standards. Each
+   compound is matched to a blob in every run and divided by its internal
+   standard as soon as there is one.
+3. Curves: one per compound. Click a point to select it; leave it out or put
    it back, retype its amount, or "Show in chromatogram" and click the right
    blob to rematch it ("No peak here" removes it). Everything updates at once.
+4. Apply to samples: the main window's other runs, cleaned and searched the
+   same way, each compound found by position and spectrum and read off its
+   curve, with flags; exported as CSV.
 
 The window keeps its own project (runs, fold, layers, blobs), apart from the
 main window's, and never autosaves over the main project's file. A session
@@ -36,11 +37,15 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ..core import BackgroundSettings, CalibrationFit, PeakSettings
 from ..core.io import discover_runs
 from ..core.phase import Anchor
+from ..core.background import remove_background, storage_threshold
+from ..core.batch import _hash_key
 from ..core.calbuilder import (CalBuilderSettings, CalCompound, CalSession, SuggestSettings,
-                               amount_from_name, blob_heights, curve_rows, load_compounds, load_session,
-                               match_blob, normalised_blob_rows, point_rows, save_session,
-                               suggest_compounds, t2_offsets, usable_blobs, write_compounds)
-from ..core.solvent import find_solvent_front
+                               amount_from_name, blob_heights, compound_templates, curve_rows,
+                               load_compounds, load_session, match_blob, normalised_blob_rows, point_rows,
+                               quantify_samples, sample_rows, save_session, suggest_compounds, t2_offsets,
+                               usable_blobs, write_compounds)
+from ..core.peaks import find_blobs
+from .project import RunEntry
 from ..core.siloxane import SiloxaneSettings, flag_siloxane_blobs
 from ..core.quant import write_dicts
 from .blob_state import LEGACY
@@ -620,6 +625,165 @@ class SuggestDialog(QtWidgets.QDialog):
                 if self.table.item(k, 0).checkState() == QtCore.Qt.CheckState.Checked]
 
 
+def _banner(text: str) -> QtWidgets.QLabel:
+    """The "what to do here" line at the top of each tab."""
+    label = QtWidgets.QLabel(text)
+    label.setWordWrap(True)
+    label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+    label.setStyleSheet("QLabel { padding: 6px; border-radius: 4px; background: rgba(153, 15, 61, 28); }")
+    return label
+
+
+class ApplyPanel(QtWidgets.QWidget):
+    """4 Apply to samples: tick runs, quantify, read and export the results."""
+    quantifyRequested = QtCore.Signal(list)          # run names
+    exportRequested = QtCore.Signal()
+    showRequested = QtCore.Signal(str, float, float)  # run, t1, t2 (in the main window)
+
+    MODES = [("Amount", "amount"), ("Concentration (per m³)", "concentration"), ("Ratio to IS", "ratio")]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.results = []
+        self.volumes: dict = {}
+        self.unit = ""
+        self.banner = _banner("")
+        self.samples = QtWidgets.QListWidget()
+        self.samples.setMaximumWidth(320)
+        self.samples.setToolTip("The main window's runs, other than the standards. Tick the ones to quantify.")
+        all_btn = QtWidgets.QPushButton("Tick all")
+        none_btn = QtWidgets.QPushButton("Tick none")
+        all_btn.clicked.connect(lambda: self._tick_all(True))
+        none_btn.clicked.connect(lambda: self._tick_all(False))
+        self.go = QtWidgets.QPushButton("▶ Quantify ticked runs")
+        self.go.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
+        self.go.clicked.connect(lambda: self.quantifyRequested.emit(self.ticked()))
+        self.mode = QtWidgets.QComboBox()
+        for label, key in self.MODES:
+            self.mode.addItem(label, key)
+        self.mode.currentIndexChanged.connect(lambda _i: self._fill())
+        self.table = QtWidgets.QTableWidget(0, 0)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.cellDoubleClicked.connect(self._show)
+        self.table.setToolTip("Amber: flagged (hover for why). n.d.: not found. Double-click to see it in the "
+                              "main window.")
+        self.export_btn = QtWidgets.QPushButton("📤 Export results…")
+        self.export_btn.clicked.connect(self.exportRequested.emit)
+        self.export_btn.setEnabled(False)
+        self.summary = QtWidgets.QLabel("")
+        self.summary.setWordWrap(True)
+
+        left = QtWidgets.QVBoxLayout()
+        left.addWidget(QtWidgets.QLabel("Sample runs (from the main window)"))
+        left.addWidget(self.samples, 1)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(all_btn)
+        row.addWidget(none_btn)
+        left.addLayout(row)
+        left.addWidget(self.go)
+        right = QtWidgets.QVBoxLayout()
+        bar = QtWidgets.QHBoxLayout()
+        bar.addWidget(QtWidgets.QLabel("Show"))
+        bar.addWidget(self.mode)
+        bar.addStretch(1)
+        bar.addWidget(self.export_btn)
+        right.addLayout(bar)
+        right.addWidget(self.table, 1)
+        right.addWidget(self.summary)
+        body = QtWidgets.QHBoxLayout()
+        body.addLayout(left)
+        body.addLayout(right, 1)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.addWidget(self.banner)
+        lay.addLayout(body, 1)
+
+    def set_samples(self, entries, standards: set) -> None:
+        """The main window's runs; ticked by default unless they are standards or calibration runs."""
+        before = {self.samples.item(i).data(QtCore.Qt.ItemDataRole.UserRole):
+                  self.samples.item(i).checkState() for i in range(self.samples.count())}
+        self.samples.clear()
+        for e in entries:
+            if str(e.path) in standards:
+                continue
+            item = QtWidgets.QListWidgetItem(f"{e.name}   {e.kind}".rstrip())
+            item.setData(QtCore.Qt.ItemDataRole.UserRole, e.name)
+            item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+            default = (QtCore.Qt.CheckState.Unchecked if ("cal" in e.kind.lower() or e.run is None)
+                       else QtCore.Qt.CheckState.Checked)
+            item.setCheckState(before.get(e.name, default))
+            if e.run is None:
+                item.setToolTip("Not loaded in the main window")
+            self.samples.addItem(item)
+
+    def ticked(self) -> list[str]:
+        return [self.samples.item(i).data(QtCore.Qt.ItemDataRole.UserRole) for i in range(self.samples.count())
+                if self.samples.item(i).checkState() == QtCore.Qt.CheckState.Checked]
+
+    def _tick_all(self, on: bool) -> None:
+        for i in range(self.samples.count()):
+            self.samples.item(i).setCheckState(QtCore.Qt.CheckState.Checked if on else QtCore.Qt.CheckState.Unchecked)
+
+    def set_results(self, results, volumes: dict, unit: str) -> None:
+        self.results, self.volumes, self.unit = results, volumes, unit
+        self.export_btn.setEnabled(bool(results))
+        self._fill()
+
+    def _fill(self) -> None:
+        runs = list(dict.fromkeys(r.run for r in self.results))
+        compounds = list(dict.fromkeys(r.compound for r in self.results))
+        by = {(r.run, r.compound): r for r in self.results}
+        mode = self.mode.currentData()
+        self.table.clear()
+        self.table.setRowCount(len(runs))
+        self.table.setColumnCount(len(compounds))
+        self.table.setHorizontalHeaderLabels(compounds)
+        self.table.setVerticalHeaderLabels(runs)
+        flagged = missing = 0
+        for i, run in enumerate(runs):
+            vol = self.volumes.get(run)
+            for j, c in enumerate(compounds):
+                r = by.get((run, c))
+                if r is None:
+                    continue
+                if not r.found:
+                    text = "n.d."
+                    missing += 1
+                elif mode == "ratio":
+                    text = _fmt(r.ratio)
+                elif mode == "concentration":
+                    text = _fmt(r.amount / vol) if (vol and np.isfinite(r.amount)) else "no volume" if r.found else ""
+                else:
+                    text = _fmt(r.amount)
+                item = QtWidgets.QTableWidgetItem(text)
+                item.setData(QtCore.Qt.ItemDataRole.UserRole, (run, r.t1, r.t2))
+                tip = [f"{c} in {run}", f"amount {_fmt(r.amount)} ± {_fmt(r.se, 2)} {self.unit}".rstrip(),
+                       f"ratio to {r.istd or 'IS'} {_fmt(r.ratio)}", f"spectral match {_fmt(r.cosine, 2)}"]
+                if r.flags:
+                    tip.append("⚠️ " + "; ".join(r.flags))
+                    if r.found:
+                        item.setBackground(QtGui.QBrush(QtGui.QColor(*BAD, 90)))
+                        flagged += 1
+                if not r.found:
+                    item.setForeground(QtGui.QBrush(QtGui.QColor(*MISSING_COLOUR)))
+                item.setToolTip("\n".join(tip))
+                self.table.setItem(i, j, item)
+        self.table.resizeColumnsToContents()
+        unit = {"amount": self.unit or "standards' unit", "concentration": f"{self.unit or 'amount'} per m³",
+                "ratio": "response / IS"}[mode]
+        self.summary.setText(
+            f"{len(runs)} runs × {len(compounds)} compounds, in {unit}. {flagged} results flagged (amber, hover "
+            f"for why), {missing} not found. Double-click a cell to see the peak in the main window."
+            if runs else "")
+
+    def _show(self, row: int, col: int) -> None:
+        item = self.table.item(row, col)
+        if item is not None:
+            run, t1, t2 = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if np.isfinite(t1):
+                self.showRequested.emit(run, t1, t2)
+
+
 class CalibrationWindow(QtWidgets.QMainWindow):
     """📈 Build calibration curves from a separate set of standard runs."""
     changed = QtCore.Signal()
@@ -654,10 +818,17 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self._updating = False
         self._outline_cache = None
         self.session_path: Path | None = None
+        # Loading runs cleans them and finds their blobs straight away (tests switch this off to
+        # set phases by hand first).
+        self.auto_process = True
+        self.main_window = parent if hasattr(parent, "runs_panel") else None
+        self.sample_blobs: dict = {}      # main-window run name -> BlobSet, found with this window's settings
+        self.sample_offsets: dict = {}    # ... -> t2 offset from the standards
+        self.sample_results: list = []
 
         # ---------------------------------------------------------- widgets
         self.view = ChromatogramView()
-        self.view.set_empty_message("Open the standard runs to start (📂 in this window's toolbar)")
+        self.view.set_empty_message("Choose the standard runs first (tab 1)")
         self.view.set_blob_overlay_visible(True)
         self.renderer.ready.connect(self.view.show_result)
         self.renderer.ready.connect(lambda _r: self._draw_overlay())
@@ -721,19 +892,68 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.guide.setWordWrap(True)
         self.guide.setContentsMargins(6, 2, 6, 2)
 
+        # 1 Standards
+        self.standards_banner = _banner("")
+        self.run_table = QtWidgets.QTableWidget(0, 4)
+        self.run_table.setHorizontalHeaderLabels(["Standard run", "Level amount", "Status", "Phase (s)"])
+        self.run_table.verticalHeader().setVisible(False)
+        self.run_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.run_table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        self.run_table.itemChanged.connect(self._level_edited)
+        self.from_main_btn = QtWidgets.QPushButton("Use the runs selected in the main window")
+        self.from_main_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
+        self.from_main_btn.clicked.connect(self.runs_from_main)
+        self.open_folder_btn = QtWidgets.QPushButton("📂 Open a folder…")
+        self.open_folder_btn.clicked.connect(self.open_folder_dialog)
+        self.open_runs_btn = QtWidgets.QPushButton("Open files…")
+        self.open_runs_btn.clicked.connect(self.open_runs_dialog)
+        remove_btn = QtWidgets.QPushButton("Remove selected")
+        remove_btn.clicked.connect(self._remove_selected_runs)
+        std_bar = QtWidgets.QHBoxLayout()
+        for w in (self.from_main_btn, self.open_folder_btn, self.open_runs_btn, remove_btn):
+            std_bar.addWidget(w)
+        std_bar.addStretch(1)
+        std_bar.addWidget(QtWidgets.QLabel("Amounts in"))
+        std_bar.addWidget(self.unit)
+        standards = QtWidgets.QWidget()
+        sl = QtWidgets.QVBoxLayout(standards)
+        sl.setContentsMargins(4, 4, 4, 4)
+        sl.addWidget(self.standards_banner)
+        sl.addLayout(std_bar)
+        sl.addWidget(self.run_table, 1)
+        self._std_layout = sl
+
+        # 2 Compounds: how to add them, then the chromatogram and the table
+        self.compounds_banner = _banner("")
+        self.suggest_btn = QtWidgets.QPushButton("🔎 Suggest from the standards…")
+        self.suggest_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
+        self.suggest_btn.setToolTip("No table needed: compounds that grow with the level, and the internal "
+                                    "standards, found in the runs")
+        self.suggest_btn.clicked.connect(self.suggest_dialog)
+        load_btn = QtWidgets.QPushButton("📄 Load a compound table…")
+        load_btn.setToolTip("A CSV of compound, t1_s, t2_s, role (istd), quant_ion, istd and amounts; "
+                            "a target_table.csv also works")
+        load_btn.clicked.connect(self.load_compounds_dialog)
+        save_btn = QtWidgets.QPushButton("💾 Save the table…")
+        save_btn.clicked.connect(self.save_compounds_dialog)
+        add_bar = QtWidgets.QHBoxLayout()
+        for w in (self.suggest_btn, load_btn, save_btn):
+            add_bar.addWidget(w)
+        add_bar.addStretch(1)
+
         # ---------------------------------------------------------- layout
         view_bar = QtWidgets.QHBoxLayout()
         view_bar.addWidget(QtWidgets.QLabel("Ion"))
         view_bar.addWidget(self.ion)
         view_bar.addWidget(self.all_blobs)
         view_bar.addSpacing(12)
-        view_bar.addWidget(QtWidgets.QLabel("Click:"))
+        view_bar.addWidget(QtWidgets.QLabel("A click on the chromatogram:"))
         view_bar.addWidget(self.click_mode)
         view_bar.addWidget(self.none_here)
         view_bar.addWidget(self.auto_here)
         view_bar.addStretch(1)
         table_bar = QtWidgets.QHBoxLayout()
-        for w in (self.add_row, self.del_row, self.fill_btn, QtWidgets.QLabel("Amounts in"), self.unit):
+        for w in (self.add_row, self.del_row, self.fill_btn):
             table_bar.addWidget(w)
         table_bar.addStretch(1)
         upper = QtWidgets.QWidget()
@@ -752,19 +972,33 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         chrom = QtWidgets.QWidget()
-        cl = QtWidgets.QHBoxLayout(chrom)
-        cl.setContentsMargins(4, 4, 4, 4)
+        outer = QtWidgets.QVBoxLayout(chrom)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.addWidget(self.compounds_banner)
+        outer.addLayout(add_bar)
+        cl = QtWidgets.QHBoxLayout()
         left = QtWidgets.QVBoxLayout()
-        left.addWidget(QtWidgets.QLabel("Standard runs"))
+        left.addWidget(QtWidgets.QLabel("Run shown"))
         left.addWidget(self.runs, 1)
-        self.remove_run_btn = QtWidgets.QPushButton("Remove run")
-        self.remove_run_btn.clicked.connect(self._remove_run)
-        left.addWidget(self.remove_run_btn)
         cl.addLayout(left)
         cl.addWidget(split, 1)
+        outer.addLayout(cl, 1)
+        self.curves_banner = _banner("")
+        curves_page = QtWidgets.QWidget()
+        cpl = QtWidgets.QVBoxLayout(curves_page)
+        cpl.setContentsMargins(4, 4, 4, 0)
+        cpl.addWidget(self.curves_banner)
+        cpl.addWidget(self.curves, 1)
+        self.apply = ApplyPanel()
+        self.apply.quantifyRequested.connect(self.quantify_samples)
+        self.apply.exportRequested.connect(self.export_results_dialog)
+        self.apply.showRequested.connect(self._show_in_main)
         self.tabs = QtWidgets.QTabWidget()
-        self.tabs.addTab(chrom, "Chromatograms and compounds")
-        self.tabs.addTab(self.curves, "Curves")
+        self.tabs.addTab(standards, "1  Standards")
+        self.tabs.addTab(chrom, "2  Compounds")
+        self.tabs.addTab(curves_page, "3  Curves")
+        self.tabs.addTab(self.apply, "4  Apply to samples")
+        self.tabs.currentChanged.connect(self._tab_changed)
         central = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(central)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -788,67 +1022,86 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.recompute()
 
     def _build_toolbar(self) -> None:
+        """A short toolbar: the session, the settings, undo. The work itself is on the tabs."""
         tb = self.addToolBar("Calibration")
         tb.setMovable(False)
         tb.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
 
-        def act(text, slot, tip):
+        def act(menu, text, slot, tip=""):
             a = QtGui.QAction(text, self)
             a.setToolTip(tip)
+            a.setStatusTip(tip)
             a.triggered.connect(lambda _checked=False: slot())
-            tb.addAction(a)
+            menu.addAction(a)
             return a
 
-        self.act_open_folder = act("📂 Open folder…", self.open_folder_dialog,
-                                   "Every run in a folder (the untreated 70 eV channel of native files)")
-        self.act_open = act("Open runs…", self.open_runs_dialog, "Choose the standard runs one by one")
-        self.act_from_main = act("From main window…", self.runs_from_main,
-                                 "Use runs already open in the main window (calibration runs are ticked)")
+        def drop(text, tip):
+            button = QtWidgets.QToolButton()
+            button.setText(text)
+            button.setToolTip(tip)
+            button.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+            menu = QtWidgets.QMenu(button)
+            menu.setToolTipsVisible(True)
+            button.setMenu(menu)
+            tb.addWidget(button)
+            return menu
+
+        session = drop("Session ▾", "Save or open a session, export the tables")
+        self.act_save = act(session, "Save session…", self.save_session_dialog, "Everything needed to carry on later")
+        self.act_load = act(session, "Open session…", self.open_session_dialog, "Carry on with a saved session")
+        session.addSeparator()
+        self.act_export = act(session, "📤 Export curves and points…", self.export_dialog,
+                              "The curves, points, compounds and every normalised blob as CSV tables")
+        self.act_export_results = act(session, "📤 Export sample results…", self.export_results_dialog,
+                                      "What tab 4 shows, as CSV")
+        self.act_save_compounds = act(session, "Save the compound table…", self.save_compounds_dialog)
+        self.act_compounds = act(session, "Load a compound table…", self.load_compounds_dialog)
+
+        settings = drop("⚙️ Settings ▾", "Background, blobs, matching and curve rules")
+        self.act_bg_settings = act(settings, "🧹 Background removal…", self.edit_background_settings)
+        self.act_peak_settings = act(settings, "🔍 Blob detection…", self.edit_peak_settings)
+        self.act_match_settings = act(settings, "Matching and saturation…", self.edit_match_settings,
+                                      "Search window for matching, the nearest-IS distance scale, saturation flag")
+        self.act_curve_settings = act(settings, "Curve rules…", self.edit_curve_settings,
+                                      "Default weights, model and acceptance limits for every curve")
+        settings.addSeparator()
+        self.act_line_up = act(settings, "Line up phases", lambda: None,
+                               "After finding blobs, move any run whose second dimension sits apart from the "
+                               "others (judged from blobs of the same spectrum) and find its blobs again")
+        self.act_line_up.setCheckable(True)
+        self.act_line_up.setChecked(True)
+        self.act_run = act(settings, "▶ Clean and find blobs again", self.run_pipeline,
+                           "Needed only after changing a setting; loading runs does it")
+        self.act_normalise = act(settings, "➗ Normalise to IS", self.normalise,
+                                 "Done as soon as there are blobs and an internal standard")
         tb.addSeparator()
-        tb.addWidget(QtWidgets.QLabel(" Period "))
+        undo = QtGui.QAction("↶ Undo", self)
+        undo.setToolTip("Undo (Ctrl+Z)")
+        undo.triggered.connect(lambda _c=False: self.undo())
+        redo = QtGui.QAction("↷ Redo", self)
+        redo.setToolTip("Redo (Ctrl+Shift+Z)")
+        redo.triggered.connect(lambda _c=False: self.redo())
+        tb.addAction(undo)
+        tb.addAction(redo)
+
+        # The fold lives with the runs, out of the way.
         self.period = QtWidgets.QDoubleSpinBox()
         self.period.setRange(0.5, 30.0)
         self.period.setDecimals(4)
         self.period.setSingleStep(0.01)
         self.period.setSuffix(" s")
         self.period.setValue(self.project.period)
-        self.period.setToolTip("Modulation period of the standard runs")
+        self.period.setToolTip("Modulation period of the standard runs (estimated from them when loaded)")
         self.period.editingFinished.connect(self._set_period)
-        tb.addWidget(self.period)
-        self.act_fold = act("🔄 Phase", lambda: self.project.estimate_phases(),
-                            "Estimate each run's phase again: from the internal standards that have a "
-                            "quantifier ion, otherwise from the quiet band")
-        tb.addSeparator()
-        self.act_compounds = act("Load compounds…", self.load_compounds_dialog,
-                                 "A CSV of compound, t1_s, t2_s, role (istd), quant_ion, istd, amount "
-                                 "and one amount column per run; a target_table.csv also works")
-        self.act_save_compounds = act("Save compounds…", self.save_compounds_dialog,
-                                      "Write the compound table, with the amounts, as a CSV")
-        tb.addSeparator()
-        self.act_bg_settings = act("🧹 Settings…", self.edit_background_settings, "Background removal settings")
-        self.act_peak_settings = act("🔍 Settings…", self.edit_peak_settings, "Blob detection settings")
-        self.act_line_up = act("Line up phases", lambda: None,
-                               "After finding blobs, move any run whose second dimension sits apart from the "
-                               "others (judged from blobs of the same spectrum) and find its blobs again")
-        self.act_line_up.setCheckable(True)
-        self.act_line_up.setChecked(True)
-        self.act_run = act("▶ Clean and find blobs", self.run_pipeline,
-                           "🧹 background removal then 🔍 TIC blobs on every run")
-        self.act_suggest = act("🔎 Suggest compounds…", self.suggest_dialog,
-                               "Find the calibrants (grow with the level) and constant peaks (internal "
-                               "standards?) from the standards alone, with no compound table")
-        self.act_normalise = act("➗ Normalise to IS", self.normalise,
-                                 "Divide every compound's blob by its internal standard's in the same run")
-        tb.addSeparator()
-        self.act_match_settings = act("Matching…", self.edit_match_settings,
-                                      "Search window for automatic matching and the nearest-IS distance scale")
-        self.act_curve_settings = act("Curve rules…", self.edit_curve_settings,
-                                      "Default weights, model and acceptance limits for every curve")
-        tb.addSeparator()
-        self.act_export = act("📤 Export…", self.export_dialog,
-                              "Write the curves, points, compounds and every normalised blob as CSV tables")
-        self.act_save = act("Save session…", self.save_session_dialog, "Everything needed to carry on later")
-        self.act_load = act("Open session…", self.open_session_dialog, "Carry on with a saved session")
+        phase_btn = QtWidgets.QPushButton("🔄 Estimate phases again")
+        phase_btn.setToolTip("From the internal standards that have a quantifier ion, otherwise from the quiet band")
+        phase_btn.clicked.connect(lambda: self.project.estimate_phases())
+        fold_row = QtWidgets.QHBoxLayout()
+        fold_row.addWidget(QtWidgets.QLabel("Modulation period"))
+        fold_row.addWidget(self.period)
+        fold_row.addWidget(phase_btn)
+        fold_row.addStretch(1)
+        self._std_layout.addLayout(fold_row)
 
     def set_dark(self, dark: bool) -> None:
         c = DARK if dark else LIGHT
@@ -901,16 +1154,65 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             self.period.blockSignals(False)
         self._update_guide()
 
+    def main_selection(self) -> list:
+        """The main window's runs that are selected in its Runs table (two or more), else []."""
+        try:
+            rows = self.main_window.runs_panel.selected_rows() if self.main_window is not None else []
+        except (AttributeError, RuntimeError):
+            rows = []
+        entries = self.main_project.entries if self.main_project is not None else []
+        picked = [entries[i] for i in rows if 0 <= i < len(entries)]
+        return picked if len(picked) >= 2 else []
+
     def runs_from_main(self) -> None:
+        """The runs selected in the main window, or (with fewer than two selected) a list to tick,
+        calibration runs ticked. Runs already read there are not read again."""
         entries = self.main_project.entries if self.main_project is not None else []
         if not entries:
-            self.say("No runs are open in the main window")
+            self.say("No runs are open in the main window: open your folder there first, or use 📂 here")
             return
-        dlg = _PickRunsDialog(entries, self)
-        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted and dlg.paths():
-            self.add_runs(dlg.paths())
+        picked = self.main_selection()
+        if not picked:
+            dlg = _PickRunsDialog(entries, self)
+            if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted or not dlg.paths():
+                return
+            chosen = set(dlg.paths())
+            picked = [e for e in entries if str(e.path) in chosen]
+        self.add_main_entries(picked)
+
+    def add_main_entries(self, picked: list, on_loaded=None) -> None:
+        """Standards taken from the main window: the same Run objects (never changed by anyone),
+        at the main window's period and phases, then processed like any other."""
+        known = {e.path.resolve() for e in self.project.entries}
+        main = self.main_project
+        loaded = [e for e in picked if e.run is not None and e.path.resolve() not in known]
+        unread = [e.path for e in picked if e.run is None and e.path.resolve() not in known]
+        if loaded:
+            if not self.project.entries:
+                self.project.period, self.project.period_confirmed = main.period, main.period_confirmed
+                self.project.period_method, self.project.period_detail = main.period_method, main.period_detail
+                self.period.setValue(self.project.period)
+            same_period = abs(self.project.period - main.period) < 1e-6
+            new = [RunEntry(path=e.path, name=e.name, kind=e.kind, level=e.level, run=e.run,
+                            phase=e.phase if same_period else 0.0,
+                            phase_method=e.phase_method if same_period else "unset",
+                            phase_detail=e.phase_detail, timing=e.timing, import_meta=e.import_meta)
+                   for e in loaded]
+            self.project.entries.extend(new)
+            self.project.runsChanged.emit()
+            self.project.foldChanged.emit(-1)
+            if same_period:
+                self._loaded(on_loaded)
+            else:
+                idx = [self.project.entries.index(e) for e in new]
+                self.project.auto_fold(apply_to=idx, on_done=lambda *_: self._loaded(on_loaded))
+        if unread:
+            self.add_runs(unread, on_loaded if not loaded else None)
+        self.say(f"{len(loaded) + len(unread)} standard runs from the main window")
 
     def add_runs(self, paths, on_loaded=None) -> None:
+        """Read runs from disk, estimate the period (unless a method.json says it) and each
+        phase, then clean them and find their blobs."""
         paths = [Path(p) for p in paths]
         if not self.project.entries:
             for folder in (paths[0].parent, paths[0].parent.parent):
@@ -924,14 +1226,50 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                     except (KeyError, ValueError, OSError):
                         pass
             self.period.setValue(self.project.period)
-        self.project.add_files(paths, on_loaded)
+        known = {e.path.resolve() for e in self.project.entries}
+        new = [RunEntry(path=p, name=p.stem) for p in paths if p.resolve() not in known]
+        if not new:
+            return
+        self.project.entries.extend(new)
+        self.project.runsChanged.emit()
+
+        def read():
+            idx = [i for i, e in enumerate(self.project.entries) if e in new and e.run is not None]
+            if not idx:
+                return
+            self.project.auto_fold(apply_to=idx, on_done=lambda *_: self._loaded(on_loaded))
+
+        self.project._read(new, read, estimate=False)
+
+    def _loaded(self, on_loaded=None) -> None:
+        """Runs are read and folded: process them unless told not to."""
+        self._runs_changed()
+        if on_loaded:
+            on_loaded()
+        if self.auto_process and not self.project.blobs.running:
+            self.say("Cleaning the standards and finding their blobs (a minute or two a run)…")
+            self.run_pipeline(on_ready=self._processed)
+
+    def _processed(self) -> None:
+        """Standards processed: on to the compounds, which say what to do next."""
+        if self.tabs.currentIndex() == 0:
+            self.tabs.setCurrentIndex(1)
 
     def _runs_changed(self) -> None:
         names = [e.name for e in self.project.entries]
         if names != self.session.runs:
             self.session.runs = names
+            # A new run's level amount, from its name where it says ("L6_5ng") or the main window's level.
+            for e in self.project.entries:
+                if e.name not in self.session.levels:
+                    v = amount_from_name(e.name)
+                    if v is None:
+                        v = amount_from_name(e.level or "")
+                    if v is not None:
+                        self.session.levels[e.name] = v
             self._outline_cache = None
             self.recompute()
+        self._fill_run_table()
         cur = self.runs.currentRow()
         self.runs.blockSignals(True)
         self.runs.clear()
@@ -951,6 +1289,73 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                 self.renderer.set_index(row)
         self._fill_table()
         self._update_guide()
+
+    def _fill_run_table(self) -> None:
+        p = self.project
+        self._updating = True
+        self.run_table.setRowCount(len(p.entries))
+        running = p.blobs.running or self.jobs.active_count() > 0
+        for r, e in enumerate(p.entries):
+            b = p.blobs.by_run.get(e)
+            if e.error:
+                status = "⚠️ " + e.error
+            elif e.run is None:
+                status = "reading…"
+            elif b is not None:
+                status = f"✓ {len(b)} blobs"
+            elif running:
+                status = "processing…"
+            else:
+                status = "waiting"
+            level = self.session.levels.get(e.name)
+            cells = [e.name, "" if level is None else f"{level:g}", status,
+                     f"{e.phase:.3f} ({e.phase_method})"]
+            for k, text in enumerate(cells):
+                item = QtWidgets.QTableWidgetItem(text)
+                item.setData(QtCore.Qt.ItemDataRole.UserRole, e.name)
+                flags = QtCore.Qt.ItemFlag.ItemIsSelectable | QtCore.Qt.ItemFlag.ItemIsEnabled
+                if k == 1:
+                    flags |= QtCore.Qt.ItemFlag.ItemIsEditable
+                    item.setToolTip("The amount of every compound in this run, unless a compound has its "
+                                    "own (compound table). Read from the run name where it says.")
+                    if level is None:
+                        item.setBackground(QtGui.QBrush(QtGui.QColor(*BAD, 70)))
+                item.setFlags(flags)
+                if k == 0:
+                    item.setToolTip(str(e.path))
+                self.run_table.setItem(r, k, item)
+        self._updating = False
+
+    def _level_edited(self, item) -> None:
+        if self._updating or item.column() != 1:
+            return
+        run, text = item.data(QtCore.Qt.ItemDataRole.UserRole), item.text().strip()
+        try:
+            value = float(text) if text else None
+        except ValueError:
+            self.say(f"Could not read '{text}' as an amount")
+            QtCore.QTimer.singleShot(0, self, self._fill_run_table)
+            return
+
+        def change(s):
+            if value is None:
+                s.levels.pop(run, None)
+            else:
+                s.levels[run] = value
+        QtCore.QTimer.singleShot(0, self, lambda: self._edit(change))
+
+    def set_level(self, run: str, value: float | None) -> None:
+        def change(s):
+            if value is None:
+                s.levels.pop(run, None)
+            else:
+                s.levels[run] = float(value)
+        self._edit(change)
+
+    def _remove_selected_runs(self) -> None:
+        rows = sorted({i.row() for i in self.run_table.selectedIndexes()})
+        if rows:
+            self.project.remove(rows)
 
     def _run_selected(self, row: int) -> None:
         if 0 <= row < len(self.project.entries):
@@ -1091,8 +1496,9 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             b = p.blobs.by_run.get(e)
             if b is None or e.run is None:
                 continue
-            solvent = find_solvent_front(e.run.times, np.asarray(e.run.tic, dtype=float))
-            out[e.name] = usable_blobs(b, p.period, solvent) & ~flag_siloxane_blobs(b, sil)
+            # No solvent-front window: on short runs a large early peak passes for a solvent front,
+            # and on the real standards the streak rules alone left the same blobs.
+            out[e.name] = usable_blobs(b, p.period) & ~flag_siloxane_blobs(b, sil)
         return out
 
     def _blobs_done(self) -> None:
@@ -1119,12 +1525,13 @@ class CalibrationWindow(QtWidgets.QMainWindow):
 
     def suggest_dialog(self) -> None:
         if not self.project.blobs.by_run:
-            self.say("▶ Clean and find blobs first")
+            self.say("The standards are still being processed (tab 1)")
             return
         runs = self.session.runs
-        # Level amounts: what the compounds already say, else what the run names say.
+        # Level amounts: tab 1's, else what the compounds or run names say.
         known = {r: next((c.amounts[r] for c in self.session.analytes() if r in c.amounts), None) for r in runs}
-        amounts = {r: known[r] if known[r] is not None else amount_from_name(r) for r in runs}
+        amounts = {r: self.session.levels.get(r, known[r] if known[r] is not None else amount_from_name(r))
+                   for r in runs}
         dlg = SuggestDialog(runs, amounts, self.blobs_by_run(), self.suggest_settings, self, self.usable_masks())
         if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
             self.suggest_settings = dlg.settings
@@ -1136,11 +1543,14 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         blobs = self.blobs_by_run()
 
         def change(s):
+            # The amounts typed in the dialog are the runs' level amounts (tab 1), which every
+            # suggested calibrant takes; an internal standard gets 1 in every run.
+            s.levels.update({r: float(v) for r, v in amounts.items()})
             for g in chosen:
                 is_istd = g.kind == "constant"
                 c = s.add_compound(CalCompound(
                     name=("IS " if is_istd and not g.name else "") + g.label, t1=g.t1, t2=g.t2, is_istd=is_istd,
-                    amounts={r: 1.0 for r in s.runs} if is_istd else dict(amounts)))
+                    amounts={r: 1.0 for r in s.runs} if is_istd else {}))
                 for run, j in g.blobs.items():
                     s.pin_blob(c.name, run, blobs[run], j)
         self._edit(change)
@@ -1156,7 +1566,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             return
         self.normalised = True
         self.recompute()
-        self.tabs.setCurrentWidget(self.curves)
+        self.tabs.setCurrentIndex(2)
 
     def blobs_by_run(self) -> dict:
         return {e.name: self.project.blobs.by_run.get(e) for e in self.project.entries}
@@ -1195,6 +1605,9 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         anchors = [Anchor(c.name, c.quant_ion, c.t1, c.t2) for c in self.session.istds() if c.quant_ion]
         self.project.anchors = anchors or None
         blobs = self.blobs_by_run()
+        # Divided by the internal standards as soon as there are blobs and an internal standard.
+        if self.project.blobs.by_run and self.session.istds():
+            self.normalised = True
         self.resolved = self.session.resolve(blobs)
         self.points = self.session.points(blobs, self.resolved, self.heights)
         self.fits = self.session.fits(self.points) if self.normalised else {}
@@ -1202,29 +1615,220 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             self._fill_table()
         self.curves.set_data(self.session, self.points, self.fits, self.normalised)
         self._draw_overlay()
+        if self.sample_blobs:
+            self._requantify()
         self._update_guide()
         self.changed.emit()
 
     def _update_guide(self) -> None:
-        loaded = bool(self.project.loaded())
-        compounds = bool(self.session.compounds)
-        istd = bool(self.session.istds())
-        blobs = bool(self.project.blobs.by_run)
-        stale = bool(self.project.blobs.stale)
-        amounts = any(c.amounts for c in self.session.analytes())
+        """Tab titles tick off what is done; each tab's banner says what to do on it next."""
+        p, s = self.project, self.session
+        n_runs = len(p.loaded())
+        processing = p.blobs.running or (self.jobs.active_count() > 0 and not p.blobs.by_run)
+        processed = bool(p.blobs.by_run) and not p.blobs.stale
+        levels = sum(r in s.levels for r in s.runs)
+        n_cmp, n_is = len(s.analytes()), len(s.istds())
+        fits = [f for f in self.fits.values() if isinstance(f, CalibrationFit)]
+        n_ok = sum(f.ok for f in fits)
+        done = [processed and levels >= 3, n_cmp > 0 and n_is > 0, bool(fits), bool(self.sample_results)]
+        for k, title in enumerate(["Standards", "Compounds", "Curves", "Apply to samples"]):
+            self.tabs.setTabText(k, f"{'✓' if done[k] else k + 1}  {title}")
 
-        def step(done, text):
-            return f"<span style='color:#2E9E6B'>✓ {text}</span>" if done else f"<b>{text}</b>"
+        # 1 Standards
+        main_sel = len(self.main_selection())
+        if not p.entries:
+            hint = ("<b>Choose your calibration runs.</b> Select them in the main window's Runs table and press "
+                    "<i>Use the runs selected in the main window</i>"
+                    + (f" ({main_sel} selected now)" if main_sel else "")
+                    + ", or open a folder or files here. They are cleaned and searched for blobs straight away.")
+        elif processing:
+            hint = f"<b>Processing {n_runs} standards…</b> (background, blobs, phases). Fill in the level amounts meanwhile."
+        elif levels < len(s.runs):
+            hint = ("<b>Give each run its level amount</b> (amber cells): the amount of every compound in that run, "
+                    "unless a compound has its own in the compound table. Then go to <b>2 Compounds</b>.")
+        else:
+            hint = "✓ Standards ready. Go to <b>2 Compounds</b>."
+        self.standards_banner.setText(hint)
+        self.from_main_btn.setText(f"Use the {main_sel} runs selected in the main window" if main_sel
+                                   else "Use runs from the main window…")
+        self.from_main_btn.setEnabled(self.main_project is not None and bool(self.main_project.entries))
 
-        parts = [step(loaded, "1 📂 open the standard runs"),
-                 step(compounds and istd, "2 add compounds and mark internal standards (table or clicks)"),
-                 step(amounts, "3 type the amounts"),
-                 step(blobs and not stale, "4 ▶ clean and find blobs" + (" (out of date)" if stale else "")),
-                 step(self.normalised, "5 ➗ normalise to IS"),
-                 "6 check each curve"]
-        if self.project.blobs.running:
-            parts[3] = "4 finding blobs…"
-        self.guide.setText("  ·  ".join(parts))
+        # 2 Compounds
+        if not processed:
+            hint = "Waiting for tab 1: the standards are not processed yet."
+        elif not s.compounds:
+            hint = ("<b>Say which compounds are in the standards</b>: <i>🔎 Suggest from the standards</i> "
+                    "finds them for you; or load a table; or click a peak with "
+                    "<i>A click on the chromatogram: add a compound here</i>.")
+        elif not n_is:
+            hint = ("<b>Mark at least one internal standard</b>: tick its IS box in the table (or add one by clicking "
+                    "with <i>add an internal standard here</i>).")
+        else:
+            missing = sum(1 for (c, r), pt in self.points.items() if pt.blob is None and s.compound(c)
+                          and not s.compound(c).is_istd)
+            hint = (f"✓ {n_cmp} compounds and {n_is} internal standards. Amber names are not found in the run shown; "
+                    "select one and click its peak to fix it. Go to <b>3 Curves</b>."
+                    + (f" ({missing} compound-run pairs not found)" if missing else ""))
+        self.compounds_banner.setText(hint)
+
+        # 3 Curves
+        if not fits:
+            hint = "No curves yet: they appear once tab 2 has compounds, an internal standard and level amounts."
+        else:
+            hint = (f"<b>{n_ok} of {len(fits)} curves pass</b> the back-calculation check (✅ in the list). For a ⚠️ one, "
+                    "click its worst point: <i>Leave out</i> (Delete) drops it, <i>Show in chromatogram</i> lets you "
+                    "click the right blob. Then go to <b>4 Apply to samples</b>.")
+        self.curves_banner.setText(hint)
+
+        # 4 Apply to samples
+        if self.main_project is None or not self.main_project.entries:
+            hint = "Open your samples in the main window (📂 there), then come back to this tab."
+        elif not fits:
+            hint = "Build the curves first (tabs 1 to 3)."
+        else:
+            warn = ""
+            if abs(self.main_project.period - p.period) > 0.01:
+                warn = (f" ⚠️ The main window's period ({self.main_project.period:.3f} s) differs from the standards' "
+                        f"({p.period:.3f} s): the samples must be run with the same method.")
+            if self.sample_results:
+                hint = ("✓ Results below follow every change to the curves. Hover an amber cell for why it is "
+                        "flagged; <i>📤 Export results</i> writes them as CSV. Tick more runs and ▶ Quantify to add "
+                        "them." + warn)
+            else:
+                hint = ("<b>Tick the sample runs and press ▶ Quantify.</b> Each is cleaned and searched like the "
+                        "standards; every compound is found by position and spectrum and read off its curve." + warn)
+        self.apply.banner.setText(hint)
+
+        state = "processing the standards…" if processing else (
+            f"{n_runs} standards · {n_cmp} compounds · {n_is} IS · {n_ok}/{len(fits)} curves pass"
+            + (f" · {len({r.run for r in self.sample_results})} samples quantified" if self.sample_results else ""))
+        self.guide.setText(state)
+
+    def event(self, e) -> bool:
+        # Coming back from the main window: its run selection may have changed.
+        if e.type() == QtCore.QEvent.Type.WindowActivate:
+            self._update_guide()
+        return super().event(e)
+
+    def _tab_changed(self, index: int) -> None:
+        if index == 3:
+            self._refresh_samples()
+        self._update_guide()
+
+    # ======================================================== 4 apply to samples
+    def _refresh_samples(self) -> None:
+        main = self.main_project
+        standards = {str(e.path) for e in self.project.entries}
+        self.apply.set_samples(main.entries if main is not None else [], standards)
+
+    def quantify_samples(self, names: list[str], on_done=None) -> None:
+        """Clean the chosen main-window runs and find their blobs with this window's settings (from
+        the shared cache where the main window already did the same), then read every compound off
+        its curve. Results update by themselves when a curve changes afterwards."""
+        main = self.main_project
+        if main is None or not names:
+            self.say("Tick some sample runs first")
+            return
+        if not self.fits:
+            self.say("Build the curves first")
+            return
+        bg_settings, peak_settings = self.project.bg_settings, self.project.blobs.settings
+        todo = []
+        for name in names:
+            i = main.index_of(name)
+            if i is None or main.entries[i].run is None:
+                continue
+            if name in self.sample_blobs:
+                continue
+            todo.append(i)
+        remaining = set(todo)
+
+        def finish():
+            self._requantify()
+            self._update_guide()
+            self.tabs.setCurrentWidget(self.apply)
+            if on_done:
+                on_done()
+
+        if not todo:
+            finish()
+            return
+        ref = next((n for n, b in self.blobs_by_run().items() if b is not None), None)
+        ref_blobs = self.blobs_by_run().get(ref)
+        ref_usable = self.usable_masks().get(ref)
+        for i in todo:
+            e = main.entries[i]
+            raw, fold = e.run, main.fold(i)
+            raw_key = main.raw_key(i)
+            bg_key = _hash_key(raw_key, "background", bg_settings.to_dict()) if raw_key else None
+            floor = storage_threshold(raw) / 3.0
+
+            def work(token, progress, raw=raw, fold=fold, bg_key=bg_key, floor=floor, name=e.name):
+                progress(0, 3, "Cleaning")
+                clean = main.cached(bg_key, lambda: remove_background(raw, fold, bg_settings))
+                token.check()
+                progress(1, 3, "Finding blobs")
+                blob_key = _hash_key(bg_key, LEGACY, peak_settings.to_dict(), floor) if bg_key else None
+                blobs = main.cached(blob_key, lambda: find_blobs(clean.run, fold, peak_settings, floor=floor))
+                progress(2, 3, "Lining up with the standards")
+                usable = {name: usable_blobs(blobs, fold.spec.period)}
+                if ref_usable is not None:
+                    usable[ref] = ref_usable
+                off = t2_offsets({ref: ref_blobs, name: blobs}, ref, usable)[name][0] if ref_blobs is not None \
+                    else float("nan")
+                return blobs, off
+
+            def done(result, name=e.name, i=i):
+                self.sample_blobs[name], self.sample_offsets[name] = result
+                remaining.discard(i)
+                if not remaining:
+                    finish()
+
+            def failed(text, name=e.name, i=i):
+                self.say(f"{name} failed: {text}")
+                remaining.discard(i)
+                if not remaining:
+                    finish()
+
+            self.jobs.submit(f"Quantifying {e.name}", work, done, failed)
+        self.say(f"Quantifying {len(todo)} sample runs…")
+
+    def _requantify(self) -> None:
+        """Read the processed samples off the current curves (fast; run after every change)."""
+        main = self.main_project
+        if not self.sample_blobs or main is None or not self.fits:
+            return
+        ticked = set(self.apply.ticked()) or set(self.sample_blobs)
+        samples = {n: b for n, b in self.sample_blobs.items() if n in ticked}
+        templates = compound_templates(self.session, self.blobs_by_run(), self.resolved)
+        self.sample_results = quantify_samples(self.session, self.fits, templates, samples, self.sample_offsets)
+        volumes = {e.name: e.volume for e in main.entries if e.volume}
+        self.apply.set_results(self.sample_results, volumes, self.session.unit)
+
+    def export_results(self, path) -> Path:
+        main = self.main_project
+        volumes = {e.name: e.volume for e in main.entries if e.volume} if main is not None else {}
+        return write_dicts(sample_rows(self.sample_results, self.session.unit, volumes), path)
+
+    def export_results_dialog(self) -> None:
+        if not self.sample_results:
+            self.say("Quantify some samples first (tab 4)")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Export sample results",
+                                                        str(Path(self._folder() or ".") / "calibrated_results.csv"),
+                                                        "CSV (*.csv)")
+        if path:
+            self.say(f"Wrote {self.export_results(path).name}")
+
+    def _show_in_main(self, run: str, t1: float, t2: float) -> None:
+        mw = self.main_window
+        go = getattr(mw, "_batch_navigate", None)
+        if go is None:
+            self.say("Open the main window to see it")
+            return
+        go(run, t1, t2)
+        mw.raise_()
+        mw.activateWindow()
 
     # ======================================================== compound table
     def _fill_table(self) -> None:
@@ -1285,7 +1889,17 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             combo.blockSignals(False)
             for j, run_name in enumerate(s.runs):
                 v = c.amounts.get(run_name)
-                item = QtWidgets.QTableWidgetItem("" if v is None else f"{v:g}")
+                level = s.levels.get(run_name) if not c.is_istd else None
+                if v is not None:
+                    item = QtWidgets.QTableWidgetItem(f"{v:g}")
+                    item.setToolTip("This compound's own amount in this run (blank it to use the run's level)")
+                elif level is not None:
+                    # The run's level amount, shown grey: typing over it gives the compound its own.
+                    item = QtWidgets.QTableWidgetItem(f"{level:g}")
+                    item.setForeground(QtGui.QBrush(QtGui.QColor(*MISSING_COLOUR)))
+                    item.setToolTip("The run's level amount (tab 1); type to give this compound its own")
+                else:
+                    item = QtWidgets.QTableWidgetItem("")
                 item.setFlags(flags | QtCore.Qt.ItemFlag.ItemIsEditable)
                 item.setData(QtCore.Qt.ItemDataRole.UserRole, c.name)
                 self.table.setItem(r, len(FIXED_COLUMNS) + j, item)
@@ -1470,7 +2084,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         i = self.project.index_of(run)
         if i is None:
             return
-        self.tabs.setCurrentIndex(0)
+        self.tabs.setCurrentIndex(1)
         self.runs.setCurrentRow(i)
         self.select_compound(name)
         self.click_mode.setCurrentIndex(0)
