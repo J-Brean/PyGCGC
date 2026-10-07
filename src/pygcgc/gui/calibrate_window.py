@@ -48,7 +48,10 @@ from ..core.peaks import find_blobs
 from .project import RunEntry
 from ..core.siloxane import SiloxaneSettings, flag_siloxane_blobs
 from ..core.quant import write_dicts
-from .blob_state import LEGACY
+from .blob_state import LEGACY, MS_AWARE
+from ..core.calbuilder import ComponentBlobs, peaks_from_components
+from ..core.components import detect_components
+from ..core.peaktable import respectrum_components
 from .dialogs import SettingsDialog
 from .jobs import JobManager
 from .project import Project
@@ -81,7 +84,14 @@ def all_outlines(blobs) -> tuple[np.ndarray, np.ndarray]:
 
     The same pixel edges as calling `outline_times` blob by blob, found in one pass
     over the label image (an edge shared by two blobs is drawn once). Blob by blob
-    took about 10 s for the 5,000 blobs of a real run; this takes a fraction of one."""
+    took about 10 s for the 5,000 blobs of a real run; this takes a fraction of one.
+    MS-aware components have no footprints: their fitted contours are drawn instead."""
+    if isinstance(blobs, ComponentBlobs):
+        parts = [blobs.outline_times(i) for i in range(len(blobs))]
+        parts = [p for p in parts if len(p[0])]
+        if not parts:
+            return np.array([]), np.array([])
+        return np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
     pad = np.pad(blobs.labels, 1)
     rr, cc = np.nonzero(pad[1:, 1:-1] != pad[:-1, 1:-1])          # edges along t1, between rows
     y = (rr - 0.5) * blobs.pitch
@@ -804,7 +814,14 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             self.project.period_confirmed = False
             self.project.bg_settings = main_project.bg_settings
             self.project.blobs.settings = main_project.blobs.settings
-        self.project.blobs.method = LEGACY
+            self.project.blobs.component_settings = main_project.blobs.component_settings
+            self.project.blobs.candidate_settings = main_project.blobs.candidate_settings
+        # Peaks the same way as the main window's 🔍 step: MS-aware components unless it is set to
+        # legacy blobs (Settings menu here). Same settings and fold, so the cache is shared.
+        self.peak_method = main_project.blobs.method if main_project is not None else MS_AWARE
+        self.project.blobs.method = self.peak_method
+        self.ms_peaks: dict = {}          # RunEntry -> ComponentBlobs, when peaks are MS-aware
+        self.processing = False           # the standards are being cleaned and searched
         self.renderer = Renderer(self.project, self.jobs, parent=self)
         self.session = CalSession()
         self.suggest_settings = SuggestSettings()
@@ -1070,7 +1087,17 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                                "others (judged from blobs of the same spectrum) and find its blobs again")
         self.act_line_up.setCheckable(True)
         self.act_line_up.setChecked(True)
-        self.act_run = act(settings, "▶ Clean and find blobs again", self.run_pipeline,
+        settings.addSection("Peaks")
+        self.act_ms_aware = act(settings, "MS-aware peaks (as the main window)", lambda: self.set_peak_method(MS_AWARE),
+                                "Overlapping components fitted from intensity and spectra: step 4's default")
+        self.act_legacy = act(settings, "Legacy blobs", lambda: self.set_peak_method(LEGACY),
+                              "Hard-border TIC blobs: faster, and a click adds one where detection missed a peak")
+        for a in (self.act_ms_aware, self.act_legacy):
+            a.setCheckable(True)
+        self.act_ms_aware.setChecked(self.peak_method == MS_AWARE)
+        self.act_legacy.setChecked(self.peak_method == LEGACY)
+        settings.addSeparator()
+        self.act_run = act(settings, "▶ Clean and find peaks again", self.run_pipeline,
                            "Needed only after changing a setting; loading runs does it")
         self.act_normalise = act(settings, "➗ Normalise to IS", self.normalise,
                                  "Done as soon as there are blobs and an internal standard")
@@ -1096,7 +1123,13 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         phase_btn = QtWidgets.QPushButton("🔄 Estimate phases again")
         phase_btn.setToolTip("From the internal standards that have a quantifier ion, otherwise from the quiet band")
         phase_btn.clicked.connect(lambda: self.project.estimate_phases())
+        process_btn = QtWidgets.QPushButton("▶ Process the standards")
+        process_btn.setToolTip("Clean, find peaks and line up phases; loading runs does this by itself, so it "
+                               "is needed only after changing a setting")
+        process_btn.clicked.connect(lambda: self.run_pipeline())
         fold_row = QtWidgets.QHBoxLayout()
+        fold_row.addWidget(process_btn)
+        fold_row.addSpacing(20)
         fold_row.addWidget(QtWidgets.QLabel("Modulation period"))
         fold_row.addWidget(self.period)
         fold_row.addWidget(phase_btn)
@@ -1122,6 +1155,9 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             self.busy.setText(f"⏳ {job.name} {job.message}")
         elif job.state == "failed":
             self.say(f"{job.name} failed: {job.message}")
+        if job.state in ("done", "failed") and self.processing:
+            self._fill_run_table()           # each run's status as it finishes
+            self._update_guide()
 
     # ============================================================ runs
     def open_runs_dialog(self) -> None:
@@ -1274,7 +1310,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.runs.blockSignals(True)
         self.runs.clear()
         for e in self.project.entries:
-            b = self.project.blobs.by_run.get(e)
+            b = self.peaks.get(e)
             state = ("⚠️ " + e.error) if e.error else ("reading…" if e.run is None else
                                                           f"{len(b)} blobs" if b is not None else
                                                           "🧹 cleaned" if e.background is not None else "raw")
@@ -1294,15 +1330,15 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         p = self.project
         self._updating = True
         self.run_table.setRowCount(len(p.entries))
-        running = p.blobs.running or self.jobs.active_count() > 0
+        running = self.processing
         for r, e in enumerate(p.entries):
-            b = p.blobs.by_run.get(e)
+            b = self.peaks.get(e)
             if e.error:
                 status = "⚠️ " + e.error
             elif e.run is None:
                 status = "reading…"
             elif b is not None:
-                status = f"✓ {len(b)} blobs"
+                status = f"✓ {len(b)} {'MS-aware peaks' if self.peak_method == MS_AWARE else 'blobs'}"
             elif running:
                 status = "processing…"
             else:
@@ -1428,25 +1464,136 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             self.say("Open the standard runs first")
             return
         if self.project.blobs.running:
-            self.say("Blob detection is already running")
+            self.say("Peak detection is already running")
             return
         line_up = self.act_line_up.isChecked() if line_up is None else line_up
         settings = self.project.bg_settings
+        method = self.peak_method
+        self.processing = True
+        self._stage = "🧹 cleaning"
+        self._update_guide()
+        self._fill_run_table()
+
+        def finished():
+            if line_up and self.line_up_phases():
+                self.run_pipeline(on_ready, line_up=False)
+                return
+            self.processing = False
+            self._blobs_done()
+            if on_ready:
+                on_ready()
+
+        def components():
+            # MS-aware: each run's fitted components (the main window's own, when it has them for
+            # this run at this fold and cleaning), re-solved on every ion as the main window's
+            # classify and identify steps read them, become the builder's peak list.
+            p = self.project
+            self.ms_peaks = {}
+            todo = [e for e in p.entries if e.run is not None]
+            remaining = set(todo)
+            self._stage = "🔍 finding MS-aware peaks (a few minutes a run, less if the main window already did)"
+            self._update_guide()
+            for e in todo:
+                i = p.entries.index(e)
+
+                def done(result, e=e):
+                    self.ms_peaks[e] = result
+                    remaining.discard(e)
+                    self._fill_run_table()
+                    self._update_guide()
+                    if not remaining:
+                        finished()
+
+                def failed(text, e=e):
+                    self.say(f"{e.name}: MS-aware peaks failed: {text}")
+                    remaining.discard(e)
+                    if not remaining:
+                        finished()
+                self.jobs.submit(f"📈 MS-aware peaks: {e.name}",
+                                 self._component_work(p, i, self._main_components(e)), done, failed)
+            if not todo:
+                finished()
 
         def cleaned(results):
             self.project.set_backgrounds(results, settings, None)
-
-            def found():
-                if line_up and self.line_up_phases():
-                    self.run_pipeline(on_ready, line_up=False)
-                    return
-                self._blobs_done()
-                if on_ready:
-                    on_ready()
-            self.project.blobs.run_all(on_done=found, method=LEGACY)
+            if method == MS_AWARE:
+                components()
+                return
+            self._stage = "🔍 finding blobs"
+            self._update_guide()
+            self.project.blobs.run_all(on_done=finished, method=method)
 
         self.say("🧹 Cleaning the standard runs…")
         self.project.compute_background(idx, settings, None, on_done=cleaned)
+
+    def _main_components(self, entry):
+        """The MS-aware peaks the main window already found on this run, as (component set, the
+        run they were fitted on), if they are current and at this fold; else None. These are the
+        peaks the person has seen and perhaps separated by hand, so they are used as they are,
+        on the main window's own data (cleaned there or not)."""
+        main = self.main_project
+        if main is None or self.peak_method != MS_AWARE:
+            return None
+        i = main.index_of(entry.name)
+        if i is None:
+            return None
+        m = main.entries[i]
+        cs = main.blobs.component_sets_by_name.get(m.name)
+        if cs is None or m.run is None or m.name in main.blobs.component_stale_names:
+            return None
+        if Path(m.path).resolve() != Path(entry.path).resolve() or abs(m.phase - entry.phase) > 1e-9 \
+                or abs(main.period - self.project.period) > 1e-9:
+            return None
+        return cs, main.base_run(i)
+
+    def _component_work(self, project, i: int, preset=None, raw=None, fold=None, clean=None, bg_key=None):
+        """A job making one run's MS-aware peak list: the given component set, or components found
+        (through the shared cache, under the key the main window's 🔍 step uses), re-solved on
+        every ion. Standards pass their builder project index; samples pass the main project's
+        index with their own raw run, fold and cleaning."""
+        comp = self.project.blobs.component_settings
+        wrap = comp.candidates.wrap_below_s
+        e = project.entries[i]
+        raw = e.run if raw is None else raw
+        fold = project.fold(i) if fold is None else fold
+        base = None if clean is not None else project.base_run(i)
+        bg_key = project.base_key(i) if (bg_key is None and clean is None) else bg_key
+        floor = storage_threshold(raw) / 3.0
+        name = e.name
+
+        def work(token, progress):
+            if preset is not None:
+                cs, run = preset                 # the main window's own peaks, on its own data
+            else:
+                cs, run = None, clean() if clean is not None else base
+            if cs is None:
+                key = _hash_key(bg_key, MS_AWARE, comp.to_dict(), floor) if bg_key else None
+                cs = project.cached(key, lambda: detect_components(
+                    run, fold, name, comp, floor=floor, cancel=token.check,
+                    progress=lambda done, total: progress(done, total, "Separating overlapping components")))[2]
+            token.check()
+            peaks, _model, _footprint = respectrum_components(run, fold, cs, wrap_below_s=wrap)
+            return peaks_from_components(peaks, fold, wrap)
+        return work
+
+    @property
+    def peaks(self) -> dict:
+        """RunEntry -> the peak list the builder works on: MS-aware components or legacy blobs."""
+        return self.ms_peaks if self.peak_method == MS_AWARE else self.project.blobs.by_run
+
+    def set_peak_method(self, method: str) -> None:
+        """MS-aware components or legacy blobs; the standards are searched again."""
+        if method == self.peak_method:
+            return
+        self.peak_method = method
+        self.project.blobs.method = method
+        self.sample_blobs, self.sample_offsets, self.sample_results = {}, {}, []
+        for a in (self.act_ms_aware, self.act_legacy):
+            a.setChecked((a is self.act_ms_aware) == (method == MS_AWARE))
+        self._outline_cache = None
+        self.recompute()
+        if self.project.loaded():
+            self.run_pipeline()
 
     def line_up_phases(self, min_shift: float = 0.1, min_pairs: int = 10) -> bool:
         """Give every standard the same second-dimension position for the same compound.
@@ -1459,7 +1606,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         `min_shift` are made. Returns whether any phase moved (blobs must then be found
         again)."""
         p = self.project
-        names = [e.name for e in p.entries if p.blobs.by_run.get(e) is not None]
+        names = [e.name for e in p.entries if self.peaks.get(e) is not None]
         if len(names) < 2:
             return False
         blobs = self.blobs_by_run()
@@ -1482,6 +1629,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         for e in p.entries:
             e.background = None          # recomputed by the next pass, not by the fold change as well
         p.blobs.by_run = {}
+        self.ms_peaks = {}
         p.set_phases(phases)
         self.say("Phases lined up: " + ", ".join(f"{n} {-m:+.2f} s" for n, m in moves.items())
                  + "; cleaning and finding blobs again")
@@ -1493,7 +1641,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         out = {}
         sil = SiloxaneSettings()
         for e in p.entries:
-            b = p.blobs.by_run.get(e)
+            b = self.peaks.get(e)
             if b is None or e.run is None:
                 continue
             # No solvent-front window: on short runs a large early peak passes for a solvent front,
@@ -1504,14 +1652,14 @@ class CalibrationWindow(QtWidgets.QMainWindow):
     def _blobs_done(self) -> None:
         self._outline_cache = None
         self.heights = {}
-        n = sum(len(b) for b in self.project.blobs.by_run.values())
-        self.say(f"🔍 {n} blobs in {len(self.project.blobs.by_run)} runs; compounds matched")
+        n = sum(len(b) for b in self.peaks.values())
+        self.say(f"🔍 {n} blobs in {len(self.peaks)} runs; compounds matched")
         self._runs_changed()
         self.recompute()
         # Largest raw point in every blob, for the saturation check (a second or two a run).
         p = self.project
         for e in p.entries:
-            b = p.blobs.by_run.get(e)
+            b = self.peaks.get(e)
             if b is None or e.run is None:
                 continue
             run, fold, name = e.run, p.fold(p.entries.index(e)), e.name
@@ -1524,7 +1672,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                              blob_heights(run, fold, b), done, quiet=True)
 
     def suggest_dialog(self) -> None:
-        if not self.project.blobs.by_run:
+        if not self.peaks:
             self.say("The standards are still being processed (tab 1)")
             return
         runs = self.session.runs
@@ -1558,7 +1706,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.say(f"Added {len(chosen) - n_is} calibrants and {n_is} internal standards")
 
     def normalise(self) -> None:
-        if not self.project.blobs.by_run:
+        if not self.peaks:
             self.say("▶ Clean and find blobs first")
             return
         if not self.session.istds():
@@ -1569,7 +1717,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.tabs.setCurrentIndex(2)
 
     def blobs_by_run(self) -> dict:
-        return {e.name: self.project.blobs.by_run.get(e) for e in self.project.entries}
+        return {e.name: self.peaks.get(e) for e in self.project.entries}
 
     # ======================================================== state and undo
     def _edit(self, change, refresh_table: bool = True) -> None:
@@ -1606,7 +1754,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.project.anchors = anchors or None
         blobs = self.blobs_by_run()
         # Divided by the internal standards as soon as there are blobs and an internal standard.
-        if self.project.blobs.by_run and self.session.istds():
+        if self.peaks and self.session.istds():
             self.normalised = True
         self.resolved = self.session.resolve(blobs)
         self.points = self.session.points(blobs, self.resolved, self.heights)
@@ -1624,8 +1772,10 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         """Tab titles tick off what is done; each tab's banner says what to do on it next."""
         p, s = self.project, self.session
         n_runs = len(p.loaded())
-        processing = p.blobs.running or (self.jobs.active_count() > 0 and not p.blobs.by_run)
-        processed = bool(p.blobs.by_run) and not p.blobs.stale
+        processing = self.processing
+        processed = bool(self.peaks) and not processing
+        n_done = sum(1 for e in p.entries if self.peaks.get(e) is not None)
+        kind = "MS-aware peaks" if self.peak_method == MS_AWARE else "legacy blobs"
         levels = sum(r in s.levels for r in s.runs)
         n_cmp, n_is = len(s.analytes()), len(s.istds())
         fits = [f for f in self.fits.values() if isinstance(f, CalibrationFit)]
@@ -1642,20 +1792,30 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                     + (f" ({main_sel} selected now)" if main_sel else "")
                     + ", or open a folder or files here. They are cleaned and searched for blobs straight away.")
         elif processing:
-            hint = f"<b>Processing {n_runs} standards…</b> (background, blobs, phases). Fill in the level amounts meanwhile."
+            hint = (f"<b>⏳ Processing {n_runs} standards: {getattr(self, '_stage', 'working')}</b> "
+                    f"({n_done} of {n_runs} done; the status column follows each run). "
+                    + ("Fill in the missing level amounts (amber) meanwhile." if levels < len(s.runs) else
+                       "Tab 2 opens when it finishes."))
+        elif not processed:
+            hint = ("<b>The standards are not processed.</b> Press <i>▶ Process the standards</i> "
+                    "(below the table).")
         elif levels < len(s.runs):
             hint = ("<b>Give each run its level amount</b> (amber cells): the amount of every compound in that run, "
                     "unless a compound has its own in the compound table. Then go to <b>2 Compounds</b>.")
         else:
-            hint = "✓ Standards ready. Go to <b>2 Compounds</b>."
+            hint = f"✓ Standards ready ({kind}). Go to <b>2 Compounds</b>."
         self.standards_banner.setText(hint)
         self.from_main_btn.setText(f"Use the {main_sel} runs selected in the main window" if main_sel
                                    else "Use runs from the main window…")
         self.from_main_btn.setEnabled(self.main_project is not None and bool(self.main_project.entries))
 
         # 2 Compounds
-        if not processed:
-            hint = "Waiting for tab 1: the standards are not processed yet."
+        if processing:
+            hint = (f"⏳ The standards are being processed ({getattr(self, '_stage', 'working')}, {n_done} of "
+                    f"{n_runs} runs done; MS-aware peaks take a few minutes a run). This tab fills in when it "
+                    "finishes.")
+        elif not processed:
+            hint = "The standards are not processed yet: see tab 1."
         elif not s.compounds:
             hint = ("<b>Say which compounds are in the standards</b>: <i>🔎 Suggest from the standards</i> "
                     "finds them for you; or load a table; or click a peak with "
@@ -1763,13 +1923,24 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             bg_key = _hash_key(raw_key, "background", bg_settings.to_dict()) if raw_key else None
             floor = storage_threshold(raw) / 3.0
 
-            def work(token, progress, raw=raw, fold=fold, bg_key=bg_key, floor=floor, name=e.name):
-                progress(0, 3, "Cleaning")
-                clean = main.cached(bg_key, lambda: remove_background(raw, fold, bg_settings))
-                token.check()
-                progress(1, 3, "Finding blobs")
-                blob_key = _hash_key(bg_key, LEGACY, peak_settings.to_dict(), floor) if bg_key else None
-                blobs = main.cached(blob_key, lambda: find_blobs(clean.run, fold, peak_settings, floor=floor))
+            ms_work = None
+            if self.peak_method == MS_AWARE:
+                def clean_fn(raw=raw, fold=fold, bg_key=bg_key):
+                    return main.cached(bg_key, lambda: remove_background(raw, fold, bg_settings)).run
+                ms_work = self._component_work(main, i, self._main_components(e), raw=raw, fold=fold,
+                                               clean=clean_fn, bg_key=bg_key)
+
+            def work(token, progress, raw=raw, fold=fold, bg_key=bg_key, floor=floor, name=e.name, ms_work=ms_work):
+                if ms_work is not None:
+                    progress(0, 3, "MS-aware peaks")
+                    blobs = ms_work(token, progress)
+                else:
+                    progress(0, 3, "Cleaning")
+                    clean = main.cached(bg_key, lambda: remove_background(raw, fold, bg_settings))
+                    token.check()
+                    progress(1, 3, "Finding blobs")
+                    blob_key = _hash_key(bg_key, LEGACY, peak_settings.to_dict(), floor) if bg_key else None
+                    blobs = main.cached(blob_key, lambda: find_blobs(clean.run, fold, peak_settings, floor=floor))
                 progress(2, 3, "Lining up with the standards")
                 usable = {name: usable_blobs(blobs, fold.spec.period)}
                 if ref_usable is not None:
@@ -1847,7 +2018,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             state = "not matched in this run" if (p is None or p.blob is None) else (
                 "matched by hand in this run" if p.pinned else "matched in this run")
             name.setToolTip(state)
-            if p is not None and p.blob is None and self.project.blobs.by_run:
+            if p is not None and p.blob is None and self.peaks:
                 name.setForeground(QtGui.QBrush(QtGui.QColor(*BAD)))
             items = [name, QtWidgets.QTableWidgetItem(f"{c.t1:.2f}"), QtWidgets.QTableWidgetItem(f"{c.t2:.3f}")]
             is_item = QtWidgets.QTableWidgetItem()
@@ -2007,7 +2178,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         fold = self.project.fold(i)
         t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
         run = self.project.entries[i].name
-        blobs = self.project.blobs.by_run.get(self.project.entries[i])
+        blobs = self.peaks.get(self.project.entries[i])
         tight = CalBuilderSettings(t1_window_s=0.75 * fold.spec.period, t2_window_s=3 * fold.row_pitch)
         hit = match_blob(blobs, t1, t2, tight)
         snap = (float(blobs.t1[hit]), float(blobs.t2[hit])) if hit is not None else (t1, float(t2))
@@ -2038,6 +2209,12 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         if blobs is None:
             self.say("▶ Clean and find blobs first")
             return
+        if hit is None and self.peak_method == MS_AWARE:
+            # No component there: take the nearest one within the usual matching window.
+            hit = match_blob(blobs, t1, float(t2), self.session.settings)
+            if hit is None:
+                self.say("No MS-aware peak near there. Switch to legacy blobs (Settings) to add one by clicking.")
+                return
         if hit is None:
             try:
                 self.project.blobs.add(i, t1, float(t2))
@@ -2045,7 +2222,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                 self.say(f"No blob added: {exc}")
                 return
             self._outline_cache = None
-            blobs = self.project.blobs.by_run.get(self.project.entries[i])
+            blobs = self.peaks.get(self.project.entries[i])
             hit = len(blobs) - 1
         self._edit(lambda s: s.pin_blob(name, run, blobs, hit))
         self.say(f"{name} in {run}: matched by hand")
@@ -2101,7 +2278,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         if not 0 <= i < len(self.project.entries):
             return
         e = self.project.entries[i]
-        blobs = self.project.blobs.by_run.get(e)
+        blobs = self.peaks.get(e)
         run = e.name
         selected = self.selected_compound()
         markers, matched = [], set()
@@ -2201,7 +2378,8 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                     period=p.period, period_confirmed=p.period_confirmed,
                     background=p.bg_settings.to_dict(), peaks=p.blobs.settings.to_dict(),
                     blob_edits={r: [list(op) for op in v] for r, v in p.blobs.edits.items()},
-                    normalised=self.normalised)
+                    normalised=self.normalised, peak_method=self.peak_method,
+                    components=p.blobs.component_settings.to_dict())
 
     def save_session(self, path) -> Path:
         self.session_path = save_session(path, self.session, self.session_extra())
@@ -2238,6 +2416,14 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         p.bg_settings = BackgroundSettings.from_dict(d.get("background", {}))
         p.blobs.settings = PeakSettings.from_dict(d.get("peaks", {}))
         p.blobs.edits = {r: [tuple(op) for op in v] for r, v in d.get("blob_edits", {}).items()}
+        if d.get("components"):
+            from ..core.components import ComponentDetectionSettings
+            p.blobs.component_settings = ComponentDetectionSettings.from_dict(d["components"])
+            p.blobs.candidate_settings = p.blobs.component_settings.candidates
+        method = d.get("peak_method", LEGACY)          # sessions saved before MS-aware peaks used blobs
+        self.peak_method, p.blobs.method = method, method
+        self.act_ms_aware.setChecked(method == MS_AWARE)
+        self.act_legacy.setChecked(method == LEGACY)
         self.session = session
         self.normalised = bool(d.get("normalised", False))
         self._undo.clear()

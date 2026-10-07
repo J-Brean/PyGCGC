@@ -12,6 +12,7 @@ pytest.importorskip("pyqtgraph")
 from pygcgc.core.calibration import CalibrationFit  # noqa: E402
 from tests.conftest import CAL_LEVELS, GUI_PHASE, IS_AREA, SCALE  # noqa: E402
 from tests.test_gui import TIMEOUT, window  # noqa: E402,F401
+from pygcgc.gui.blob_state import LEGACY, MS_AWARE  # noqa: E402
 
 RUNS = [f"CAL_{lv}" for lv in CAL_LEVELS]
 
@@ -30,6 +31,7 @@ def _open(qtbot, cal_folder):
     from pygcgc.gui.calibrate_window import CalibrationWindow
     w = CalibrationWindow()
     w.auto_process = False          # phases are set by hand below, before processing
+    w.set_peak_method(LEGACY)       # most tests use legacy blobs: footprints, clicks that add blobs
     qtbot.addWidget(w)
     w.show()
     loaded = []
@@ -44,7 +46,7 @@ def _process(qtbot, w):
     done = []
     w.run_pipeline(on_ready=lambda: done.append(True))
     qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT)
-    assert all(w.project.blobs.by_run.get(e) is not None for e in w.project.entries)
+    assert all(w.peaks.get(e) is not None for e in w.project.entries)
 
 
 @pytest.fixture
@@ -309,8 +311,13 @@ def test_whole_workflow_from_the_main_window_to_sample_amounts(qtbot, cal_folder
     assert len(cw.main_selection()) == len(RUNS)
     assert "5 runs selected" in cw.from_main_btn.text()
     cw.runs_from_main()
-    qtbot.waitUntil(lambda: bool(cw.project.blobs.by_run) and not cw.project.blobs.running
-                    and cw.jobs.active_count() == 0, timeout=TIMEOUT * 3)
+    assert cw.peak_method == MS_AWARE                        # the main window's 🔍 default
+    # While processing, tab 1 must not send anyone to tab 2, and tab 2 must say it is coming.
+    assert cw.processing and "Processing" in cw.standards_banner.text()
+    assert "Go to" not in cw.standards_banner.text() and "being processed" in cw.compounds_banner.text()
+    qtbot.waitUntil(lambda: bool(cw.peaks) and not cw.processing and cw.jobs.active_count() == 0,
+                    timeout=TIMEOUT * 15)
+    assert all(type(b).__name__ == "ComponentBlobs" for b in cw.peaks.values())
     assert cw.session.runs == RUNS
     assert all(e.run is mw.project.entries[mw.project.index_of(e.name)].run for e in cw.project.entries)
     assert cw.tabs.currentIndex() == 1                       # moved on to the compounds by itself
@@ -360,6 +367,40 @@ def test_whole_workflow_from_the_main_window_to_sample_amounts(qtbot, cal_folder
     mw.undo.clear()
 
 
+def test_the_main_windows_ms_aware_peaks_are_used_as_they_are(qtbot, cal_folder, monkeypatch):
+    """Peaks found (and perhaps separated by hand) in the main window's 🔍 step are the ones the
+    builder works on: it must not find its own."""
+    import pygcgc.gui.calibrate_window as cwmod
+    from pygcgc.gui.mainwindow import MainWindow
+    mw = MainWindow()
+    qtbot.addWidget(mw)
+    loaded = []
+    mw.open_folder(cal_folder, on_loaded=lambda: loaded.append(True))
+    qtbot.waitUntil(lambda: bool(loaded) and mw.jobs.active_count() == 0, timeout=TIMEOUT)
+    qtbot.waitUntil(lambda: all(e.phase_method != "unset" for e in mw.project.entries), timeout=TIMEOUT)
+    mw.blobs.set_method(MS_AWARE)
+    mw.run_blobs()
+    qtbot.waitUntil(lambda: not mw.blobs.running and len(mw.blobs.component_sets_by_name) == 7,
+                    timeout=TIMEOUT * 30)
+
+    def refuse(*_a, **_k):
+        raise AssertionError("the builder searched for peaks the main window had already found")
+    monkeypatch.setattr(cwmod, "detect_components", refuse)
+    mw.show_calibrate_window()
+    cw = mw.calibrate_window
+    cw.act_line_up.setChecked(False)          # a moved phase would rightly need new peaks
+    cw.add_main_entries([e for e in mw.project.entries if e.name.startswith("CAL_")])
+    qtbot.waitUntil(lambda: len(cw.peaks) == len(RUNS) and not cw.processing, timeout=TIMEOUT * 3)
+    for e in cw.project.entries:
+        n_main = sum(len(g.components) for g in mw.blobs.component_sets_by_name[e.name].groups)
+        assert len(cw.peaks[e]) == n_main
+    cw.jobs.cancel_all()
+    cw.jobs.wait(5000)
+    mw.jobs.cancel_all()
+    mw.jobs.wait(5000)
+    mw.undo.clear()
+
+
 def test_standards_get_their_own_period_not_the_main_windows(qtbot, window, cal_folder, tmp_path):
     # The main window's runs are at one period (set by hand here); standards in a folder
     # without a method.json are folded at the period estimated from themselves.
@@ -372,6 +413,7 @@ def test_standards_get_their_own_period_not_the_main_windows(qtbot, window, cal_
         shutil.copy(cal_folder / "data" / f"{r}.cdf", folder)
     w.show_calibrate_window()
     cw = w.calibrate_window
+    cw.auto_process = False                  # only the fold matters here
     loaded = []
     cw.open_folder(folder, on_loaded=lambda: loaded.append(True))
     qtbot.waitUntil(lambda: bool(loaded) and cw.jobs.active_count() == 0, timeout=TIMEOUT)

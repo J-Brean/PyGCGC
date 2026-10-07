@@ -44,7 +44,40 @@ from pathlib import Path
 import numpy as np
 
 from .calibration import CalibrationError, CalibrationFit, CalibrationSettings, fit_calibration
-from .peaks import BlobSet
+from .peaks import BlobSet, PeakSettings, make_frame
+
+
+@dataclass
+class ComponentBlobs(BlobSet):
+    """MS-aware components (`peaktable.ComponentPeaks`) as the builder reads peaks.
+
+    Components overlap, so there is no footprint image: `labels` is all zero, a
+    compound is matched to the nearest component apex, and outlines are the fitted
+    10% contours. Everything else (t1, t2, volume, full-ion spectra) reads as a blob's."""
+    contours: list = field(default_factory=list)
+
+    def outline_times(self, i: int):
+        if i < len(self.contours) and self.contours[i] is not None:
+            return self.contours[i]
+        return np.array([]), np.array([])
+
+
+def peaks_from_components(peaks, fold, wrap_below_s: float = 0.5) -> ComponentBlobs:
+    """`ComponentPeaks` from `peaktable.respectrum_components` wrapped as `ComponentBlobs`."""
+    frame = make_frame(fold, PeakSettings(wrap_below_s=wrap_below_s))
+    t1 = np.asarray(peaks.t1, dtype=float)
+    t2 = np.asarray(peaks.t2, dtype=float)
+    n = t1.size
+    col = np.floor((t1 - frame.fold.t1[0]) / frame.period).astype(int)
+    row = np.round(t2 / frame.pitch).astype(int)
+    volume = np.asarray(peaks.volume, dtype=float)
+    return ComponentBlobs(
+        mz=np.asarray(peaks.mz), t1=t1, t2=t2, col=col, row=row, height=volume.copy(), snr=np.zeros(n),
+        volume=volume, n_pixels=np.zeros(n, dtype=int), n_modulations=np.zeros(n, dtype=int),
+        spectra=np.asarray(peaks.spectra, dtype=np.float32),
+        labels=np.zeros((frame.rows, fold.n_cols), dtype=np.int32), wrap_rows=frame.wrap_rows,
+        pitch=frame.pitch, period=frame.period, t1_start=float(fold.t1[0]),
+        co_elution=np.asarray(peaks.co_elution, dtype=bool), contours=list(peaks.contours))
 
 ISTD_WORDS = {"istd", "is", "internal standard", "internal_standard", "surrogate"}
 TRUE_WORDS = {"1", "true", "yes", "y", "x"}
@@ -246,6 +279,10 @@ class CalSession:
         the blob's apex pixel, which always lies in its own footprint (its weighted
         t1 may not, for a skewed peak), so it finds the same blob again after the
         blobs are recomputed."""
+        if isinstance(blobs, ComponentBlobs):
+            # No footprints: the exact apex, matched back as the nearest component.
+            self.pin(compound, run, float(blobs.t1[i]), float(blobs.t2[i]))
+            return
         t1 = blobs.t1_start + (float(blobs.col[i]) + 0.5) * blobs.period
         self.pin(compound, run, t1, float(blobs.row[i]) * blobs.pitch)
 
@@ -663,8 +700,10 @@ def blob_heights(run, fold, blobs: BlobSet) -> np.ndarray:
     A detector near its limit stops growing with the amount: on the August 2026
     standards the largest point of the calibrants rose from about 2.1e5 counts at
     5 ng to only 2.5e5 at 25 ng (none above 3e5), and their curves bent over at the
-    top. The height lets such points be seen and left out."""
-    from .peaks import make_frame
+    top. The height lets such points be seen and left out. MS-aware components have no
+    footprint to look inside, so they get NaN."""
+    if isinstance(blobs, ComponentBlobs):
+        return np.full(len(blobs), np.nan)
     frame = make_frame(fold, blobs.settings)
     r, c = frame.scan_pixels()
     ok = (c >= 0) & (c < blobs.labels.shape[1]) & (r >= 0) & (r < blobs.labels.shape[0])
