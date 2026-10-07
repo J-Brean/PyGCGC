@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ...core.hydrocarbons import HydrocarbonSettings, ratios_match
+from ...core.hydrocarbons import LADDER_SHAPES, HydrocarbonSettings, ratios_match
 
 SERIES_COLUMNS = ["Cn", "t1 (min)", "t2 (s)"]
+ASSIGN_COLUMNS = ["Peak", "t1 (min)", "t2 (s)", "RI", "Hydrocarbon"]
 STENCIL_COLUMNS = ["Stencil", "response factor", "volume", "n blobs", "amount"]
 DEFAULT_QUALIFIERS = HydrocarbonSettings()
 PAIR_PRESETS = ["57/71 n-alkane check", "91/105 alkylbenzenes", "82/83 alkylcyclohexanes",
@@ -33,11 +34,43 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
     cancelDrawRequested = QtCore.Signal()
     removeStencilsRequested = QtCore.Signal(list)              # names
     responseFactorEdited = QtCore.Signal(str, float)
+    ladderShapeChanged = QtCore.Signal(str, int)               # shape key, polynomial degree
+    assignRequested = QtCore.Signal()
+    assignActivated = QtCore.Signal(int)                        # blob index
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_run: str | None = None
         self._updating = False
+
+        self.shape_box = QtWidgets.QComboBox()
+        for key, text in LADDER_SHAPES.items():
+            self.shape_box.addItem(text, key)
+        self.shape_box.setToolTip(
+            "How the alkane ladder runs between and beyond the confirmed alkanes. A ladder is rarely straight "
+            "across the plot. Straight: segments between points. Smooth curve: bends through every point. "
+            "Polynomial: an averaged curve that ignores one wonky point.")
+        self.degree_spin = QtWidgets.QSpinBox()
+        self.degree_spin.setRange(1, 6)
+        self.degree_spin.setValue(3)
+        self.degree_spin.setPrefix("degree ")
+        self.degree_spin.setToolTip("Polynomial degree (3 is a gentle S-bend)")
+        self.shape_box.currentIndexChanged.connect(self._shape_edited)
+        self.degree_spin.valueChanged.connect(self._shape_edited)
+        self.assign_btn = QtWidgets.QPushButton("🏷️ Assign peaks to hydrocarbons")
+        self.assign_btn.setToolTip("Label every peak on every run that has a ladder: n-alkane, branched alkane, "
+                                   "cycloalkane, alkylbenzene or alkylnaphthalene, with its carbon number")
+        self.assign_btn.clicked.connect(self.assignRequested)
+        self.assign_table = QtWidgets.QTableWidget(0, len(ASSIGN_COLUMNS))
+        self.assign_table.setHorizontalHeaderLabels(ASSIGN_COLUMNS)
+        self.assign_table.verticalHeader().setVisible(False)
+        self.assign_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.assign_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.assign_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        self.assign_table.setMaximumHeight(180)
+        self.assign_table.cellDoubleClicked.connect(self._assign_activated)
+        self.assign_status = QtWidgets.QLabel("")
+        self.assign_status.setWordWrap(True)
 
         self.find_btn = QtWidgets.QPushButton("➕ Find alkane series")
         self.find_btn.setToolTip("Click two n-alkanes in the 2D view and type their carbon numbers")
@@ -155,6 +188,15 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
         lay.addWidget(self.qual_box)
         lay.addWidget(self.series_table)
         lay.addWidget(self.series_status)
+        shape_row = QtWidgets.QHBoxLayout()
+        shape_row.addWidget(QtWidgets.QLabel("Ladder shape"))
+        shape_row.addWidget(self.shape_box, 1)
+        shape_row.addWidget(self.degree_spin)
+        lay.addLayout(shape_row)
+        lay.addWidget(_hline())
+        lay.addWidget(self.assign_btn)
+        lay.addWidget(self.assign_table)
+        lay.addWidget(self.assign_status)
         lay.addWidget(_hline())
         row2 = QtWidgets.QHBoxLayout()
         row2.addWidget(self.draw_btn)
@@ -181,7 +223,36 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
         lay.addWidget(self.settings_btn)
         self._refresh_buttons()
 
-    # ------------------------------------------------------------- filling
+    # ------------------------------------------------------------ assignment
+    def set_ladder_shape(self, shape: str, degree: int) -> None:
+        """Show the shape in use without emitting a change."""
+        self._updating = True
+        self.shape_box.setCurrentIndex(max(self.shape_box.findData(shape), 0))
+        self.degree_spin.setValue(int(degree))
+        self.degree_spin.setEnabled(shape == "polynomial")
+        self._updating = False
+
+    def _shape_edited(self, *_a) -> None:
+        self.degree_spin.setEnabled(self.shape_box.currentData() == "polynomial")
+        if not self._updating:
+            self.ladderShapeChanged.emit(self.shape_box.currentData(), self.degree_spin.value())
+
+    def set_assignments(self, calls, blobs, message: str = "") -> None:
+        """Show one run's `HydrocarbonCall`s (or clear the table for `None`)."""
+        calls = calls or []
+        self.assign_table.setRowCount(len(calls))
+        for r, c in enumerate(calls):
+            values = (str(c.blob), f"{blobs.t1[c.blob] / 60:.3f}", f"{blobs.t2[c.blob]:.2f}",
+                      f"{100 * c.carbon_eq:.0f}", c.label)
+            for col, v in enumerate(values):
+                self.assign_table.setItem(r, col, QtWidgets.QTableWidgetItem(v))
+        self.assign_status.setText(message)
+
+    def _assign_activated(self, row: int, _col: int) -> None:
+        item = self.assign_table.item(row, 0)
+        if item is not None:
+            self.assignActivated.emit(int(item.text()))
+
     # ------------------------------------------------------ homologous series
     def _find_homolog_clicked(self) -> None:
         text = self.pair_combo.currentText().split()[0]

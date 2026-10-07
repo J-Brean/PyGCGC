@@ -369,7 +369,7 @@ class LayersPanel(QtWidgets.QWidget):
         self.siloxane_count = QtWidgets.QLabel("")
         self.siloxane_count.setStyleSheet("color: palette(mid); margin-left: 22px;")
         lay.addWidget(self.siloxane_count)
-        self.blob_overlay = QtWidgets.QCheckBox("🔍 Peak detections")
+        self.blob_overlay = QtWidgets.QCheckBox("🔍 Detected peaks")
         self.blob_overlay.setToolTip("Outline every detected peak (also the top-bar 🔍 toggle)")
         lay.addWidget(self.blob_overlay)
         self.stencil_overlay = QtWidgets.QCheckBox("⛓️ Stencil outlines")

@@ -16,10 +16,10 @@ TIMEOUT = 30000
 TRUE_PERIOD, TRUE_PHASE = 6.0, 1.7
 
 
-def _folder(tmp_path, method_period=None):
+def _folder(tmp_path, method_period=None, period=TRUE_PERIOD):
     folder = tmp_path / "pack"
     (folder / "data").mkdir(parents=True)
-    write_run_andi(_run(TRUE_PERIOD, phase=TRUE_PHASE, duration=600.0), folder / "data" / "RUN.cdf")
+    write_run_andi(_run(period, phase=TRUE_PHASE, duration=600.0), folder / "data" / "RUN.cdf")
     if method_period is not None:
         (folder / "method.json").write_text(f'{{"modulation_period_s": {method_period}}}')
     return folder
@@ -60,6 +60,16 @@ def test_period_and_phase_estimated_on_open_without_a_method_file(qtbot, tmp_pat
         # The bleed pulse (t2 = 1.5 s in the modulator's frame) lands just above the bottom of the image.
         assert 0.1 < (1.5 + TRUE_PHASE - e.phase) % TRUE_PERIOD < 0.8
         assert "estimated from the run" in w.fold_panel.period_status.text()
+    finally:
+        _close(w)
+
+
+def test_estimated_period_is_rounded_to_the_nearest_tenth_of_a_second(qtbot, tmp_path):
+    w, _ = _open(qtbot, _folder(tmp_path, period=6.04))
+    try:
+        p = w.project
+        assert p.period == 6.0 and p.period_method == "auto"
+        assert "Rounded to 6.0 s" in p.period_detail
     finally:
         _close(w)
 

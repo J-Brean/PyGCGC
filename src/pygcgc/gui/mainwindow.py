@@ -45,7 +45,8 @@ from .panels.results import ResultsPanel
 from .panels.siloxane import SiloxanePanel
 from .project import Project, SIDECAR_NAME
 from .render import Renderer
-from .theme import apply_theme
+from .icons import make_icon, plain
+from .theme import DARK, LIGHT, FadeTabWidget, apply_theme
 from .workflow import IdentifyStepPanel, QuantStepPanel, WorkflowPanel
 from .views.compare import CompareView
 from .views.image2d import SCALE_NAMES, SCALES, ChromatogramView
@@ -66,13 +67,15 @@ SHORTCUTS = [
     ("3 / 4 / 5", "🧪 Review gallery / calibration curves / 📍 Compare"),
     ("A", "📍 Add anchor: click the reference, then the same peak here"),
     ("B", "Jump to Compare in blink mode"),
-    ("G", "🔍 Merge the selected blobs"),
+    ("G", "🔍 Merge the selected peaks (Ctrl+click on the image adds a peak to the selection)"),
+    ("Ctrl+L", "Auto colour levels"),
     ("Y / N / U", "In review or results: accept / reject / clear"),
     ("P", "In review: pick a different peak by clicking the 2D view"),
-    ("Esc", "Cancel picking a peak"),
+    ("Esc", "Cancel the click-to-pick in progress"),
     ("Home", "Reset zoom"),
     ("1 / 2", "2D view / 1D view"),
     ("Ctrl+O", "Open a folder of runs"),
+    ("Ctrl+Shift+O", "Open a saved project"),
     ("Ctrl+S", "Save the project"),
     ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
     ("F1", "This list"),
@@ -128,7 +131,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # ---- centre: 2D and 1D tabs
         self.view2d = ChromatogramView()
         self.view1d = OneDView()
-        self.tabs = QtWidgets.QTabWidget()
+        self.tabs = FadeTabWidget()
+        self.tabs.setObjectName("main_tabs")
         self.tabs.addTab(self.view2d, "2D")
         self.tabs.addTab(self.view1d, "1D")
         self.review = ReviewView(self._review_image)
@@ -216,42 +220,50 @@ class MainWindow(QtWidgets.QMainWindow):
         add("blobs", "🔍 Peaks", "Peak detection and separation",
             "Find overlapping blobs automatically from intensity and mass spectra on every run. "
             "The older hard-border detector remains available for comparison.",
-            "Detection uses the cleaned baseline from the background step. Existing siloxane, ladder "
-            "and library-search tools still use legacy blobs while their component-aware paths are built.",
+            "Detection uses the cleaned baseline from the background step. The siloxane filterer and the "
+            "hydrocarbon identifier (buttons below) open from here and work on the peaks found on this step.",
             self.blobs_panel, "Find peaks", scrolled=False)
-        add("siloxane", "🫧 Siloxane", "Siloxane removal",
+        add("siloxane", "🫧 Siloxane filterer", "Siloxane filterer",
             "Scores each blob against a siloxane reference spectrum and blocks out the ones above the "
             "certainty you set. Choose the reference and the threshold, then press Go.",
-            "It works on whole blobs, so it needs step 4 first. It runs before the ladder and "
-            "identification so contaminant peaks do not enter them.",
-            self.sil_panel, "Remove siloxanes")
-        add("hydro", "⛓️ Hydrocarbons", "n-Alkane ladder and stencils",
-            "Anchors the n-alkane ladder to give retention indices, and draws group-type stencils "
-            "(lumped classes) that transfer between runs. Go starts a two-click flow: click two "
-            "n-alkanes on the 2D view and type their carbon numbers.",
+            "It works on whole blobs, so it needs peaks first. It runs before the internal standards, "
+            "classification and identification so contaminant peaks do not enter them.",
+            self.sil_panel, "Remove siloxanes", parent="blobs")
+        add("hydro", "⛓️ Hydrocarbon identifier", "Hydrocarbon identifier",
+            "Anchors the n-alkane ladder (click two n-alkanes and type their carbon numbers), then assigns "
+            "every blob to the hydrocarbon it is: n-alkane, branched alkane, cycloalkane, alkylbenzene or "
+            "naphthalene, with a carbon number. The ladder can follow a curved, uneven path. Stencils "
+            "(lumped classes) transfer between runs.",
             "The ladder is searched for on clean data. It gives the retention index that identification "
-            "(step 8) uses, and the t2-above-the-alkane-line axis that classification (step 7) uses.",
-            self.hydro_panel, "Find alkane series")
+            "uses, and the t2-above-the-alkane-line axis that classification uses.",
+            self.hydro_panel, "Find alkane series", parent="blobs")
+        add("istd", "🏷️ IS", "Internal standards",
+            "Select an internal standard and click its peak on the run that is open. Set three thresholds: how "
+            "far in t1 and in t2 a peak may sit from where the standard is expected, and how well its mass "
+            "spectrum must match. Go searches every chromatogram; the Standards tab shows the result.",
+            "It needs the peaks from step 4 on every run it searches. It comes straight after peak detection "
+            "so that 📋 can hand the standards to Quantify next.",
+            self.istd_panel, "Find in every chromatogram")
+        add("quant", "🧪 Quantify", "Quantification",
+            "Finds every target and internal standard in every run, fits the calibration curves and "
+            "quantifies the samples.",
+            "It needs the phase (step 1), the cleaned data (step 3) and the internal standards (step 5). "
+            "The steps after it describe the peaks and do not feed it.",
+            self.quant_step, "Quantify")
         add("classify", "🧬 Classify", "Compound classes",
             "Says what kind of compound each blob is (alkane, alkylbenzene, PAH, N-heteroaromatic, siloxane, "
             "and so on) from its mass spectrum, with no library. Rules live in an editable file. If the 14 eV "
             "run of a tandem acquisition is loaded too, its molecular ions add evidence.",
-            "It classifies the blobs from step 4 after siloxanes are flagged (5), and uses the ladder from "
-            "step 6 for a polarity axis when there is one. It comes before library identification because "
+            "It classifies the blobs from step 4 after siloxanes are flagged, and uses the alkane ladder for "
+            "a polarity axis when there is one. It comes before library identification because "
             "it needs no library and can tell you what to expect.",
             self.class_panel, "Classify blobs")
         add("identify", "🏷️ Identify", "Identify blobs",
             "Matches each blob's spectrum to a mass spectral library (MSP) and reports a confidence "
             "tier. Go opens the identifier window.",
-            "It searches the blobs from step 4 and uses the retention index from step 6 when the "
-            "ladder exists, so identification comes after both.",
+            "It searches the blobs from step 4 and uses the retention index from the alkane ladder when "
+            "one exists, so identification comes after both.",
             self.identify_step, "Open identifier")
-        add("quant", "🧪 Quantify", "Quantification",
-            "Finds every target and internal standard in every run, fits the calibration curves and "
-            "quantifies the samples.",
-            "Last: it needs the phase (step 1) and works on the cleaned data (step 3). Everything before "
-            "it is there to make its peaks clean and correctly placed.",
-            self.quant_step, "Quantify")
         add("cluster", "🧩 Cluster", "Peak clusters",
             "Groups peaks by the shape of their mass spectra, with no rules and no library, so the chromatogram "
             "divides into chemically similar regions. Cluster the selected run, or pool every 70 eV run so each "
@@ -259,38 +271,32 @@ class MainWindow(QtWidgets.QMainWindow):
             "It groups the blobs from step 4. Spectra do not drift between runs, so no alignment is needed to "
             "compare runs. It sits last because it is analysis, not preparation: nothing else depends on it.",
             self.cluster_panel, "Cluster peaks")
-        add("istd", "🏷️ Internal standards", "Internal standards",
-            "Select an internal standard and click its peak on the run that is open. Set three thresholds: how "
-            "far in t1 and in t2 a peak may sit from where the standard is expected, and how well its mass "
-            "spectrum must match. Go searches every chromatogram; the table along the bottom shows the result.",
-            "It needs the peaks from step 4 on every run it searches. Nothing after step 4 is needed, so it can "
-            "run any time once peaks are detected; 📋 then hands the standards to 🧪.",
-            self.istd_panel, "Find in every chromatogram")
         # One left-hand dock with three tabs, so the run list, the layers and the open
         # step's settings share the space instead of competing for it.
-        self.left_tabs = QtWidgets.QTabWidget()
+        self.left_tabs = FadeTabWidget()
         self.left_tabs.addTab(self.runs_panel, "Runs")
         self.tool_tab = self.left_tabs.addTab(self.workflow, "Tool")
         self.left_tabs.addTab(self.layers_panel, "Layers")
-        left = self._dock("Workspace", self.left_tabs, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
+        # Everything that used to sit in a bottom bar is a tab here, so the chromatogram can use the full height.
+        self.left_tabs.addTab(self._scrolled(self.results), "Results")
+        self.left_tabs.addTab(self._scrolled(self.istd_results), "Standards")
+        self.left_tabs.addTab(self.history, "History")
+        self.left_tabs.addTab(self.log, "Log")
+        # Running tasks sit at the foot of the workspace, and the panel is hidden when idle,
+        # so the chromatogram and spectrum keep the room a Jobs tab used to take.
+        workspace = QtWidgets.QWidget()
+        wl = QtWidgets.QVBoxLayout(workspace)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.addWidget(self.left_tabs, 1)
+        wl.addWidget(self.jobs_panel)
+        left = self._dock("Workspace", workspace, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
         spec_dock = self._dock("Spectrum", self.spectrum, QtCore.Qt.DockWidgetArea.RightDockWidgetArea)
-        self.results_dock = self._dock("🧪 Results", self.results, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
-        jobs_dock = self._dock("Jobs", self.jobs_panel, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
-        hist_dock = self._dock("History", self.history, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
-        log_dock = self._dock("Log", self.log, QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
-        self.istd_dock = self._dock("🏷️ Internal standards", self.istd_results,
-                                    QtCore.Qt.DockWidgetArea.BottomDockWidgetArea)
-        self.tabifyDockWidget(self.results_dock, self.istd_dock)
-        self.tabifyDockWidget(self.istd_dock, jobs_dock)
-        self.tabifyDockWidget(jobs_dock, hist_dock)
-        self.tabifyDockWidget(hist_dock, log_dock)
-        jobs_dock.raise_()
-        self.resizeDocks([left, spec_dock], [470, 330], QtCore.Qt.Orientation.Horizontal)
-        self.resizeDocks([jobs_dock], [190], QtCore.Qt.Orientation.Vertical)
+        self.resizeDocks([left, spec_dock], [470, 380], QtCore.Qt.Orientation.Horizontal)
         self.workspace_dock, self.spectrum_dock = left, spec_dock
 
         self._build_actions()
         self._build_toolbars()
+        self._build_icons()
         self._build_menus()
         self._build_status()
         self._connect()
@@ -302,7 +308,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _dock(self, title, widget, area):
         dock = QtWidgets.QDockWidget(title, self)
         dock.setObjectName(f"dock_{title}")
-        dock.setWidget(widget)
+        # One 12 px gutter on both sides so every panel's content lines up with its title.
+        holder = QtWidgets.QWidget()
+        holder.setObjectName("card")
+        lay = QtWidgets.QVBoxLayout(holder)
+        lay.setContentsMargins(12, 4, 12, 10)
+        lay.addWidget(widget)
+        dock.setWidget(holder)
         self.addDockWidget(area, dock)
         return dock
 
@@ -331,9 +343,11 @@ class MainWindow(QtWidgets.QMainWindow):
         A = self._action
         self.act_open = A("📂 Open", self.open_folder_dialog, "Ctrl+O", "Open runs (native LSC defaults to untreated 70 eV)")
         self.act_open_files = A("Open files…", self.open_files_dialog, None, "Choose individual runs, including 14 eV or vendor DBC")
-        self.act_open_project = A("Open project…", self.open_project_dialog, "Ctrl+Shift+O")
-        self.act_save = A("Save project", self.save_project, "Ctrl+S")
-        self.act_save_as = A("Save project as…", self.save_project_as)
+        self.act_open_project = A("Open project…", self.open_project_dialog, "Ctrl+Shift+O",
+                                  "Reopen a saved project: runs, settings, anchors and results")
+        self.act_save = A("Save project", self.save_project, "Ctrl+S",
+                          "Save runs, settings, anchors and results to the project file")
+        self.act_save_as = A("Save project as…", self.save_project_as, None, "Save the project under a new name")
         self.act_targets = A("Load target table…", self.load_targets_dialog, None,
                              "Internal standards in the table become phase anchors")
         self.act_sequence = A("Load sequence list…", self.load_sequence_dialog)
@@ -347,22 +361,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.step_actions = {}
         self._step_names = {}
         step_group = QtGui.QActionGroup(self)
+        # Siloxane filterer and hydrocarbon identifier have no toolbar button: they open from the 🔍 Peaks panel.
         for key, text, tip in ([
                 ("fold", "1 🔄 Fold", "Modulation period and phase"),
                 ("align", "2 📍 Align", "Reference run and anchors"),
                 ("background", "3 🧹 Background", "Background removal settings"),
-                ("blobs", "4 🔍 Peaks", "Peak detection and separation"),
-                ("siloxane", "5 🫧 Siloxane", "Siloxane removal settings"),
-                ("hydro", "6 ⛓️ Hydrocarbons", "n-Alkane ladder and stencils"),
+                ("blobs", "4 🔍 Peaks", "Peak detection and separation, siloxane filterer, hydrocarbon identifier"),
+                ("istd", "5 🏷️ IS", "Internal standards: labelled once, found in every run by t1, t2 and spectrum"),
+                ("quant", "6 🧪 Quantify", "Targets, calibration and quantification"),
                 ("classify", "7 🧬 Classify", "Compound classes from the spectrum"),
                 ("identify", "8 🏷️ Identify", "Library search"),
-                ("quant", "9 🧪 Quantify", "Targets, calibration and quantification"),
-                ("cluster", "10 🧩 Cluster", "Unsupervised peak clusters, within and between runs"),
-                ("istd", "11 🏷️ IS", "Internal standards: labelled once, found in every run by t1, t2 and spectrum")]):
+                ("cluster", "9 🧩 Cluster", "Unsupervised peak clusters, within and between runs")]):
             info = self.workflow.step_info(key)
             act = A(text, lambda _checked=False, k=key: self.workflow.show_step(k), None,
                     f"{tip}. Opens its settings on the left; press Go there to run it.\n"
-                    f"Why here: {info['why']}")
+                    f"{info['why']}")
             act.setCheckable(True)
             step_group.addAction(act)
             self.step_actions[key] = act
@@ -384,19 +397,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_levels = A("Load calibration levels…", self.load_levels_dialog, None,
                             "CSV with a level column and one column per compound")
         self.act_export = A("Export 🧪 results…", self.export_results)
-        self.act_overlay = A("Peaks", self.view2d.set_overlay_visible, "O",
+        self.act_overlay = A("🧪 Peak outlines", self.view2d.set_overlay_visible, "O",
                              "Show 🧪 peak outlines and labels", checkable=True)
         self.act_overlay.setChecked(True)
         self.act_blobs_panel = A("🔍 Peaks", self.show_blobs_panel, None,
                                  "Choose and inspect overlapping MS-aware blobs or legacy blobs")
         self.act_find_blobs = A("🔍 Find peaks", self.run_blobs, None,
                                 "Run the selected peak-detection method on every loaded run")
-        self.act_blob_overlay = A("🔍 Peak detections", self.view2d.set_blob_overlay_visible, None,
+        self.act_blob_overlay = A("🔍 Detected peaks",self.view2d.set_blob_overlay_visible, None,
                                   "Show overlapping MS-aware contours or legacy outlines", checkable=True)
-        self.act_add_blob = A("➕ Add blob", self.start_add_blob, None,
+        self.act_add_blob = A("➕ Add peak", self.start_add_blob, None,
                               "Click a peak in the 2D view that automatic detection missed")
-        self.act_merge_blobs = A("Merge selected blobs", self.merge_selected_blobs, "G",
-                                 "Combine the 🔍 blobs selected in the Blobs panel into one")
+        self.act_merge_blobs = A("Merge selected peaks", self.merge_selected_blobs, "G",
+                                 "Combine the selected 🔍 peaks into one (Ctrl+click fragments on the image to select several)")
         self.act_overlap = A("✂️ Resolve overlap", lambda: self.show_overlap_dialog(), None,
                             "Estimate overlapping component contributions inside an MS-aware region "
                             "or inspect a legacy blob")
@@ -404,19 +417,25 @@ class MainWindow(QtWidgets.QMainWindow):
                                  "The n-alkane ladder and group-type stencils")
         self.act_find_alkanes = A("➕ Find alkane series", self.start_find_alkanes, None,
                                   "Click two n-alkanes and type their carbon numbers")
+        self.act_assign_hydrocarbons = A("🏷️ Assign peaks to hydrocarbons", self.assign_hydrocarbons, None,
+                                         "Label every peak as n-alkane, branched alkane, cycloalkane, "
+                                         "alkylbenzene or alkylnaphthalene, using the alkane ladder")
         self.act_stencil_overlay = A("⛓️ Stencil outlines", self.view2d.set_stencil_overlay_visible, None,
                                      "Show every stencil, lifted onto this run's own alkane series",
                                      checkable=True)
         self.act_stencil_overlay.setChecked(True)
-        self.act_classify = A("🧬 Classify blobs", self.start_classify, None,
-                              "Compound class of every blob from its spectrum (uses the 14 eV run if one is loaded)")
+        self.act_classify = A("🧬 Classify peaks", self.start_classify, None,
+                              "Compound class of every peak from its spectrum (uses the 14 eV run if one is loaded)")
         self.act_cluster = A("🧩 Cluster peaks", self.start_cluster, None,
-                             "Group peaks by mass spectrum: this run, or every 70 eV run pooled (see step 10)")
+                             "Group peaks by mass spectrum: this run, or every 70 eV run pooled (see step 9)")
         self.act_identify = A("🏷️ Identify", self.show_identify_dialog, None,
                              "Search 🔍 blobs against an MSP library: retention index, weighted dot "
                              "product, target-decoy confidence")
         self.act_batch = A("🗂️ Batch", self.show_batch_dialog, None,
                           "Process a whole folder: cached, parallel pipeline, feature table, QC, PCA and volcano")
+        self.act_calibrate = A("📈 Calibrate", self.show_calibrate_window, None,
+                               "Select your calibration runs in the Runs table, then press this: compounds "
+                               "suggested or from a table, curves you can edit, applied to the other runs")
         self.act_istd_panel = A("🏷️ Internal standards", self.show_istd_panel, None,
                                 "Label internal standards and match them across every run")
         self.act_label_istd = A("🏷️ Label internal standard", self.start_label_istd, None,
@@ -437,9 +456,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_reset_footprint = A("↺ Automatic footprint", self.reset_footprint, None,
                                      "Remove the hand-drawn footprint of the peak being edited")
         self.act_reset_footprint.setEnabled(False)
-        self.act_review = A("🧪 Review", lambda: self.tabs.setCurrentWidget(self.review), "3")
-        self.act_calib = A("Calibration curves", lambda: self.tabs.setCurrentWidget(self.calibration_panel), "4")
-        self.act_cancel_pick = A("Cancel pick", self.cancel_pick, "Esc")
+        self.act_review = A("🧪 Review", lambda: self.tabs.setCurrentWidget(self.review), "3",
+                            "Gallery of every quantified peak, to check and re-integrate")
+        self.act_calib = A("Calibration curves", lambda: self.tabs.setCurrentWidget(self.calibration_panel), "4",
+                           "Calibration fit for each compound")
+        self.act_cancel_pick = A("Cancel pick", self.cancel_pick, "Esc",
+                                 "Abandon the click-to-pick in progress (anchor, peak, alkane or standard)")
         self.act_snr = A("S/N", self.renderer.set_snr, None,
                          "Show signal-to-noise (needs 🧹 on this run)", checkable=True)
         self.act_snr.setEnabled(False)
@@ -468,7 +490,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "D", "Switch between the 2D image and the raw 1D chromatogram (reconstructed trace "
                                       "plus the unfolded detector stream)")
         self.act_help = A("Keyboard shortcuts", self.show_shortcuts, "F1")
-        self.act_theme = A("Dark theme", self.set_dark, None, checkable=True)
+        self.act_theme = A("Dark theme", self.set_dark, None, "Switch between the dark and light look",
+                           checkable=True)
         self.act_theme.setChecked(self.dark)
         self.act_quit = A("Quit", self.close, "Ctrl+Q")
         self.act_clear_cache = A("Clear results cache…", self.clear_results_cache, None,
@@ -483,11 +506,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # numbered steps (each opens its settings on the left), then the extras.
         tb.addAction(self.act_open)
         tb.addSeparator()
-        for key in ("fold", "align", "background", "blobs", "siloxane", "hydro", "classify", "identify", "quant",
-                    "cluster", "istd"):
+        for key in self.step_actions:
             tb.addAction(self.step_actions[key])
         tb.addSeparator()
         tb.addAction(self.act_overlap)
+        tb.addAction(self.act_calibrate)
         tb.addAction(self.act_batch)
         tb.addAction(self.act_export_figure)
         # Closed panels can always be brought back from here (also View → Panels),
@@ -510,7 +533,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vb = self.addToolBar("View")
         vb.setObjectName("toolbar_view")
         vb.setMovable(False)
-        vb.addWidget(QtWidgets.QLabel(" Ion "))
+        vb.addWidget(QtWidgets.QLabel("Ion"))
         self.ion_box = QtWidgets.QComboBox()
         self.ion_box.setEditable(True)
         self.ion_box.setInsertPolicy(QtWidgets.QComboBox.InsertPolicy.InsertAtTop)
@@ -521,7 +544,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ion_box.lineEdit().returnPressed.connect(self.apply_ion_box)
         self.ion_box.activated.connect(lambda _i: self.apply_ion_box())
         vb.addWidget(self.ion_box)
-        vb.addWidget(QtWidgets.QLabel("  Scale "))
+        vb.addWidget(QtWidgets.QLabel("Scale"))
         self.scale_box = QtWidgets.QComboBox()
         for s in SCALES:
             self.scale_box.addItem(SCALE_NAMES[s], s)
@@ -542,6 +565,101 @@ class MainWindow(QtWidgets.QMainWindow):
         vb.addAction(self.act_prev)
         vb.addAction(self.act_next)
 
+    def _build_icons(self):
+        """Toolbar buttons and tabs show one-colour line icons and plain labels; the emoji stay
+        in menus, tooltips and the docs. `refresh_icons` redraws them when the theme changes."""
+        step_icons = {"fold": "fold", "align": "align", "background": "background", "blobs": "peaks",
+                      "classify": "classify", "identify": "identify", "quant": "quant",
+                      "cluster": "cluster", "istd": "istd"}
+        self._action_icons = {self.step_actions[k]: n for k, n in step_icons.items()}
+        self._action_icons.update({
+            self.act_open: "open", self.act_overlap: "overlap", self.act_batch: "batch",
+            self.act_calibrate: "quant",
+            self.act_export_figure: "export", self.act_overlay: "outlines",
+            self.act_blob_overlay: "detected", self.act_stencil_overlay: "stencil",
+            self.act_processed: "clean", self.act_lock: "lock", self.act_auto: "auto",
+            self.act_extend: "extend", self.act_region: "region", self.act_home: "reset",
+            self.act_prev: "prev", self.act_next: "next"})
+        for act in self._action_icons:
+            act.setIconText(plain(act.text()))
+        for bar in (self.findChild(QtWidgets.QToolBar, "toolbar_main"),
+                    self.findChild(QtWidgets.QToolBar, "toolbar_view")):
+            bar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            bar.setIconSize(QtCore.QSize(16, 16))
+        for i in range(self.tabs.count()):
+            self.tabs.setTabText(i, plain(self.tabs.tabText(i)))
+        self.tabs.setTabIcon(self.tabs.indexOf(self.review), QtGui.QIcon())   # set in refresh_icons
+        for d in self.findChildren(QtWidgets.QDockWidget):
+            d.setWindowTitle(plain(d.windowTitle()))
+
+    # Each step tints the top of the window a different hue (dark theme, light theme).
+    STEP_GLOW = {
+        "fold": ("#10301F", "#E3F4EA"), "align": ("#0E2E33", "#DDF1F3"),
+        "background": ("#112544", "#E2EAFB"), "blobs": ("#1F1A44", "#E6E5FB"),
+        "siloxane": ("#2A1744", "#EFE3FA"), "hydro": ("#3A1533", "#F8E2F0"),
+        "classify": ("#3B1620", "#FBE3E7"), "identify": ("#3A2210", "#FBEBDD"),
+        "quant": ("#36300F", "#FAF3D9"), "cluster": ("#243610", "#EAF5DA"),
+        "istd": ("#0F2F3A", "#DAF1F7")}
+
+    def _glow_for(self, key: str) -> QtGui.QColor:
+        return QtGui.QColor(self.STEP_GLOW.get(key, self.STEP_GLOW["fold"])[0 if self.dark else 1])
+
+    def _set_glow(self, key: str, animate: bool = True) -> None:
+        """Fade the background tint to the colour of the step that was just opened."""
+        target = self._glow_for(key)
+        old = getattr(self, "_glow_anim", None)
+        if old is not None:
+            old.stop()
+        current = getattr(self, "_glow", None)
+        if not animate or current is None or not self.isVisible():
+            self._glow = target
+            self.update()
+            return
+        anim = QtCore.QVariantAnimation(self)
+        anim.setDuration(700)
+        anim.setStartValue(current)
+        anim.setEndValue(target)
+        anim.setEasingCurve(QtCore.QEasingCurve.Type.InOutCubic)
+        anim.valueChanged.connect(self._glow_step)
+        self._glow_anim = anim
+        anim.start()
+
+    def _glow_step(self, colour) -> None:
+        self._glow = QtGui.QColor(colour)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        colours = getattr(self, "_theme_colours", None)
+        if colours is None:
+            return super().paintEvent(event)
+        grad = QtGui.QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0.0, getattr(self, "_glow", QtGui.QColor(colours["window"])))
+        grad.setColorAt(0.85, QtGui.QColor(colours["window"]))
+        grad.setColorAt(1.0, QtGui.QColor(colours["window"]))
+        p = QtGui.QPainter(self)
+        p.fillRect(self.rect(), grad)
+        p.end()
+
+    def refresh_icons(self, colours: dict) -> None:
+        self._theme_colours = colours
+        if getattr(self, "_glow_dark", None) != self.dark:      # theme switched: recolour at once
+            self._glow_dark = self.dark
+            self._set_glow(self.workflow.current() or "fold", animate=False)
+        if not hasattr(self, "_action_icons"):      # the theme can be applied while the window is still being built
+            return
+        def icon(name):
+            return make_icon(name, colours["mid"], colours["highlight"], colours["line"])
+        for act, name in self._action_icons.items():
+            act.setIcon(icon(name))
+        self.tabs.setTabIcon(self.tabs.indexOf(self.review), icon("review"))
+        self.left_tabs.setTabIcon(self.tool_tab, icon(self._current_step_icon()))
+
+    def _current_step_icon(self) -> str:
+        key = self.workflow.current()
+        if self.workflow.step_info(key)["parent"]:
+            return key                      # "siloxane" and "hydro" are also icon names
+        return self._action_icons.get(self.step_actions[key], "fold")
+
     def _build_menus(self):
         m = self.menuBar()
         f = m.addMenu("&File")
@@ -553,8 +671,9 @@ class MainWindow(QtWidgets.QMainWindow):
         e.addAction(self.act_undo)
         e.addAction(self.act_redo)
         v = m.addMenu("&View")
-        for a in (self.act_view2d, self.act_view1d, self.act_toggle_dim, self.act_compare, None,
-                  self.act_processed, self.act_aligned, self.act_snr,
+        for a in (self.act_view2d, self.act_view1d, self.act_review, self.act_calib, self.act_compare,
+                  self.act_toggle_dim, None,
+                  self.act_processed, self.act_aligned, self.act_snr, self.act_overlay,
                   self.act_blob_overlay, self.act_stencil_overlay, self.act_ion, self.act_scale, self.act_lock,
                   self.act_auto, self.act_extend, self.act_region, self.act_home, None,
                   self.act_prev, self.act_next, None, self.act_theme):
@@ -584,19 +703,21 @@ class MainWindow(QtWidgets.QMainWindow):
         p.addAction(self.act_add_blob)
         p.addAction(self.act_merge_blobs)
         p.addAction(self.act_overlap)
-        p.addSection("5  Siloxane")
+        p.addSection("4  Siloxane filterer")
         p.addAction(self.act_siloxane)
         p.addAction(QtGui.QAction("Remove 🫧 from all runs", self, triggered=self.remove_siloxane_all))
-        p.addSection("6  Hydrocarbons")
+        p.addSection("4  Hydrocarbon identifier")
         p.addAction(self.act_hydro_panel)
         p.addAction(self.act_find_alkanes)
         p.addAction(QtGui.QAction("⛓️ Propagate alkanes to all runs", self, triggered=self.propagate_alkanes))
+        p.addAction(self.act_assign_hydrocarbons)
         p.addAction(self.act_hydro_settings)
-        p.addSection("7  Classify")
-        p.addAction(self.act_classify)
-        p.addSection("8  Identify")
-        p.addAction(self.act_identify)
-        p.addSection("9  Quantify")
+        p.addSection("5  Internal standards")
+        p.addAction(self.act_istd_panel)
+        p.addAction(self.act_label_istd)
+        p.addAction(QtGui.QAction("🔎 Find internal standards on all runs", self, triggered=self.propagate_istd))
+        p.addSection("6  Quantify")
+        p.addAction(self.act_calibrate)
         p.addAction(self.act_quant)
         p.addAction(self.act_quant_settings)
         p.addAction(self.act_review)
@@ -605,12 +726,12 @@ class MainWindow(QtWidgets.QMainWindow):
         p.addAction(self.act_reset_footprint)
         p.addAction(self.act_calib)
         p.addAction(self.act_export)
-        p.addSection("10  Cluster")
+        p.addSection("7  Classify")
+        p.addAction(self.act_classify)
+        p.addSection("8  Identify")
+        p.addAction(self.act_identify)
+        p.addSection("9  Cluster")
         p.addAction(self.act_cluster)
-        p.addSection("11  Internal standards")
-        p.addAction(self.act_istd_panel)
-        p.addAction(self.act_label_istd)
-        p.addAction(QtGui.QAction("🔎 Find internal standards on all runs", self, triggered=self.propagate_istd))
         p.addSection("Whole folder")
         p.addAction(self.act_batch)
         h = m.addMenu("&Help")
@@ -621,7 +742,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_status(self):
         sb = self.statusBar()
         self.cursor_label = QtWidgets.QLabel("")
-        self.run_label = QtWidgets.QLabel("No runs")
+        self.run_label = QtWidgets.QLabel("No runs: File ▸ Open (Ctrl+O)")
         self.jobs_label = QtWidgets.QLabel("")
         sb.addWidget(self.cursor_label, 1)
         sb.addPermanentWidget(self.jobs_label)
@@ -655,8 +776,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _step_opened(self, key: str):
         """Opening a step brings the Tool tab forward and names it after the step."""
-        self.step_actions[key].setChecked(True)
-        self.left_tabs.setTabText(self.tool_tab, self._step_names[key].split(" ", 1)[1])
+        info = self.workflow.step_info(key)
+        self.step_actions[info["parent"] or key].setChecked(True)     # a sub-menu keeps its parent lit
+        name = plain(info["label"]) if info["parent"] else plain(self._step_names[key].split(" ", 1)[1])
+        self.left_tabs.setTabText(self.tool_tab, name)
+        self.refresh_icons(LIGHT if not self.dark else DARK)
+        self._set_glow(key)
         self.left_tabs.setCurrentIndex(self.tool_tab)
         self.workspace_dock.show()
         self.workspace_dock.raise_()
@@ -667,6 +792,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for key, act in self.step_actions.items():
             mark = "✓ " if self.workflow.is_done(key) else ("▸ " if key == nxt else "")
             act.setText(mark + self._step_names[key])
+            act.setIconText(plain(mark + self._step_names[key]))
 
     def _go_identify(self):
         self.show_identify_dialog()
@@ -758,6 +884,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.blobs_panel.rowActivated.connect(self.goto_blob)
         self.blobs_panel.exportRequested.connect(self.export_components)
         self.blobs_panel.accountingRequested.connect(self.run_signal_accounting)
+        self.blobs_panel.siloxaneRequested.connect(lambda: self.workflow.show_step("siloxane"))
+        self.blobs_panel.hydrocarbonRequested.connect(lambda: self.workflow.show_step("hydro"))
         # ⛓️
         self.hydrocarbons.changed.connect(self._hydrocarbons_changed)
         self.hydrocarbons.runningChanged.connect(self._hydrocarbons_running)
@@ -774,6 +902,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hydro_panel.editStencilRequested.connect(self.edit_stencil)
         self.hydro_panel.qualifiersChanged.connect(self._qualifiers_edited)
         self.hydro_panel.pickQualifiersToggled.connect(self._qual_pick_toggled)
+        self.hydro_panel.ladderShapeChanged.connect(self._ladder_shape_edited)
+        self.hydro_panel.assignRequested.connect(self.assign_hydrocarbons)
+        self.hydro_panel.assignActivated.connect(self.goto_blob)
         self.hydro_panel.set_qualifiers(self.hydrocarbons.settings)
         self.classes.changed.connect(self._classes_changed)
         self.classes.runningChanged.connect(self._classes_running)
@@ -843,6 +974,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.quant_step.targetsRequested.connect(self.load_targets_dialog)
         self.quant_step.levelsRequested.connect(self.load_levels_dialog)
         self.quant_step.settingsRequested.connect(self.quant_settings_dialog)
+        self.quant_step.calibrateRequested.connect(self.show_calibrate_window)
         self.project.runsChanged.connect(self._quant_step_status)
         self.quant.changed.connect(self._quant_step_status)
         self.project.layersChanged.connect(self._quant_step_status)
@@ -982,7 +1114,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_run_label(self):
         n = len(self.project)
         if n == 0 or self.index < 0:
-            self.run_label.setText("No runs" if n == 0 else f"{n} runs")
+            self.run_label.setText("No runs: File ▸ Open (Ctrl+O)" if n == 0 else f"{n} run{'s' if n != 1 else ''}")
         else:
             self.run_label.setText(f"{self.project.entries[self.index].name}   run {self.index + 1} of {n}")
 
@@ -1688,12 +1820,21 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         fold = self.project.fold(self.index)
         t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
-        d = np.hypot((blobs.t1 - t1) / 60.0, (blobs.t2 - t2) / 0.5)
-        i = int(np.argmin(d))
-        if d[i] < 1.5:      # close enough that this was probably meant for it
+        # A click inside a footprint picks that blob, so a tail fragment far from
+        # its own apex can still be clicked; otherwise fall back to the nearest apex.
+        frame_col, rowpos = make_frame(fold, blobs.settings).time_to_pixel(t1, t2)
+        i = blobs.at_pixel(int(round(rowpos)), frame_col)
+        if i is None:
+            d = np.hypot((blobs.t1 - t1) / 60.0, (blobs.t2 - t2) / 0.5)
+            i = int(np.argmin(d)) if d.min() < 1.5 else None    # close enough that this was probably meant for it
+        if i is None:
+            return
+        if self.view2d.last_click_modifiers & QtCore.Qt.KeyboardModifier.ControlModifier:
+            self.blobs_panel.toggle_row(i)    # build up fragments to merge with G
+        else:
             self.blobs_panel.select_row(i)
-            self._update_blob_overlay()
-            self._show_blob_spectrum(self.blobs_panel.selected_indices())
+        self._update_blob_overlay()
+        self._show_blob_spectrum(self.blobs_panel.selected_indices())
 
     def _review_image(self, run: str, ion: int):
         """Extended quantifier-ion image and frame for the review gallery."""
@@ -2202,6 +2343,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.hydrocarbons.propagate_series(self.index, loaded, on_done=done)
 
+    def assign_hydrocarbons(self):
+        loaded = self.project.loaded()
+        if not loaded:
+            self.say("Open some runs first")
+            return
+        done, skipped = self.hydrocarbons.assign(loaded)
+        if not done:
+            self.say("⛓️ Nothing assigned: each run needs its alkane ladder and its peaks (🔍 legacy blobs)")
+            return
+        note = f" Skipped (no ladder or peaks): {', '.join(skipped)}." if skipped else ""
+        self.say(f"⛓️ Peaks assigned to hydrocarbons on {done} run{'s' if done != 1 else ''}.{note}")
+        self.workflow.mark_done("hydro", f"Peaks assigned on {done} run{'s' if done != 1 else ''}.{note}")
+
+    def _ladder_shape_edited(self, shape: str, degree: int):
+        st = self.hydrocarbons
+        st.set_settings(replace(st.settings, ladder_shape=shape, ladder_degree=degree))
+        self.say("⛓️ Ladder shape changed. Press Assign again to relabel the peaks.")
+
     def save_stencil(self, name: str, response_factor: float):
         vertices = self.view2d.stencil_vertices()
         before = self.hydrocarbons.snapshot_stencils()
@@ -2301,8 +2460,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def edit_hydro_settings(self):
         dlg = SettingsDialog("⛓️ Hydrocarbon settings", self.hydrocarbons.settings, parent=self)
         if dlg.exec():
-            self.hydrocarbons.settings = dlg.settings()
-            self._hydrocarbons_changed()
+            self.hydrocarbons.set_settings(dlg.settings())
             self.say("⛓️ Settings changed. Find or propagate the alkane series again to use them.")
 
     def find_homologs(self, major: int, minor: int, name: str):
@@ -2369,9 +2527,19 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _hydrocarbons_changed(self):
         self.hydro_panel.set_qualifiers(self.hydrocarbons.settings)
+        self.hydro_panel.set_ladder_shape(self.hydrocarbons.settings.ladder_shape,
+                                          self.hydrocarbons.settings.ladder_degree)
         name = self.project.entries[self.index].name if self.index >= 0 else None
         series = self.hydrocarbons.series_for(self.index) if self.index >= 0 else None
         self.hydro_panel.set_current_run(name, series, self.hydrocarbons.running)
+        calls = self.hydrocarbons.calls_for(self.index) if self.index >= 0 else None
+        blobs = self.blobs.blobs_for(self.index) if self.index >= 0 else None
+        counts = {}
+        for c in calls or []:
+            counts[c.kind] = counts.get(c.kind, 0) + 1
+        self.hydro_panel.set_assignments(
+            calls, blobs, ", ".join(f"{n} {k}" for k, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+            if calls else "Press Assign once the ladder and the peaks are found.")
         totals = self.hydrocarbons.totals(self.index) if self.index >= 0 else {}
         self.hydro_panel.set_stencils(self.hydrocarbons.stencils.stencils, totals, series is not None)
         markers = self.hydrocarbons.markers(self.index) if self.index >= 0 else {}
@@ -2808,6 +2976,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.identify_dialog.raise_()
         self.identify_dialog.activateWindow()
 
+    # ================================================================ 📈
+    def show_calibrate_window(self):
+        if getattr(self, "calibrate_window", None) is None:
+            from .calibrate_window import CalibrationWindow
+            self.calibrate_window = CalibrationWindow(self.project, dark=self.dark, parent=self)
+        self.calibrate_window.show()
+        self.calibrate_window.raise_()
+        self.calibrate_window.activateWindow()
+
     # ================================================================ 🗂️
     def show_batch_dialog(self):
         if getattr(self, "batch_dialog", None) is None:
@@ -2908,9 +3085,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.istd.set_settings(self.istd_panel.settings())
 
         def finished():
-            self.istd_dock.show()
-            self.istd_dock.raise_()
-            self.workflow.mark_done("istd", "Every chromatogram searched. The table along the bottom shows "
+            self.workspace_dock.show()
+            self.left_tabs.setCurrentWidget(self.istd_results.parentWidget().parentWidget())
+            self.workflow.mark_done("istd", "Every chromatogram searched. The Standards tab shows "
                                             "where each standard passed; hover a ✗ for why.")
 
         self.istd.propagate_to(loaded, on_done=finished)
@@ -3104,14 +3281,18 @@ class MainWindow(QtWidgets.QMainWindow):
     def set_dark(self, on: bool):
         self.dark = on
         apply_theme(self, on)
+        if getattr(self, "calibrate_window", None) is not None:
+            self.calibrate_window.set_dark(on)
 
     def show_shortcuts(self):
-        rows = "".join(f"<tr><td><b>{k}</b></td><td>&nbsp;&nbsp;{v}</td></tr>" for k, v in SHORTCUTS)
+        rows = "".join(f"<tr><td><b>{k}</b></td><td>&nbsp;&nbsp;&nbsp;&nbsp;{v}</td></tr>" for k, v in SHORTCUTS)
         QtWidgets.QMessageBox.information(self, "Keyboard shortcuts", f"<table>{rows}</table>")
 
     def show_about(self):
         QtWidgets.QMessageBox.about(self, "PyGCGC",
-                                    f"PyGCGC {__version__}\nGC×GC-EI-ToF-MS processing and viewing.")
+                                    f"PyGCGC {__version__}\nGC×GC-EI-ToF-MS processing and viewing.\n\n"
+                                    "Work along the toolbar, left to right. Help ▸ Workflow guide "
+                                    "explains each step; F1 lists the shortcuts.")
 
     def closeEvent(self, event):
         self.project.flush_autosave()

@@ -47,6 +47,27 @@ def test_candidate_regions_join_neighbours_and_keep_distant_peaks_separate():
     assert regions[0].row0 == 8 and regions[0].row1 == 15
 
 
+def test_candidate_regions_are_valid_complete_linkage_groups_on_many_candidates():
+    # Integer grid positions tie often, so tie-breaking can legitimately differ
+    # from one global linkage; check the defining property instead.
+    rng = np.random.default_rng(3)
+    n = 400
+    row, col = rng.integers(0, 300, n), rng.integers(0, 60, n)
+    candidates = CandidateSet(
+        t1=col * 4., t2=row * .05, row=row, col=col, score=np.ones(n),
+        strongest_snr=np.ones(n), support_count=np.ones(n, int),
+        support_ions=[np.array([50])] * n, support_snr=[np.ones(1)] * n,
+        pitch=.05, period=4., t1_start=0.)
+    regions = candidate_regions(candidates, (400, 80), link_t2_s=.25, link_modulations=1)
+    link_rows = int(np.ceil(.25 / .05))
+    scaled = np.column_stack((col / 1, row / link_rows))
+    members = sorted(i for r in regions for i in r.candidate_indices)
+    assert members == list(range(n))
+    for r in regions:
+        pts = scaled[list(r.candidate_indices)]
+        assert np.abs(pts[:, None] - pts[None]).max() <= 1.0
+
+
 def test_candidate_cube_uses_local_support_without_a_legacy_footprint():
     run = make_run([(100., 2., 60, 2e5), (100., 2.1, 61, 1e5)],
                    phase=.7, rate=50., mz=(58, 70))

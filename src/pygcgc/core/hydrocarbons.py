@@ -63,6 +63,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 from scipy.signal import find_peaks
 
 from .fold import Fold
@@ -108,6 +109,10 @@ class HydrocarbonSettings:
     series_tol_carbon: float = 0.15   # how far from a whole-carbon slot (in carbon-equivalents, 0.15 = 15 RI) still counts
     series_t2_tol_s: float = 0.5      # allowed spread of a series' t2 offset from the alkane line
     min_series_members: int = 4
+    ladder_shape: str = "piecewise"   # path drawn through the alkanes: see `LADDER_SHAPES`
+    ladder_degree: int = 3            # polynomial degree when `ladder_shape` is "polynomial"
+    assign_carbon_tol: float = 0.15   # a blob this close (carbon-equivalents) to an alkane can be that n-alkane
+    assign_t2_tol_s: float = 0.3      # ...and this close in t2 to the alkane line
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -145,11 +150,48 @@ def _interp_extrap(x: float, xp: np.ndarray, fp: np.ndarray) -> float:
     return float(np.interp(x, xp, fp))
 
 
+LADDER_SHAPES = {"piecewise": "Straight between points", "smooth": "Smooth curve through points",
+                 "polynomial": "Polynomial fit"}
+
+
+def _curve_value(x: float, xp: np.ndarray, fp: np.ndarray, shape: str, degree: int) -> float:
+    """Value at `x` of the curve through (`xp`, `fp`), `xp` increasing.
+
+    piecewise: straight lines between the points (the original behaviour).
+    smooth: a monotone cubic (PCHIP) through every point, so a ladder that bends or
+        wobbles is followed without overshooting between points.
+    polynomial: a least-squares polynomial of `degree`, which averages over a wonky
+        point instead of following it.
+    Beyond the first or last point every shape continues along the end slope, because
+    a polynomial or spline extrapolated freely runs away within a few carbons."""
+    if xp.size < 3 or shape == "piecewise" or np.any(np.diff(xp) <= 0):    # repeated positions: no curve to fit
+        return _interp_extrap(x, xp, fp)
+    if shape == "polynomial":
+        centre, scale = float(xp.mean()), float(xp.std()) or 1.0      # scaled so a high degree stays well conditioned
+        poly = np.polynomial.Polynomial.fit((xp - centre) / scale, fp, min(degree, xp.size - 1))
+        inside = lambda v: float(poly((v - centre) / scale))          # noqa: E731
+        slope = lambda v: float(poly.deriv()((v - centre) / scale) / scale)    # noqa: E731
+    else:
+        spline = PchipInterpolator(xp, fp)
+        inside = lambda v: float(spline(v))                           # noqa: E731
+        slope = lambda v: float(spline.derivative()(v))               # noqa: E731
+    if x < xp[0]:
+        return inside(xp[0]) + slope(xp[0]) * (x - xp[0])
+    if x > xp[-1]:
+        return inside(xp[-1]) + slope(xp[-1]) * (x - xp[-1])
+    return inside(x)
+
+
 @dataclass
 class AlkaneSeries:
     """The n-alkane ladder found in one run: confirmed carbon numbers and
-    where each one actually is."""
+    where each one actually is. `shape` and `degree` say what path is drawn
+    through them (see `_curve_value`); they change how positions between and
+    beyond the hits are read, never the hits themselves."""
     hits: dict[int, AlkaneHit] = field(default_factory=dict)
+    shape: str = "piecewise"
+    degree: int = 3
+    _inverse: tuple | None = field(default=None, init=False, repr=False, compare=False)
 
     def __len__(self) -> int:
         return len(self.hits)
@@ -167,17 +209,27 @@ class AlkaneSeries:
 
     def t1_of(self, carbon: float) -> float:
         cs, t1s, _ = self._arrays()
-        return _interp_extrap(float(carbon), cs, t1s)
+        return _curve_value(float(carbon), cs, t1s, self.shape, self.degree)
 
     def t2_of(self, carbon: float) -> float:
         """The alkane line's own t2 at this carbon number (interpolated)."""
         cs, _, t2s = self._arrays()
-        return _interp_extrap(float(carbon), cs, t2s)
+        return _curve_value(float(carbon), cs, t2s, self.shape, self.degree)
 
     def carbon_of(self, t1: float) -> float:
         cs, t1s, _ = self._arrays()
-        order = np.argsort(t1s)
-        return _interp_extrap(float(t1), t1s[order], cs[order])
+        if self.shape == "piecewise":
+            order = np.argsort(t1s)
+            return _interp_extrap(float(t1), t1s[order], cs[order])
+        # A curve fitted to t1 against carbon is inverted numerically: fitting carbon against t1
+        # separately would not be the same curve and drifts away from the hits.
+        key = (self.shape, self.degree, tuple(cs), tuple(t1s))
+        if self._inverse is None or self._inverse[0] != key:      # built once per set of hits, not per blob
+            grid = np.linspace(cs[0] - 3.0, cs[-1] + 3.0, 600)
+            times = np.maximum.accumulate([_curve_value(c, cs, t1s, self.shape, self.degree) for c in grid])
+            keep = np.concatenate(([True], np.diff(times) > 0))   # a wobbling curve must still be invertible
+            self._inverse = (key, times[keep], grid[keep])
+        return _interp_extrap(float(t1), self._inverse[1], self._inverse[2])
 
     def to_relative(self, t1: float, t2: float) -> tuple[float, float]:
         c = self.carbon_of(t1)

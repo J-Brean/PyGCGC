@@ -12,7 +12,7 @@ from pygcgc.core.io.markes_lsc import LSCFile, parse_metadata
 from pygcgc.core.io.andi import write_andi
 
 
-def make_lsc(path, *, energy=70, dbc=False, acquisition=100, spectra=None):
+def make_lsc(path, *, energy=70, dbc=False, acquisition=100, spectra=None, spectrum_tag=b'SD04'):
     if spectra is None:
         spectra = [(0.98, [(57010, 10.), (57200, 20.), (73000, 5.)]),
                    (1., []), (1.02, [(91000, 7.)])]
@@ -32,7 +32,7 @@ def make_lsc(path, *, energy=70, dbc=False, acquisition=100, spectra=None):
         payload = struct.pack('<5I', round((time-second)*2**32), acquisition+second,
                               0x1020 if energy == 70 else 0x2020,len(ions),0)
         payload += b''.join(struct.pack('<IdI',m,i,0) for m,i in ions)
-        chunk(b'SD04',payload)
+        chunk(spectrum_tag,payload)
     chunk(b'MD01',sm.encode())
     directory = len(blob)
     payload = b''.join(tag+struct.pack('<I',len(offsets))+struct.pack(f'<{len(offsets)}Q',*offsets)
@@ -69,6 +69,16 @@ def test_discovery_prefers_raw_but_keeps_ambiguous_acquisitions(tmp_path):
     assert set(discover_runs(tmp_path)) == {raw,other}
     duplicate = make_lsc(tmp_path/'duplicate.lsc')
     assert set(discover_runs(tmp_path)) == {raw,low,corrected,other,duplicate}
+
+
+def test_discovery_leaves_out_tof_ds_reexports(tmp_path):
+    # "Open TOF Data File" copies (SD01 spectra, often named "<run> 70eV.lsc") sit
+    # beside the originals; folder opening skips them instead of failing to load them.
+    raw = make_lsc(tmp_path/'run_70eV.lsc')
+    make_lsc(tmp_path/'run 70eV.lsc', spectrum_tag=b'SD01')
+    assert discover_runs(tmp_path) == [raw]
+    with pytest.raises(ValueError, match='no SD04'):
+        read_run(tmp_path/'run 70eV.lsc')
 
 
 @pytest.mark.parametrize('damage', ['truncated','index','length','count','reserved','nan','order','timestamp','version','channel'])

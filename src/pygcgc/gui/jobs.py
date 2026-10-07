@@ -23,6 +23,8 @@ from typing import Any, Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .icons import plain
+
 
 class Cancelled(Exception):
     """Raised inside a job function when its token has been cancelled."""
@@ -223,74 +225,36 @@ class JobManager(QtCore.QObject):
             self.jobRemoved.emit(job_id)
 
 
-class _JobRow(QtWidgets.QWidget):
-    def __init__(self, job: JobInfo, manager: JobManager, parent=None):
-        super().__init__(parent)
-        self.job_id = job.id
-        self.manager = manager
-        lay = QtWidgets.QGridLayout(self)
-        lay.setContentsMargins(4, 2, 4, 2)
-        self.title = QtWidgets.QLabel(job.name)
-        self.detail = QtWidgets.QLabel("")
-        self.detail.setStyleSheet("color: palette(mid);")
-        self.bar = GCAnimation()
-        self.bar.start()
-        self.button = QtWidgets.QPushButton("Cancel")
-        self.button.setFlat(True)
-        self.button.clicked.connect(self._clicked)
-        lay.addWidget(self.title, 0, 0)
-        lay.addWidget(self.button, 0, 1, 2, 1)
-        lay.addWidget(self.bar, 1, 0)
-        lay.addWidget(self.detail, 2, 0, 1, 2)
-        self.update_from(job)
-
-    def _clicked(self) -> None:
-        job = self.manager.jobs.get(self.job_id)
-        if job is None or job.state in ("done", "failed", "cancelled"):
-            self.manager.forget(self.job_id)
-        else:
-            self.manager.cancel(self.job_id)
-
-    def update_from(self, job: JobInfo) -> None:
-        if job.total:
-            self.bar.set_progress(job.done / job.total)
-        elif job.state in ("queued", "running"):
-            self.bar.set_progress(None)   # busy indicator
-        state_text = {"queued": "Waiting", "running": job.message or "Running",
-                      "done": "Done", "failed": f"Failed: {job.message}",
-                      "cancelled": "Cancelled"}[job.state]
-        self.detail.setText(state_text)
-        if job.state in ("done", "failed"):
-            self.bar.set_progress(1.0 if job.state == "done" else 0.0)
-            self.bar.stop()
-            self.button.setText("Clear")
+def _duration(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    if seconds < 1:
+        return "under 1 s"
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    return f"{int(seconds // 60)} min {int(seconds % 60):02d} s"
 
 
 class GCAnimation(QtWidgets.QWidget):
-    """Pixel-art progress bar: molecules race along a coiled GC column in a warming oven.
+    """A gas chromatography column in miniature: sample molecules race along a coiled column.
 
-    Drawn on an 8-row pixel grid, as wide as the widget, and scaled up with hard
-    edges. The bottom rail of the oven lights up left to right with progress;
-    with no progress value (None) it is lit throughout. The timer only runs
-    between start() and stop(), so finished rows cost nothing.
+    Light molecules outrun heavy ones, as they do in the oven. A thin track underneath fills
+    left to right with progress, or sweeps back and forth when the length of the job is not
+    known (progress None). Drawn with the palette's text and highlight colours, so it follows
+    the theme. The timer only runs between start() and stop(), so finished rows cost nothing.
     """
 
-    GRID_H = 8
-    HEAT = [(60, 110, 200), (70, 170, 190), (230, 200, 70), (240, 140, 50), (220, 70, 50)]
-    # (speed in pixels per frame, phase offset in pixels, colour): light species outrun heavy ones
-    MOLECULES = [(0.90, 0, (255, 255, 255)), (0.62, 20, (120, 220, 255)),
-                 (0.42, 45, (255, 120, 200)), (0.27, 8, (160, 255, 120))]
-    COIL_PERIOD = 12
+    HEIGHT = 38
+    # (share of the column covered per second, starting position): light species first
+    MOLECULES = [(0.42, 0.00), (0.30, 0.37), (0.21, 0.66), (0.14, 0.12)]
 
-    def __init__(self, parent=None, scale: int = 2):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.scale = scale
         self.frame = 0
         self.progress: float | None = None
-        self.setFixedHeight(self.GRID_H * scale)
+        self.setFixedHeight(self.HEIGHT)
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.timer = QtCore.QTimer(self)
-        self.timer.setInterval(70)
+        self.timer.setInterval(33)
         self.timer.timeout.connect(self._tick)
 
     def start(self) -> None:
@@ -306,63 +270,169 @@ class GCAnimation(QtWidgets.QWidget):
         self.update()
 
     def sizeHint(self) -> QtCore.QSize:
-        return QtCore.QSize(200, self.GRID_H * self.scale)
+        return QtCore.QSize(200, self.HEIGHT)
 
     def _tick(self) -> None:
         self.frame += 1
         self.update()
 
-    def _coil_y(self, x: float) -> int:
-        return int(round(3.5 + 2.0 * math.sin(2 * math.pi * x / self.COIL_PERIOD)))
-
-    def _heat(self, t: float) -> QtGui.QColor:
-        # t in [0, 1) walks up the ramp and back down, so the oven warms and cools in a loop
-        t = 1 - abs(2 * (t % 1) - 1)
-        pos = t * (len(self.HEAT) - 1)
-        i = min(int(pos), len(self.HEAT) - 2)
-        f = pos - i
-        a, b = self.HEAT[i], self.HEAT[i + 1]
-        return QtGui.QColor(*(int(a[k] + (b[k] - a[k]) * f) for k in range(3)))
-
     def paintEvent(self, _event) -> None:
+        pal = self.palette()
+        accent = pal.color(QtGui.QPalette.ColorRole.Highlight)
+        ink = pal.color(QtGui.QPalette.ColorRole.Text)
+        grey = pal.color(QtGui.QPalette.ColorRole.Mid)
         p = QtGui.QPainter(self)
-        p.scale(self.scale, self.scale)
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        w = self.width()
+        # Coil: a helix seen from the side, so each turn is a loop. x runs left to right.
+        loops = max(4, w // 30)
+        x0, x1, cy, amp_y, amp_x = 4.0, w - 4.0, 15.0, 9.0, 7.0
+        turns = 2 * math.pi * loops
 
-        def px(x: int, y: int, colour) -> None:
-            p.fillRect(int(x), int(y), 1, 1, colour)
+        def point(u: float) -> QtCore.QPointF:
+            theta = u * turns
+            k = (x1 - x0 - 2 * amp_x) / turns
+            return QtCore.QPointF(x0 + amp_x + k * theta - amp_x * math.sin(theta),
+                                  cy + amp_y * math.cos(theta))
 
-        grid_w = max(16, self.width() // self.scale)
-        heat = self._heat(self.frame / 160)
-        dim = QtGui.QColor(heat)
-        dim.setAlpha(90)
-        off = QtGui.QColor(128, 128, 128, 60)
-        lit = grid_w if self.progress is None else int(round(self.progress * grid_w))
-        # Oven walls: top and bottom rails with a flickering edge; the bottom one is the progress readout
-        for x in range(grid_w):
-            px(x, 0, heat if (x + self.frame // 3) % 4 else dim)
-            if x < lit:
-                px(x, self.GRID_H - 1, heat if (x - self.frame // 3) % 4 else dim)
-            else:
-                px(x, self.GRID_H - 1, off)
-        # Column coil
-        coil = QtGui.QColor(150, 150, 160, 200)
-        for x in range(1, grid_w - 1):
-            px(x, self._coil_y(x), coil)
-        # Molecules
-        span = grid_w - 2
-        for speed, phase, rgb in self.MOLECULES:
-            x = (phase + speed * self.frame) % span + 1
-            y = self._coil_y(x)
-            colour = QtGui.QColor(*rgb)
-            px(x, y, colour)
-            px(x + 1, y, colour)
-            trail = QtGui.QColor(*rgb, 90)
-            px(x - 1, self._coil_y(x - 1), trail)
+        path = QtGui.QPainterPath(point(0))
+        steps = loops * 14
+        for i in range(1, steps + 1):
+            path.lineTo(point(i / steps))
+        grey_line = QtGui.QColor(grey)
+        grey_line.setAlpha(150)
+        p.setPen(QtGui.QPen(grey_line, 1.3, QtCore.Qt.PenStyle.SolidLine, QtCore.Qt.PenCapStyle.RoundCap))
+        p.drawPath(path)
+        # Molecules, each with a short fading trail
+        colours = [accent, ink, accent.lighter(135), grey]
+        t = self.frame * self.timer.interval() / 1000
+        p.setPen(QtCore.Qt.PenStyle.NoPen)
+        for (speed, start), colour in zip(self.MOLECULES, colours):
+            u = (start + speed * t) % 1.0
+            for j in range(4, 0, -1):
+                trail = QtGui.QColor(colour)
+                trail.setAlpha(28 * (5 - j))
+                p.setBrush(trail)
+                p.drawEllipse(point((u - j * 0.007) % 1.0), 1.5, 1.5)
+            p.setBrush(colour)
+            p.drawEllipse(point(u), 2.7, 2.7)
+        # Progress track
+        track = QtCore.QRectF(2, self.HEIGHT - 5, w - 4, 2.5)
+        faint = QtGui.QColor(grey)
+        faint.setAlpha(55)
+        p.setBrush(faint)
+        p.drawRoundedRect(track, 1.25, 1.25)
+        p.setBrush(accent)
+        if self.progress is None:
+            swing = abs(((t * 0.5) % 1.0) * 2 - 1)
+            seg = track.width() * 0.25
+            p.drawRoundedRect(QtCore.QRectF(track.left() + swing * (track.width() - seg), track.top(),
+                                            seg, track.height()), 1.25, 1.25)
+        else:
+            p.drawRoundedRect(QtCore.QRectF(track.left(), track.top(), track.width() * self.progress,
+                                            track.height()), 1.25, 1.25)
         p.end()
 
 
+class _JobRow(QtWidgets.QWidget):
+    """One running task: its name and "done/total", the animation, and what is left to do."""
+
+    def __init__(self, job: JobInfo, manager: JobManager, parent=None):
+        super().__init__(parent)
+        self.job_id = job.id
+        self.manager = manager
+        self._samples: list[tuple[float, int]] = []     # (time, items done) at each progress report
+        lay = QtWidgets.QGridLayout(self)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setVerticalSpacing(4)
+        self.title = QtWidgets.QLabel(plain(job.name))
+        font = self.title.font()
+        font.setWeight(QtGui.QFont.Weight.DemiBold)
+        self.title.setFont(font)
+        self.count = QtWidgets.QLabel("")
+        self.detail = QtWidgets.QLabel("")
+        self.detail.setStyleSheet("color: palette(mid); font-size: 8pt;")
+        self.detail.setWordWrap(True)
+        self.bar = GCAnimation()
+        self.bar.start()
+        self.button = QtWidgets.QPushButton("Cancel")
+        self.button.setFlat(True)
+        self.button.clicked.connect(self._clicked)
+        lay.addWidget(self.title, 0, 0)
+        lay.addWidget(self.count, 0, 1)
+        lay.addWidget(self.button, 0, 2)
+        lay.addWidget(self.bar, 1, 0, 1, 3)
+        lay.addWidget(self.detail, 2, 0, 1, 3)
+        lay.setColumnStretch(0, 1)
+        # ETA text changes with the clock, not only when the job reports progress
+        self.clock = QtCore.QTimer(self)
+        self.clock.setInterval(500)
+        self.clock.timeout.connect(self._refresh)
+        self.clock.start()
+        self.update_from(job)
+
+    def _clicked(self) -> None:
+        job = self.manager.jobs.get(self.job_id)
+        if job is None or job.state in ("done", "failed", "cancelled"):
+            self.manager.forget(self.job_id)
+        else:
+            self.manager.cancel(self.job_id)
+
+    def _refresh(self) -> None:
+        job = self.manager.jobs.get(self.job_id)
+        if job is not None:
+            self.update_from(job)
+
+    def _remaining(self, job: JobInfo, now: float) -> str:
+        """Time left, from the speed over the last 20 s of progress reports.
+
+        Not elapsed / done: many jobs spend a long first stage before their first report, and
+        later items cost more or less than earlier ones, so the whole-job average is far off.
+        """
+        if not self._samples or self._samples[-1][1] != job.done:
+            self._samples.append((now, job.done))
+        while len(self._samples) > 2 and now - self._samples[1][0] > 20:
+            self._samples.pop(0)
+        (t0, d0), (t1, d1) = self._samples[0], self._samples[-1]
+        if d1 <= d0 or t1 - t0 < 1.0:
+            return "estimating time"
+        left = (job.total - job.done) * (t1 - t0) / (d1 - d0) - (now - t1)
+        left = max(left, 0.0)
+        if left > 30:
+            left = round(left / 5) * 5
+        return f"about {_duration(left)} remaining"
+
+    def update_from(self, job: JobInfo) -> None:
+        active = job.state in ("queued", "running")
+        if job.total:
+            self.bar.set_progress(job.done / job.total)
+            self.count.setText(f"{job.done}/{job.total}")
+        elif active:
+            self.bar.set_progress(None)   # length unknown: sweeping indicator
+        if job.state == "queued":
+            text = "Waiting"
+        elif job.state == "running":
+            text = job.message or "Running"
+            now = time.monotonic()
+            if job.total and job.done >= job.total:
+                text += "  ·  finishing"
+            elif job.total:
+                text += f"  ·  {self._remaining(job, now)}"
+            elif job.started:
+                text += f"  ·  {_duration(now - job.started)} so far"
+        else:
+            text = {"done": "Done", "failed": f"Failed: {job.message}", "cancelled": "Cancelled"}[job.state]
+        self.detail.setText(text)
+        if job.state in ("done", "failed"):
+            self.bar.set_progress(1.0 if job.state == "done" else 0.0)
+            self.count.setText("")
+            self.bar.stop()
+            self.clock.stop()
+            self.button.setText("Clear")
+
+
 class JobsPanel(QtWidgets.QWidget):
-    """List of visible jobs with progress bars and cancel buttons.
+    """The running tasks, shown at the foot of the workspace panel and hidden when there are none.
     Finished jobs clear themselves after a few seconds; failures stay until cleared."""
 
     def __init__(self, manager: JobManager, parent=None, clear_after_ms: int = 4000):
@@ -371,32 +441,37 @@ class JobsPanel(QtWidgets.QWidget):
         self.clear_after_ms = clear_after_ms
         self.rows: dict[int, _JobRow] = {}
         outer = QtWidgets.QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        top = QtWidgets.QHBoxLayout()
-        self.summary = QtWidgets.QLabel("No jobs running")
-        cancel_all = QtWidgets.QPushButton("Cancel all")
-        cancel_all.clicked.connect(manager.cancel_all)
-        top.addWidget(self.summary)
-        top.addStretch(1)
-        top.addWidget(cancel_all)
-        outer.addLayout(top)
+        outer.setContentsMargins(0, 8, 0, 0)
+        self.cancel_all = QtWidgets.QPushButton("Cancel all")
+        self.cancel_all.clicked.connect(manager.cancel_all)
+        self.cancel_all.setVisible(False)
+        outer.addWidget(self.cancel_all, 0, QtCore.Qt.AlignmentFlag.AlignRight)
         self.list = QtWidgets.QVBoxLayout()
-        self.list.addStretch(1)
+        self.list.setSpacing(10)
         holder = QtWidgets.QWidget()
         holder.setLayout(self.list)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(holder)
-        outer.addWidget(scroll)
+        self.scroll = QtWidgets.QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.scroll.setMaximumHeight(190)
+        self.scroll.setWidget(holder)
+        outer.addWidget(self.scroll)
+        self.setVisible(False)
         manager.jobAdded.connect(self._added)
         manager.jobChanged.connect(self._changed)
         manager.jobRemoved.connect(self._removed)
-        manager.busyChanged.connect(self._busy)
+
+    def _sync(self) -> None:
+        self.setVisible(bool(self.rows))
+        self.cancel_all.setVisible(len(self.rows) > 1)
+        # Grow with the rows up to the cap, rather than leaving a tall empty strip
+        self.scroll.setFixedHeight(min(190, sum(r.sizeHint().height() + 10 for r in self.rows.values())))
 
     def _added(self, job: JobInfo) -> None:
         row = _JobRow(job, self.manager)
         self.rows[job.id] = row
-        self.list.insertWidget(self.list.count() - 1, row)
+        self.list.addWidget(row)
+        self._sync()
 
     def _changed(self, job: JobInfo) -> None:
         row = self.rows.get(job.id)
@@ -411,6 +486,4 @@ class JobsPanel(QtWidgets.QWidget):
         if row:
             row.setParent(None)
             row.deleteLater()
-
-    def _busy(self, n: int) -> None:
-        self.summary.setText("No jobs running" if n == 0 else f"{n} job{'s' if n > 1 else ''} running")
+        self._sync()

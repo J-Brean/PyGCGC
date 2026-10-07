@@ -205,10 +205,9 @@ def test_the_unit_and_region_count_are_saved(qtbot, cwin):
     assert w.clusters.unit == "regions" and w.clusters.n_regions == 5 and w.clusters.regions is None
 
 
-def test_cluster_is_step_ten_after_quantify(qtbot, cwin):
-    assert cwin.workflow.keys()[-2:] == ["cluster", "istd"]
-    assert cwin.step_actions["cluster"].text().lstrip("✓▸ ") == "10 🧩 Cluster"
-    assert cwin.step_actions["quant"].text().lstrip("✓▸ ") == "9 🧪 Quantify"     # nothing renumbered
+def test_cluster_is_the_last_step(qtbot, cwin):
+    assert cwin.workflow.keys()[-1] == "cluster"
+    assert cwin.step_actions["cluster"].text().lstrip("✓▸ ") == "9 🧩 Cluster"
 
 
 def test_go_clusters_this_run_and_outlines_the_peaks(qtbot, cwin):

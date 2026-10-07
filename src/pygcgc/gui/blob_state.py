@@ -174,6 +174,7 @@ class BlobState(QtCore.QObject):
                 if method == MS_AWARE:
                     def report(done, total):
                         progress(done, total, "Separating overlapping components")
+                    progress(0, 0, "Finding candidate peaks")      # the first stage reports nothing itself
                     return self.project.cached(key, lambda: detect_components(
                         run, fold, run_name, component_settings, floor=raw_floor, progress=report,
                         cancel=token.check))

@@ -26,6 +26,8 @@ class BlobsPanel(QtWidgets.QWidget):
     selectionChanged = QtCore.Signal(list)
     exportRequested = QtCore.Signal()
     accountingRequested = QtCore.Signal()
+    siloxaneRequested = QtCore.Signal()
+    hydrocarbonRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,6 +74,18 @@ class BlobsPanel(QtWidgets.QWidget):
         self.accounting = QtWidgets.QLabel("")
         self.accounting.setWordWrap(True)
         self.accounting.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Tools that work on the peaks found here; each opens its own sub-menu in the Tool tab.
+        self.siloxane_btn = QtWidgets.QPushButton("🫧 Siloxane filterer…")
+        self.siloxane_btn.setToolTip("Score every peak against a siloxane reference spectrum and filter out the ones "
+                                     "above a certainty you set")
+        self.siloxane_btn.clicked.connect(self.siloxaneRequested)
+        self.hydrocarbon_btn = QtWidgets.QPushButton("⛓️ Hydrocarbon identifier…")
+        self.hydrocarbon_btn.setToolTip("Anchor the n-alkane ladder and assign every peak to the hydrocarbon it is")
+        self.hydrocarbon_btn.clicked.connect(self.hydrocarbonRequested)
+        tools = QtWidgets.QHBoxLayout()
+        tools.addWidget(self.siloxane_btn)
+        tools.addWidget(self.hydrocarbon_btn)
+        tools.addStretch(1)
 
         self.table = QtWidgets.QTableWidget(0, len(LEGACY_COLUMNS))
         self.table.setHorizontalHeaderLabels(LEGACY_COLUMNS)
@@ -95,6 +109,7 @@ class BlobsPanel(QtWidgets.QWidget):
         layout.addLayout(method_row)
         layout.addWidget(self.explanation)
         layout.addLayout(buttons)
+        layout.addLayout(tools)
         layout.addWidget(self.table, 1)
         layout.addWidget(self.accounting)
         layout.addWidget(self.status)
@@ -254,6 +269,19 @@ class BlobsPanel(QtWidgets.QWidget):
         if 0 <= index < self.table.rowCount():
             self.table.selectRow(index)
             self.table.scrollToItem(self.table.item(index, 0))
+        self._updating = False
+        self._refresh_buttons()
+
+    def toggle_row(self, index: int) -> None:
+        """Add a row to the selection, or drop it if already selected (Ctrl+click on the image)."""
+        if not 0 <= index < self.table.rowCount():
+            return
+        self._updating = True
+        model = self.table.selectionModel()
+        model.select(self.table.model().index(index, 0),
+                     QtCore.QItemSelectionModel.SelectionFlag.Toggle
+                     | QtCore.QItemSelectionModel.SelectionFlag.Rows)
+        self.table.scrollToItem(self.table.item(index, 0))
         self._updating = False
         self._refresh_buttons()
 

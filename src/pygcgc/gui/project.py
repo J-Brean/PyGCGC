@@ -745,7 +745,8 @@ class Project(QtCore.QObject):
         def work(token, progress):
             progress(0, 2, "Estimating the modulation period")
             best, found = estimate_period_for_runs(runs)   # blind, even when checking a confirmed period
-            use = period if keep or best is None else best.period
+            # Modulators are set in tenths of a second, so an estimate is snapped to the nearest 0.1 s.
+            use = period if keep or best is None else round(best.period, 1)
             progress(1, 2, "Estimating phase")
             return best, found, use, phase_for_sequence(runs, use, anchors)
 
@@ -766,8 +767,9 @@ class Project(QtCore.QObject):
                     apply = ents      # phases found at the old period no longer mean anything
                 self.period = use
                 self.period_confirmed = False
-                self.period_method, self.period_detail = "auto", best.summary()
-                self.message.emit(f"Modulation period estimated: {best.summary()}")
+                detail = f"{best.summary()} Rounded to {use:.1f} s."
+                self.period_method, self.period_detail = "auto", detail
+                self.message.emit(f"Modulation period estimated: {detail}")
             else:
                 guess = f" (best guess {found[0].period:.4f} s, low confidence)" if found else ""
                 self.period_detail = f"Could not be estimated from the run{guess}; the default is unchanged"

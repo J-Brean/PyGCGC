@@ -56,13 +56,20 @@ class Surface3DView(QtWidgets.QWidget):
             self._item = None
         if z.size == 0:
             return
-        zmax = float(z.max())
-        colours = _height_colours(z, zmax)
-        scaled = z * (max(z.shape) * 0.6 / zmax) if zmax > 0 else z
-        self._item = self._gl.GLSurfacePlotItem(z=scaled, colors=colours, shader="shaded", smooth=False)
+        self._item = surface_item(self._gl, z)
         self.view.addItem(self._item)
         self.view.opts["distance"] = max(z.shape) * 2.2
         self.view.update()
+
+
+def surface_item(gl, z: np.ndarray):
+    """The surface for `z`, heights rescaled for viewing. Colours go in one row per
+    vertex: pyqtgraph 0.14 indexes them by the flattened vertex number, so a
+    (rows, cols, 4) array (what its docstring asks for) fails when the surface is drawn."""
+    zmax = float(z.max())
+    colours = _height_colours(z, zmax).reshape(-1, 4)
+    scaled = z * (max(z.shape) * 0.6 / zmax) if zmax > 0 else z
+    return gl.GLSurfacePlotItem(z=scaled, colors=colours, shader="shaded", smooth=False)
 
 
 def _height_colours(z: np.ndarray, zmax: float) -> np.ndarray:

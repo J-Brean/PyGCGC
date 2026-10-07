@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from PySide6 import QtCore
 
+from ..core.hcassign import HydrocarbonCall, assign_hydrocarbons
 from ..core.hydrocarbons import (AlkaneHit, AlkaneSeries, HydrocarbonSettings, StencilSet,
                                  find_alkane_series, find_markers, propagate_alkane_series,
                                  stencil_from_polygon)
@@ -29,11 +30,50 @@ class HydrocarbonState(QtCore.QObject):
         self.settings = HydrocarbonSettings()
         self.series: dict[str, AlkaneSeries] = {}     # run name -> ladder
         self.stencils = StencilSet(name="frame")
+        self.calls: dict[str, list[HydrocarbonCall]] = {}   # run name -> hydrocarbon of every blob (not saved: cheap to redo)
         self.running = False
 
     def forget_runs(self, entries) -> None:
         for e in entries:
             self.series.pop(e.name, None)
+            self.calls.pop(e.name, None)
+
+    def set_settings(self, settings: HydrocarbonSettings) -> None:
+        """Store new settings and redraw every ladder with the chosen shape."""
+        self.settings = settings
+        self._apply_shape()
+        self.changed.emit()
+
+    def _apply_shape(self) -> None:
+        for s in self.series.values():
+            s.shape, s.degree = self.settings.ladder_shape, self.settings.ladder_degree
+
+    # ------------------------------------------------------------ assigning
+    def calls_for(self, index: int) -> list[HydrocarbonCall] | None:
+        """The run's assignments, or None if there are none or the blobs have changed since."""
+        p = self.project
+        if not 0 <= index < len(p.entries):
+            return None
+        calls = self.calls.get(p.entries[index].name)
+        blobs = p.blobs.blobs_for(index)
+        return calls if calls is not None and blobs is not None and len(calls) == len(blobs) else None
+
+    def assign(self, indices) -> tuple[int, list[str]]:
+        """Assign the blobs of each run that has both a ladder (two alkanes or more) and blobs.
+        Returns the number of runs done and the names of the runs that lacked something."""
+        p = self.project
+        done, skipped = 0, []
+        for i in indices:
+            name = p.entries[i].name
+            series, blobs = self.series.get(name), p.blobs.blobs_for(i)
+            if series is None or len(series) < 2 or blobs is None or len(blobs) == 0:
+                skipped.append(name)
+                continue
+            self.calls[name] = assign_hydrocarbons(blobs, series, self.settings)
+            done += 1
+        if done:
+            self.changed.emit()
+        return done, skipped
 
     def series_for(self, index: int):
         p = self.project
@@ -57,6 +97,7 @@ class HydrocarbonState(QtCore.QObject):
             return find_alkane_series(run, fold, seeds, settings)
 
         def done(series):
+            series.shape, series.degree = settings.ladder_shape, settings.ladder_degree
             self.series[e.name] = series
             self._set_running(False)
             p.request_autosave()
@@ -95,6 +136,7 @@ class HydrocarbonState(QtCore.QObject):
 
             def done(series, e=e):
                 if len(series):
+                    series.shape, series.degree = settings.ladder_shape, settings.ladder_degree
                     self.series[e.name] = series
                 else:
                     missing.append(e.name)
@@ -170,4 +212,6 @@ class HydrocarbonState(QtCore.QObject):
                            qual_ratios=tuple(h.get("qual_ratios", ())), seeded=bool(h.get("seeded")),
                            qual_ok=bool(h.get("qual_ok", True))) for h in hits})
                        for name, hits in (d.get("series") or {}).items()}
+        self.calls = {}
+        self._apply_shape()
         self.changed.emit()

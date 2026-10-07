@@ -1014,6 +1014,31 @@ def test_blob_merge_is_exact_and_undoable(qtbot, window):
     assert len(w.blobs.blobs_for(i)) == n
 
 
+def test_ctrl_click_on_footprints_builds_a_selection_to_merge(qtbot, window):
+    from PySide6 import QtCore
+    w = window
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running, timeout=TIMEOUT)
+    i = w.project.index_of("RUN_A")
+    w.set_run(i)
+    w.view2d.blob_overlay_on = True
+    blobs = w.blobs.blobs_for(i)
+    n = len(blobs)
+    # Click a footprint pixel well away from each apex, as on a tail fragment.
+    clicks = []
+    for b in (0, 1):
+        rows, cols = blobs.footprint(b)
+        far = int(np.argmax(np.hypot(rows - blobs.row[b], cols - blobs.col[b])))
+        clicks.append((int(cols[far]), float(rows[far] * blobs.pitch)))
+    w.view2d.last_click_modifiers = QtCore.Qt.KeyboardModifier.NoModifier
+    w._select_blob_at(*clicks[0])
+    w.view2d.last_click_modifiers = QtCore.Qt.KeyboardModifier.ControlModifier
+    w._select_blob_at(*clicks[1])
+    assert w.blobs_panel.selected_indices() == [0, 1]
+    w.merge_selected_blobs()
+    assert len(w.blobs.blobs_for(i)) == n - 1
+
+
 def test_blob_add_recovers_a_deleted_peak(qtbot, window):
     w = window
     w.run_blobs()
@@ -1348,22 +1373,42 @@ def test_toolbar_follows_the_working_order(qtbot, hydro_window):
     # Step buttons carry a ✓ (done) or ▸ (suggested next) prefix.
     tb = [a.text().lstrip("✓▸ ") for a in w.findChildren(__import__("PySide6").QtWidgets.QToolBar)[0].actions()
           if a.text()]
-    order = ["📂 Open", "1 🔄 Fold", "2 📍 Align", "3 🧹 Background", "4 🔍 Peaks", "5 🫧 Siloxane",
-             "6 ⛓️ Hydrocarbons", "7 🧬 Classify", "8 🏷️ Identify", "9 🧪 Quantify", "✂️ Resolve overlap", "🗂️ Batch"]
+    order = ["📂 Open", "1 🔄 Fold", "2 📍 Align", "3 🧹 Background", "4 🔍 Peaks", "5 🏷️ IS",
+             "6 🧪 Quantify", "7 🧬 Classify", "8 🏷️ Identify", "9 🧩 Cluster", "✂️ Resolve overlap", "🗂️ Batch"]
     pos = [tb.index(x) for x in order if x in tb]
     assert len(pos) == len(order) and pos == sorted(pos)
+    # Siloxane and hydrocarbons open from the Peaks panel, not the toolbar.
+    assert not any("Siloxane" in x or "Hydrocarbon" in x for x in tb)
+
+
+def test_siloxane_and_hydrocarbon_tools_open_from_peaks(qtbot, window):
+    w = window
+    wf = w.workflow
+    w.step_actions["blobs"].trigger()
+    w.blobs_panel.siloxane_btn.click()
+    assert wf.current() == "siloxane" and w.step_actions["blobs"].isChecked()
+    assert wf.title.text() == "Siloxane filterer" and wf.back_btn.isVisibleTo(wf)
+    wf.back_btn.click()
+    assert wf.current() == "blobs" and not wf.back_btn.isVisibleTo(wf)
+    w.blobs_panel.hydrocarbon_btn.click()
+    assert wf.current() == "hydro" and wf.title.text() == "Hydrocarbon identifier"
+    # A finished sub-menu offers the next numbered step, never itself or its sibling.
+    wf.mark_done("hydro", "done")
+    assert wf.next_key() == "istd"
 
 
 def test_left_tabs_and_reopening_closed_panels(qtbot, window):
     w = window
     w.show()
     tabs = [w.left_tabs.tabText(i) for i in range(w.left_tabs.count())]
-    assert tabs[0] == "Runs" and "Layers" in tabs and len(tabs) == 3
+    # The bottom bar became tabs here, so results, standards, history and log live in the workspace.
+    assert tabs[0] == "Runs" and tabs[2] == "Layers"
+    assert tabs[3:] == ["Results", "Standards", "History", "Log"]
     # Opening a step brings the Tool tab forward and names it after the step.
     w.left_tabs.setCurrentIndex(0)
     w.step_actions["background"].trigger()
     assert w.left_tabs.currentIndex() == w.tool_tab
-    assert w.left_tabs.tabText(w.tool_tab) == "🧹 Background"
+    assert w.left_tabs.tabText(w.tool_tab) == "Background"      # icons replace the emoji on tabs
     # Closed panels can be brought back from the toolbar's own toggle actions.
     for dock in (w.workspace_dock, w.spectrum_dock):
         dock.close()
@@ -1380,8 +1425,9 @@ def test_every_step_says_what_and_why(qtbot, window):
     for key in wf.keys():
         info = wf.step_info(key)
         assert info["blurb"] and info["why"], key
-        assert info["why"] in window.step_actions[key].toolTip()
-    assert "Why here" in wf.guide_html()
+        if not info["parent"]:          # sub-menus have no toolbar button
+            assert info["why"] in window.step_actions[key].toolTip()
+    assert all(s["why"] in wf.guide_html() for s in wf._steps)
 
 
 def test_workflow_step_opens_settings_and_go_runs_it(qtbot, window):

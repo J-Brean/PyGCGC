@@ -66,16 +66,16 @@ class IstdState(QtCore.QObject):
         p = self.project
         if not 0 <= index < len(p.entries):
             return None
-        blobs = p.blobs.blobs_for(index)
-        if blobs is not None:
-            return blobs
+        # The selected method decides, as it does for the click that picks the peak: legacy
+        # blobs also exist on an MS-aware project once 🫧 or ⛓️ has found them, and a
+        # component id cannot be looked up among them.
         if p.blobs.method == MS_AWARE:
             component_set = p.blobs.components_for(index)
             if component_set is not None and component_set.groups:
                 base_run, fold = p.base_run(index), p.fold(index)
                 peaks, _model, _footprint = respectrum_components(base_run, fold, component_set)
                 return peaks
-        return None
+        return p.blobs.blobs_for(index)
 
     @staticmethod
     def _resolve_index(peaks, peak_ref) -> int | None:

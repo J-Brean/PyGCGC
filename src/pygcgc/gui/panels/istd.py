@@ -7,7 +7,7 @@ from the expected position, and spectral match); and the buttons to label a
 standard by clicking its peak and to search every chromatogram. Go runs the
 search.
 
-`IstdResultsTable` (a dock along the bottom): one row per standard, one
+`IstdResultsTable` (a tab in the workspace): one row per standard, one
 column per chromatogram. Each cell says whether the standard passed all
 three thresholds there (✓ or ✗, and its colour) and shows the quantity
 chosen above the table; its tooltip gives every number and, for a miss,

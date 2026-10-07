@@ -21,6 +21,9 @@ import os
 import numpy as np
 from scipy import ndimage as ndi
 from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
+from scipy.spatial import cKDTree
 
 from .background import storage_threshold
 from .fold import Fold
@@ -282,8 +285,25 @@ def candidate_regions(candidates: CandidateSet, image_shape: tuple[int, int],
         scaled = np.column_stack((
             candidates.col / max(int(link_modulations), 1),
             candidates.row / max(int(link_rows), 1)))
-        tree = linkage(scaled, method="complete", metric="chebyshev")
-        labels = fcluster(tree, t=1.0, criterion="distance")
+        # A complete-linkage cluster at t=1 has every pair within distance 1, so
+        # it lies inside one connected component of the "within 1" graph. Cluster
+        # each component alone: same partition, but linkage's O(n^2) distance
+        # matrix is only ever built for one small component, not all candidates.
+        pairs = cKDTree(scaled).query_pairs(1.0, p=np.inf, output_type="ndarray")
+        graph = coo_matrix((np.ones(len(pairs), dtype=np.int8), (pairs[:, 0], pairs[:, 1])), shape=(n, n))
+        n_comp, comp = connected_components(graph, directed=False)
+        labels = np.zeros(n, dtype=int)
+        next_label = 1
+        for c in range(n_comp):
+            members = np.flatnonzero(comp == c)
+            if len(members) == 1:
+                labels[members] = next_label
+                next_label += 1
+                continue
+            tree = linkage(scaled[members], method="complete", metric="chebyshev")
+            sub = fcluster(tree, t=1.0, criterion="distance")
+            labels[members] = sub + next_label - 1
+            next_label += int(sub.max())
     groups = {}
     for i, label in enumerate(labels):
         groups.setdefault(int(label), []).append(i)

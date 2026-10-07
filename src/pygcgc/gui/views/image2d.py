@@ -400,6 +400,7 @@ class ChromatogramView(QtWidgets.QWidget):
         self._component_overlays = []
         self.component_items = []
         self.last_click: tuple[float, float] | None = None
+        self.last_click_modifiers = QtCore.Qt.KeyboardModifier.NoModifier
         self._outline_cache: dict = {}
         self.blob_outline = pg.PlotDataItem(connect="finite", pen=pg.mkPen((250, 204, 21, 130), width=1))
         self.blob_highlight = pg.PlotDataItem(connect="finite", pen=pg.mkPen((250, 204, 21), width=2.2))
@@ -920,6 +921,7 @@ class ChromatogramView(QtWidgets.QWidget):
             return
         px = self.pixel_at(p.x(), p.y())
         self.last_click = (float(p.x()), float(p.y()))    # display coordinates (min, s), for blob picking
+        self.last_click_modifiers = ev.modifiers()        # Ctrl+click adds a blob to the selection
         self._slice_col = px[1]
         self._update_slice(px[1])
         # pixelClicked (the raw scan spectrum) fires first so that, when the click also

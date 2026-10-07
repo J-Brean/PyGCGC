@@ -27,12 +27,12 @@ def _classified(qtbot, w, i):
     return w.classes.result_for(i)
 
 
-def test_classify_is_step_seven_between_hydrocarbons_and_identify(qtbot, window):
+def test_classify_is_step_seven_between_quantify_and_identify(qtbot, window):
     keys = window.workflow.keys()
-    assert keys.index("hydro") + 1 == keys.index("classify") == keys.index("identify") - 1
+    assert keys.index("quant") + 1 == keys.index("classify") == keys.index("identify") - 1
     assert window.step_actions["classify"].text().lstrip("✓▸ ") == "7 🧬 Classify"
     assert window.step_actions["identify"].text().lstrip("✓▸ ") == "8 🏷️ Identify"
-    assert window.step_actions["quant"].text().lstrip("✓▸ ") == "9 🧪 Quantify"
+    assert window.step_actions["quant"].text().lstrip("✓▸ ") == "6 🧪 Quantify"
     assert window.workflow.step_info("classify")["why"] in window.step_actions["classify"].toolTip()
 
 

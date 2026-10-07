@@ -54,6 +54,7 @@ class SpectrumView(QtWidgets.QWidget):
         lay.addLayout(row)
         lay.addWidget(self.plot, 1)
         hint = QtWidgets.QLabel("Click an ion to image it; Shift+click to add it.")
+        hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(mid);")
         lay.addWidget(hint)
 
