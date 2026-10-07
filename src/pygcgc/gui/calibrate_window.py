@@ -63,6 +63,7 @@ from .project import Project
 from .render import Renderer
 from .theme import DARK, LIGHT
 from .views.image2d import ChromatogramView
+from .views.spectrum import SpectrumView
 
 OK = (46, 158, 107)
 BAD = (224, 160, 32)
@@ -864,6 +865,10 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.view.pointClicked.connect(self._view_clicked)
         self.view.hovered.connect(lambda t1, t2, v: self.statusBar().showMessage(
             f"t₁ {t1 / 60:.2f} min   t₂ {t2:.3f} s   {v:.4g}", 3000))
+        # The spectrum of the peak clicked, or of the selected compound's peak in the run shown.
+        self.spectrum = SpectrumView()
+        self.spectrum.header.setText("Click a peak, or select a compound, to see its spectrum")
+        self.spectrum.ionClicked.connect(self._spectrum_ion)
 
         self.runs = QtWidgets.QListWidget()
         self.runs.setMaximumWidth(260)
@@ -992,7 +997,13 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         ul = QtWidgets.QVBoxLayout(upper)
         ul.setContentsMargins(0, 0, 0, 0)
         ul.addLayout(view_bar)
-        ul.addWidget(self.view, 1)
+        beside = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        beside.addWidget(self.view)
+        beside.addWidget(self.spectrum)
+        beside.setStretchFactor(0, 3)
+        beside.setStretchFactor(1, 1)
+        beside.setSizes([900, 340])
+        ul.addWidget(beside, 1)
         lower = QtWidgets.QWidget()
         ll = QtWidgets.QVBoxLayout(lower)
         ll.setContentsMargins(0, 0, 0, 0)
@@ -1154,6 +1165,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
     def set_dark(self, dark: bool) -> None:
         c = DARK if dark else LIGHT
         self.view.set_background(c["plot"])
+        self.spectrum.set_background(c["plot"])
         self.curves.set_background(c["plot"])
         fg = QtGui.QColor(c["text"])
         for gv in self.findChildren(pg.GraphicsView):
@@ -1412,6 +1424,31 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         if 0 <= row < len(self.project.entries):
             self.renderer.set_index(row)
             self._draw_overlay()
+            self._show_compound_spectrum()
+
+    def show_peak_spectrum(self, blobs, k: int, title: str) -> None:
+        """Show peak `k` of `blobs` (full-ion spectrum) in the spectrum panel."""
+        self.spectrum.set_spectrum(blobs.mz, np.asarray(blobs.spectra[k], dtype=float),
+                                   f"{title}: t₁ {blobs.t1[k] / 60:.2f} min, t₂ {blobs.t2[k]:.2f} s")
+
+    def _show_compound_spectrum(self) -> None:
+        name, run = self.selected_compound(), self.current_run()
+        if name is None or run is None:
+            return
+        i = self.current_index()
+        blobs = self.peaks.get(self.project.entries[i])
+        p = self.points.get((name, run))
+        if blobs is None or p is None or p.blob is None or not 0 <= p.blob < len(blobs):
+            self.spectrum.clear()
+            self.spectrum.header.setText(f"{name}: no peak matched in {run}")
+            return
+        self.show_peak_spectrum(blobs, p.blob, f"{name} in {run}")
+
+    def _spectrum_ion(self, mz: int, add: bool) -> None:
+        """An ion clicked in the spectrum is imaged; Shift adds it to the ions shown."""
+        text = self.ion.text().strip()
+        self.ion.setText(f"{text}+{mz}" if (add and text) else str(mz))
+        self._set_ion()
 
     def current_index(self) -> int:
         return self.renderer.index
@@ -1593,8 +1630,12 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         cs = main.blobs.component_sets_by_name.get(m.name)
         if cs is None or m.run is None or m.name in main.blobs.component_stale_names:
             return None
-        if Path(m.path).resolve() != Path(entry.path).resolve() or abs(m.phase - entry.phase) > 1e-9 \
-                or abs(main.period - self.project.period) > 1e-9:
+        # A sample is the main window's own run, at its own fold: always current. A standard is a
+        # copy at the builder's fold, which must be the main window's. (Comparing a sample with the
+        # builder's period sent every sample to a fresh search of several minutes.)
+        if m is not entry and (Path(m.path).resolve() != Path(entry.path).resolve()
+                               or abs(m.phase - entry.phase) > 1e-9
+                               or abs(main.period - self.project.period) > 1e-9):
             return None
         return cs, main.base_run(i)
 
@@ -1992,6 +2033,16 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         ref = next((n for n, b in self.blobs_by_run().items() if b is not None), None)
         ref_blobs = self.blobs_by_run().get(ref)
         ref_usable = self.usable_masks().get(ref)
+        # In the main window's job list (bottom left), where the person is looking.
+        jobs = getattr(main, "jobs", None) or self.jobs
+        # A fresh MS-aware search already uses every core, so those runs go one at a time; runs
+        # whose peaks the main window found are only re-solved and go at once.
+        searches: list = []
+
+        def next_search():
+            if searches:
+                jobs.submit(*searches.pop(0))
+
         for i in todo:
             e = main.entries[i]
             raw, fold = e.run, main.fold(i)
@@ -1999,12 +2050,15 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             bg_key = _hash_key(raw_key, "background", bg_settings.to_dict()) if raw_key else None
             floor = storage_threshold(raw) / 3.0
 
-            ms_work = None
+            ms_work, preset = None, None
             if self.peak_method == MS_AWARE:
+                preset = self._main_components(e)
+
                 def clean_fn(raw=raw, fold=fold, bg_key=bg_key):
                     return main.cached(bg_key, lambda: remove_background(raw, fold, bg_settings)).run
-                ms_work = self._component_work(main, i, self._main_components(e), raw=raw, fold=fold,
+                ms_work = self._component_work(main, i, preset, raw=raw, fold=fold,
                                                clean=clean_fn, bg_key=bg_key)
+            search = ms_work is not None and preset is None
 
             def work(token, progress, raw=raw, fold=fold, bg_key=bg_key, floor=floor, name=e.name, ms_work=ms_work):
                 if ms_work is not None:
@@ -2025,20 +2079,31 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                     else float("nan")
                 return blobs, off
 
-            def done(result, name=e.name, i=i):
+            def done(result, name=e.name, i=i, search=search):
                 self.sample_blobs[name], self.sample_offsets[name] = result
                 remaining.discard(i)
+                if search:
+                    next_search()
                 if not remaining:
                     finish()
 
-            def failed(text, name=e.name, i=i):
+            def failed(text, name=e.name, i=i, search=search):
                 self.say(f"{name} failed: {text}")
                 remaining.discard(i)
+                if search:
+                    next_search()
                 if not remaining:
                     finish()
 
-            self.jobs.submit(f"Quantifying {e.name}", work, done, failed)
-        self.say(f"Quantifying {len(todo)} sample runs…")
+            if search:
+                searches.append((f"📈 Quantify {e.name} (finding MS-aware peaks)", work, done, failed))
+            else:
+                jobs.submit(f"📈 Quantify {e.name}", work, done, failed)
+        n_search = len(searches)
+        next_search()
+        self.say(f"Quantifying {len(todo)} sample runs; progress is in the main window's job list"
+                 + (f". {n_search} have no MS-aware peaks from the main window's 🔍 step and are searched one at a "
+                    "time (minutes each): run 🔍 there first to skip this" if n_search else ""))
 
     def _requantify(self) -> None:
         """Read the processed samples off the current curves (fast; run after every change)."""
@@ -2171,6 +2236,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
     def _compound_selected(self) -> None:
         if not self._updating:
             self._draw_overlay()
+            self._show_compound_spectrum()
 
     def _table_edited(self, item) -> None:
         if self._updating:
@@ -2249,7 +2315,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
     def _view_clicked(self, col: int, t2: float) -> None:
         i = self.current_index()
         mode = self.click_mode.currentData()
-        if i < 0 or mode == "none" or self.project.entries[i].run is None:
+        if i < 0 or self.project.entries[i].run is None:
             return
         fold = self.project.fold(i)
         t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
@@ -2258,6 +2324,10 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         tight = CalBuilderSettings(t1_window_s=0.75 * fold.spec.period, t2_window_s=3 * fold.row_pitch)
         hit = match_blob(blobs, t1, t2, tight)
         snap = (float(blobs.t1[hit]), float(blobs.t2[hit])) if hit is not None else (t1, float(t2))
+        if hit is not None:
+            self.show_peak_spectrum(blobs, hit, f"Peak in {run}")
+        if mode == "none":
+            return
         if mode in ("new", "new_is"):
             is_istd = mode == "new_is"
             default = self.session.unique_name("IS" if is_istd else "compound")

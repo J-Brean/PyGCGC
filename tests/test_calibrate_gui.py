@@ -3,6 +3,7 @@ runs, load or click compounds, clean and find blobs, normalise, then edit curves
 
 import os
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -184,6 +185,12 @@ def test_clicking_peaks_fills_t1_t2_into_the_table(qtbot, cal_folder):
     w.select_compound("X")
     for k in near:
         w._view_clicked(int(blobs.col[k]), float(blobs.t2[k]))
+    # The clicked peak's spectrum is shown beside the chromatogram.
+    assert np.array_equal(w.spectrum.mz, blobs.mz[blobs.spectra[near[1]] > 0])
+    assert "Peak in CAL_L4" in w.spectrum.title
+    w.select_compound("X")
+    assert w.spectrum.title.startswith("X in CAL_L4")
+    w.table.clearSelection()
     for n, k in zip(("X", "Y"), near):
         c = w.session.compound(n)
         assert (c.t1, c.t2) == pytest.approx((float(blobs.t1[k]), float(blobs.t2[k])))
@@ -368,9 +375,11 @@ def test_whole_workflow_from_the_main_window_to_sample_amounts(qtbot, cal_folder
     # 4: the main window's samples, ticked by default (the calibration runs are not offered)
     cw.tabs.setCurrentIndex(3)
     assert set(cw.apply.ticked()) == set(SAMPLE_AMOUNTS)
-    done = []
+    done, listed = [], []
+    mw.jobs.jobAdded.connect(lambda job: listed.append(job.name))      # the main window's job list
     cw.quantify_samples(cw.apply.ticked(), on_done=lambda: done.append(True))
     qtbot.waitUntil(lambda: bool(done), timeout=TIMEOUT * 2)
+    assert {n for n in SAMPLE_AMOUNTS} <= {n.split()[2] for n in listed if n.startswith("📈 Quantify")}
     assert cw.tabs.tabText(3).startswith("✓")
     truth = {}
     for g in cw.session.analytes():          # which suggested compound is A, B or C: by position
@@ -432,6 +441,12 @@ def test_the_main_windows_ms_aware_peaks_are_used_as_they_are(qtbot, cal_folder,
     overlays = cw.view._component_overlays
     assert len(overlays) == 1 and overlays[0]["colour"] == CONTOUR_COLOUR
     assert len(overlays[0]["outline"][0]) > 0 and cw.view.component_items
+    # A sample is the main window's own run: its peaks are reused whatever the builder's period
+    # (a period check against the builder sent every sample to a fresh search of minutes).
+    sample = mw.project.entries[mw.project.index_of("S1")]
+    cw.project.period = mw.project.period + 0.5
+    assert cw._main_components(sample) is not None
+    assert cw._main_components(cw.project.entries[0]) is None      # a standard at another fold
     cw.jobs.cancel_all()
     cw.jobs.wait(5000)
     mw.jobs.cancel_all()
