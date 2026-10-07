@@ -71,11 +71,12 @@ ISTD_COLOUR = (60, 200, 110)
 TARGET_COLOUR = (126, 232, 250)
 SELECTED_COLOUR = (251, 146, 60)
 MISSING_COLOUR = (150, 150, 150)
+CONTOUR_COLOUR = (255, 60, 255)      # magenta: absent from the turbo colour scale
 RUN_FILES = "Runs (*.cdf *.CDF *.lsc *.LSC);;All files (*)"
 FIXED_COLUMNS = ["Compound", "t₁ (s)", "t₂ (s)", "IS", "Quant ion", "Divide by"]
-CLICK_MODES = [("assign", "match the selected compound to this blob (this run)"),
-               ("move", "move the selected compound here (every run)"),
-               ("new", "add a compound here"),
+CLICK_MODES = [("pick", "put this peak's t₁, t₂ into the selected compound (a new row if none is selected)"),
+               ("assign", "match the selected compound to this peak in this run only"),
+               ("new", "add a new compound here"),
                ("new_is", "add an internal standard here"),
                ("none", "nothing")]
 
@@ -875,8 +876,9 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.click_mode = QtWidgets.QComboBox()
         for key, label in CLICK_MODES:
             self.click_mode.addItem(label, key)
-        self.click_mode.setToolTip("What a click on the chromatogram does. Matching needs a compound selected "
-                                   "in the table; a click away from every blob adds a blob there.")
+        self.click_mode.setToolTip("What a click on the chromatogram does. By default the clicked peak's t₁ and t₂ "
+                                   "go into the selected compound, then the next compound without a position is "
+                                   "selected; with none selected, each click adds a row.")
         self.all_blobs = QtWidgets.QCheckBox("All blob outlines")
         self.all_blobs.setChecked(True)
         self.all_blobs.setToolTip("Outline every blob, not only the matched ones (bold)")
@@ -2268,16 +2270,37 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             self.select_compound(self.session.compounds[-1].name)
             return
         name = self.selected_compound()
+        if mode == "pick" and name is None:
+            # Nothing selected: a new row, named after the peak until it is renamed.
+            label = "compound"
+            if hit is not None:
+                label = f"m/z {int(blobs.mz[int(np.argmax(blobs.spectra[hit]))])} @ {snap[0] / 60:.2f} min"
+            self._edit(lambda s: s.add_compound(CalCompound(name=label, t1=snap[0], t2=snap[1])))
+            # Left unselected, so the next click adds another row rather than moving this one.
+            self.table.clearSelection()
+            self.say(f"Added {self.session.compounds[-1].name}: t₁ {snap[0]:.1f} s, t₂ {snap[1]:.3f} s. "
+                     "Rename it in the table; tick IS for an internal standard.")
+            return
         if name is None:
             self.say("Select a compound in the table first, then click its peak")
             return
-        if mode == "move":
+        if mode == "pick":
             def move(s):
                 c = s.compound(name)
                 c.t1, c.t2 = snap
                 s.unpin(name, run)
             self._edit(move)
-            self.say(f"{name} moved to t₁ {snap[0]:.1f} s, t₂ {snap[1]:.3f} s")
+            # Step on to the next compound still without a position, so a loaded name list can be
+            # placed by clicking its peaks in turn.
+            names = self.session.names()
+            later = names[names.index(name) + 1:]
+            todo = [n for n in later if self.session.compound(n).t1 <= 0]
+            if todo:
+                self.select_compound(todo[0])
+            else:
+                self.table.clearSelection()
+            self.say(f"{name}: t₁ {snap[0]:.1f} s, t₂ {snap[1]:.3f} s (from the peak clicked)"
+                     + (f". Next: click the peak for {todo[0]}" if todo else ""))
             return
         # assign: a click away from every blob adds a blob there first
         if blobs is None:
@@ -2338,7 +2361,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.tabs.setCurrentIndex(1)
         self.runs.setCurrentRow(i)
         self.select_compound(name)
-        self.click_mode.setCurrentIndex(0)
+        self.click_mode.setCurrentIndex(self.click_mode.findData("assign"))
         p = self.points.get((name, run))
         c = self.session.compound(name)
         t1, t2 = (p.t1, p.t2) if (p is not None and p.blob is not None) else (c.t1, c.t2)
@@ -2387,7 +2410,14 @@ class CalibrationWindow(QtWidgets.QMainWindow):
                 per_blob[k] = blobs.outline_times(k)
         highlight = ((np.concatenate([per_blob[k][0] for k in sel]), np.concatenate([per_blob[k][1] for k in sel]))
                      if sel else empty)
-        self.view.set_blob_overlay(outline if self.all_blobs.isChecked() else empty, highlight)
+        if isinstance(blobs, ComponentBlobs):
+            # Fitted contours drawn in magenta: the view's faint yellow outline vanished against
+            # the yellow and green of the colour scale, so components looked missing or misplaced.
+            self.view.set_blob_overlay(empty, highlight)
+            if self.all_blobs.isChecked():
+                self.view.set_component_overlay([dict(outline=outline, colour=CONTOUR_COLOUR, width=1.3)])
+        else:
+            self.view.set_blob_overlay(outline if self.all_blobs.isChecked() else empty, highlight)
 
     # ======================================================== files
     def load_compounds_dialog(self) -> None:

@@ -128,7 +128,7 @@ def test_click_rematches_a_compound_and_no_peak_removes_it(cal_window):
     blobs = w.project.blobs.by_run[w.project.entries[i]]
     c_blob = w.resolved[("C", "CAL_L3")]
     w.select_compound("A")
-    w.click_mode.setCurrentIndex(0)                      # match the selected compound to this blob
+    w.click_mode.setCurrentIndex(w.click_mode.findData("assign"))
     w._view_clicked(int(blobs.col[c_blob]), float(blobs.t2[c_blob]))
     assert w.resolved[("A", "CAL_L3")] == c_blob
     assert w.points[("A", "CAL_L3")].pinned
@@ -149,9 +149,9 @@ def test_click_adds_compounds_and_internal_standards(qtbot, cal_folder, monkeypa
     monkeypatch.setattr(QtWidgets.QInputDialog, "getText", lambda *a, **k: (next(names), True))
     is_blob = min(range(len(blobs)), key=lambda k: abs(blobs.t1[k] - 60))
     a_blob = min(range(len(blobs)), key=lambda k: abs(blobs.t1[k] - 110))
-    w.click_mode.setCurrentIndex(3)                      # add an internal standard here
+    w.click_mode.setCurrentIndex(w.click_mode.findData("new_is"))
     w._view_clicked(int(blobs.col[is_blob]), float(blobs.t2[is_blob]))
-    w.click_mode.setCurrentIndex(2)                      # add a compound here
+    w.click_mode.setCurrentIndex(w.click_mode.findData("new"))
     w._view_clicked(int(blobs.col[a_blob]), float(blobs.t2[a_blob]))
     assert [c.name for c in w.session.compounds] == ["IS", "A"]
     assert w.session.compound("IS").is_istd and not w.session.compound("A").is_istd
@@ -166,6 +166,35 @@ def test_click_adds_compounds_and_internal_standards(qtbot, cal_folder, monkeypa
         w._set_amount("A", r, v)
     w.normalise()
     assert isinstance(w.fits["A"], CalibrationFit) and w.fits["A"].ok
+    w.jobs.cancel_all()
+    w.jobs.wait(5000)
+
+
+def test_clicking_peaks_fills_t1_t2_into_the_table(qtbot, cal_folder):
+    from pygcgc.core.calbuilder import CalCompound
+    w = _open(qtbot, cal_folder)
+    _process(qtbot, w)
+    i = w.project.index_of("CAL_L4")
+    w.runs.setCurrentRow(i)
+    blobs = w.project.blobs.by_run[w.project.entries[i]]
+    near = [min(range(len(blobs)), key=lambda k: abs(blobs.t1[k] - t)) for t in (60, 110)]
+    assert w.click_mode.currentData() == "pick"           # the default
+    # A loaded name list without positions is placed by clicking its peaks in turn.
+    w._edit(lambda s: [s.add_compound(CalCompound(name=n, t1=0.0, t2=0.0)) for n in ("X", "Y")])
+    w.select_compound("X")
+    for k in near:
+        w._view_clicked(int(blobs.col[k]), float(blobs.t2[k]))
+    for n, k in zip(("X", "Y"), near):
+        c = w.session.compound(n)
+        assert (c.t1, c.t2) == pytest.approx((float(blobs.t1[k]), float(blobs.t2[k])))
+        row = [r for r in range(w.table.rowCount()) if w.table.item(r, 0).text() == n][0]
+        assert float(w.table.item(row, 1).text()) == pytest.approx(c.t1, abs=0.1)
+    # Nothing selected: each click adds its own row, with no name to type.
+    assert w.selected_compound() is None
+    for k in near:
+        w._view_clicked(int(blobs.col[k]), float(blobs.t2[k]))
+    assert len(w.session.compounds) == 4
+    assert w.session.compounds[-1].t1 == pytest.approx(float(blobs.t1[near[1]]))
     w.jobs.cancel_all()
     w.jobs.wait(5000)
 
@@ -394,6 +423,15 @@ def test_the_main_windows_ms_aware_peaks_are_used_as_they_are(qtbot, cal_folder,
     for e in cw.project.entries:
         n_main = sum(len(g.components) for g in mw.blobs.component_sets_by_name[e.name].groups)
         assert len(cw.peaks[e]) == n_main
+    # The contours are drawn in a colour the colour scale does not use (the view's faint yellow
+    # outline disappeared on the real standards' yellow and green peaks).
+    from pygcgc.gui.calibrate_window import CONTOUR_COLOUR
+    cw.tabs.setCurrentIndex(1)
+    cw.runs.setCurrentRow(0)
+    cw._draw_overlay()
+    overlays = cw.view._component_overlays
+    assert len(overlays) == 1 and overlays[0]["colour"] == CONTOUR_COLOUR
+    assert len(overlays[0]["outline"][0]) > 0 and cw.view.component_items
     cw.jobs.cancel_all()
     cw.jobs.wait(5000)
     mw.jobs.cancel_all()
