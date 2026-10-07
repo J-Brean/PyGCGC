@@ -1,7 +1,7 @@
 """Milestone 3 walkthrough: clean one sample, check the result, and plot
-raw against cleaned for a bleed ion.
+raw against cleaned for a bleed ion that behenic acid shares.
 
-    python examples/tutorials/02_background.py path/to/dummy_gcxgc
+    python examples/tutorials/02_background.py path/to/demo_gcxgc
 """
 
 import sys
@@ -14,8 +14,8 @@ import numpy as np
 
 import pygcgc as g
 
-folder = Path(sys.argv[1] if len(sys.argv) > 1 else "dummy_gcxgc")
-period = 4.0
+folder = Path(sys.argv[1] if len(sys.argv) > 1 else "demo_gcxgc")
+period = 8.0
 ion = 73          # a column-bleed ion that behenic acid is also quantified on
 
 # 1. Read the sequence and find every run's phase from the internal standards.
@@ -23,16 +23,11 @@ runs = g.read_many(sorted((folder / "data").glob("*.cdf")))
 anchors = g.load_anchors(folder / "target_table.csv")
 phases = {r.name: e.phase for r, e in zip(runs, g.phase_for_sequence(runs, period, anchors))}
 
-# 2. Clean the tube blank, then a calibration run with the blank subtracted.
-blank = next(r for r in runs if r.name == "TUBE_BLANK")
-blank_fold = g.fold(blank, period, phases[blank.name])
-blank_clean = g.remove_background(blank, blank_fold)
-
-run = next(r for r in runs if r.name == "CAL_L1")
+# 2. Clean the wood-smoke sample. The demo pack has no blank, so nothing is subtracted;
+#    with one, pass BackgroundSettings(subtract_blank=True) and the cleaned blank.
+run = next(r for r in runs if r.name == "SAMPLE_3_wood_smoke")
 f = g.fold(run, period, phases[run.name])
-settings = g.BackgroundSettings(subtract_blank=True)
-res = g.remove_background(run, f, settings, blank=blank_clean, blank_fold=blank_fold,
-                          blank_name=blank.name)
+res = g.remove_background(run, f)
 print(res.summary())
 
 # 3. Check the leftover background on the bleed ion: it should be centred on

@@ -6,6 +6,77 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Demonstration data, new screenshots, 2026-10-07** (same branch). `examples/demo_data/generate_demo_data.py`
+writes seven synthetic ANDI runs (four standards at 1 to 50 ng, urban air, diesel exhaust, wood smoke;
+8 s modulation, 50 Hz, m/z 38 to 400, 48 min) with about 150 named compounds, five deuterated internal
+standards, impurities (siloxanes, phthalates, BHT, solvent front, overloaded toluene) and artefacts
+(per-run phase, retention drift, bleed, modulator stripe, spikes, storage threshold, a detector that bends
+over and saturates), the supporting files, an MSP library and the truth. Spectra and retention indices are
+approximations, not library values. The CLI quantifies the samples within a few per cent where peaks are
+clean; it flags the overlapping pairs and over-reads alkanes on m/z 57 over the diesel hump, as on real
+exhaust. The legacy detector finds about 1500 to 4500 blobs per run, mostly small residuals on minor bleed
+ions near the storage threshold, much as on the real runs. `docs/images/make_screenshots.py` drives the app
+on that pack and retakes every screenshot; README and user guide now show every step, and the guide has a
+📈 Calibrate section. Tutorials 01 to 06 run on the pack; 07 is the calibration builder without the window.
+Fixed: the 📈 window drew black on screen (a transparent `QMainWindow` style rule); the ✂️ 3D surface raised
+IndexError on drawing with pyqtgraph 0.14 (colours must be one row per vertex); labelling an internal standard failed ("Couldn't read that peak") on an MS-aware project that also held legacy blobs, as it does once 🫧 or ⛓️ has run (`IstdState._peaks_for` now follows the selected method, as the click does).
+
+**Toolbar reordered to nine steps, hydrocarbon assignment, 2026-10-07** (branch `blob-display-2026-09-28`).
+Toolbar is now 1 Fold, 2 Align, 3 Background, 4 Peaks, 5 IS, 6 Quantify, 7 Classify, 8 Identify, 9 Cluster.
+Siloxane and hydrocarbons are sub-menus of Peaks (buttons under the peak table; `WorkflowPanel.add_step(...,
+parent="blobs")`: no number, no toolbar button, a Back link, never offered as the next step). New
+`core/hcassign.py`: each legacy blob is an n-alkane (on a ladder carbon, near the alkane line in t2, alkane
+spectrum, 57/71/85 ratios pass), a branched alkane, cycloalkane, alkylbenzene, alkylnaphthalene or
+unassigned. Its ion sets and minimum shares are starting values, **not validated on real data**; ask
+before treating them as defaults. `AlkaneSeries` gains `shape` (piecewise, the old behaviour and still the
+default; smooth PCHIP; polynomial) so a curved or wonky ladder is followed, with the inverse (t1 to carbon)
+taken numerically from the forward curve. The estimated modulation period is now rounded to the nearest
+0.1 s (`Project.auto_fold`); a period set by hand or by the method file is untouched. Not done: editing or
+dropping single ladder points, saving assignments with the project, outlining assignments on the 2D view.
+
+**📈 Calibration builder: usability pass and applying the curves, 2026-10-06** (same branch). The
+window is now four tabs that say what to do next and tick themselves off: 1 Standards (the runs
+selected in the main window, reused without reading them again; loading cleans them, finds blobs and
+lines up phases with no button; a level amount per run, read from the name, stands in for every
+compound without its own), 2 Compounds (Suggest, load or click; divided by the internal standard as
+soon as there is one), 3 Curves, 4 Apply to samples (new: the main window's other runs are cleaned and
+searched with the same settings, each compound found by position and spectrum, read off its curve
+with its standard error and flags, as amounts, concentrations or ratios; results follow every curve
+edit; CSV export). Settings and session moved into two menus. Fixed: with noisy data, hundreds of
+single-ion noise blobs were suggested as internal standards and could move a run's phase; blobs
+smaller than a thousandth of the largest are now left out of both. The solvent-front window was
+dropped from matching: a large early peak passed for one on short runs, and on the real standards the
+streak rules alone left the same blobs. On the synthetic pack the whole route recovers the planted
+sample amounts within 0.2%.
+
+**📈 Calibration builder on real standards, 2026-10-06** (same branch). Run end to end on four
+August 2026 standard levels (0.25 to 25 ng, 10 s method) supplied without a compound list
+([report](docs/validation/calibration-standards-2026-10-06.md)). New: 🔎 Suggest compounds (blobs
+that grow with every level are calibrants; flat ones are IS candidates, named and ticked when their
+spectrum carries a shipped internal standard's signature); level amounts read from run names;
+phases lined up from blob pairs after the first blob search (one run's bleed-method phase was
+0.73 s off, leaving 6 of 800 blobs matchable, 123 after); solvent front and t2 smears left out of
+matching; wrap-aware matching; largest raw point per blob with an optional saturation flag; 📂 Open
+folder; the main window's period no longer carried over as confirmed. Fixed: folder opening listed
+TOF-DS SD01 re-exports and then failed to load them. Findings: four internal standards found in
+every level, about half their signal at 25 ng; calibrant signal rose 5 to 15-fold over the 100-fold
+range (tube background, plateau near 3e5 counts); 3 of 59 curves pass on all levels, 24 without
+25 ng. 591 tests pass.
+
+**📈 Calibration builder, 2026-09-28** (branch `calibrate-2026-09-28`). A separate window (📈 Calibrate
+on the main toolbar) for a set of standard runs with its own project: compounds from a CSV (a
+`target_table.csv` also reads) or from clicks on the chromatogram, amounts per run, internal
+standards ticked in the table; ▶ runs 🧹 and legacy 🔍 blobs; each compound is matched to the blob
+holding its position or the nearest apex within 20 s / 0.25 s; ➗ divides by the named or nearest
+internal standard; one curve per compound with points left out, put back, retyped or rematched by
+a click (a click off every blob adds one). Hand matches are stored as positions, so they survive
+recomputing blobs. Sessions save as JSON; results export as four CSVs. Science in
+`core/calbuilder.py`, curves by the existing `fit_calibration`. Internal standards with a
+quantifier ion anchor the window's phase. Checked on synthetic standards (24 new tests) and, for
+matching only, on two real 70 eV runs with the five labelled internal standards (all found in both;
+5,000 to 6,000 blobs per run, outlines drawn in 0.08 s by a vectorised pass instead of 10 s blob by
+blob). Not yet run on a real calibration sequence, and the curves do not yet feed 🧪.
+
 **After the audit, 2026-09-24** (agreed with James). 🫧 blobs are scored against both measured
 references (bleed and cyclic) and keep the larger score; the threshold is 0.15 and blocking removes
 the siloxane ions only (on two runs: every siloxane-like blob caught, no hydrocarbon signal lost;

@@ -5,23 +5,28 @@ Install and quick start are in the [README](../README.md).
 
 ## Using the app
 
-![Before/after split: behenic acid emerging from column bleed on m/z 73](images/screenshot_background_split.png)
+Every screenshot in this guide was taken on the synthetic demonstration data
+([examples/demo_data](../examples/demo_data/README.md)), so each can be reproduced; the tour in
+that README walks through every step on it. `docs/images/make_screenshots.py` retakes them all.
+
+![The main window: the diesel sample after background removal, with the spectrum of pristane](images/screenshot_main.png)
 
 ### Layout
 
-- **Left:** one panel, "Workspace", with three tabs. **Runs** is the run list, **Tool** shows the open step's settings and its Go button (its tab is named after the step), and **Layers** shows which runs are cleaned or aligned. Opening a step from the toolbar switches to the Tool tab.
-- **Top toolbar:** 📂 Open, the eleven numbered steps, then ✂️ Resolve overlap, 🗂️ Batch, 📤 Figure and the panel buttons.
-- **Centre:** the 2D and 1D views, the 🧪 Review gallery and the Calibration curves.
+- **Left:** one panel, "Workspace", with tabs. **Runs** is the run list, **Tool** shows the open step's settings and its Go button (its tab is named after the step), **Layers** shows which runs are cleaned or aligned, **Results** holds the 🧪 tables, **Standards** the internal-standard grid, **History** the undo list and **Log** every message in full. Opening a step from the toolbar switches to the Tool tab. Running jobs, with their progress and cancel buttons, appear at the foot of this panel and hide themselves when idle.
+- **Top toolbar:** 📂 Open, the nine numbered steps, then ✂️ Resolve overlap, 📈 Calibrate, 🗂️ Batch, 📤 Figure and the panel buttons. Below it, the view bar: ion box, colour scale, S/N, overlays, raw/cleaned, levels, extend t₂, region, zoom and previous/next run.
+- **Centre:** the 2D and 1D views, the 🧪 Review gallery, the Calibration curves and Compare.
 - **Right:** the spectrum.
-- **Bottom:** four tabs, 🧪 Results, Jobs, History (undo) and Log.
 
-Every panel can be moved, floated onto a second screen or hidden. To bring one back, use the **Workspace** and **Spectrum** buttons at the right of the top toolbar, or **Panels ▾** (also View → Panels) for every panel, including the bottom tabs. **Reset layout** in the same menu restores the default arrangement.
+Every panel can be moved, floated onto a second screen or hidden. To bring one back, use the **Workspace** and **Spectrum** buttons at the right of the top toolbar, or **Panels ▾** (also View → Panels). **Reset layout** in the same menu restores the default arrangement.
 
-**Colours.** The default theme uses the Financial Times palette: a salmon paper background, near-black text and claret highlights. View → Dark theme switches to the dark palette. The chromatogram colour map (turbo) is the same in both.
+**Colours.** The light theme is white panels on a pale grey window with an indigo accent; View → Dark theme switches to near-black with a green accent. The top of the window takes a faint tint of the step that is open. The chromatogram colour map (turbo) is the same in both.
+
+![The dark theme](images/screenshot_dark.png)
 
 ### Workflow panel
 
-The eleven numbered buttons on the top toolbar are the steps, in working order. The left-hand panel shows only the open step: its settings, then one Go button.
+The nine numbered buttons on the top toolbar are the steps, in working order. The left-hand panel shows only the open step: its settings, then one Go button. The 🫧 siloxane filterer and ⛓️ hydrocarbon identifier have no toolbar button: they are sub-menus of 4 🔍 Peaks, opened by the two buttons under the peak table. Each has a **Back to Peaks** link and its own Go button.
 
 1. Press a step on the toolbar. Its settings appear on the left; nothing runs yet.
 2. Set what you want.
@@ -34,27 +39,25 @@ The eleven numbered buttons on the top toolbar are the steps, in working order. 
 | 2 📍 Align | reference run, anchors | finds the anchors on every other run |
 | 3 🧹 Background | 🧹 settings, aligned blank, preview, split view, diagnostics | removes background on every run |
 | 4 🔍 Peaks | MS-aware regions or legacy blob table | runs the selected detection method on every run |
-| 5 🫧 Siloxane | reference spectrum, certainty slider | blocks out (or fits) siloxane blobs on every run |
-| 6 ⛓️ Hydrocarbons | qualifier ratios, stencils, series | starts the two-click alkane flow |
+| 4a 🫧 Siloxane filterer (from Peaks) | reference spectrum, certainty slider | blocks out (or fits) siloxane blobs on every run |
+| 4b ⛓️ Hydrocarbon identifier (from Peaks) | ladder shape, qualifier ratios, assignment table, stencils, series | starts the two-click alkane flow; **Assign peaks to hydrocarbons** labels every peak |
+| 5 🏷️ IS | IS library, labelled peaks, thresholds on Δt₁, Δt₂ and spectral match | finds every labelled standard in every run; results grid in the Standards tab |
+| 6 🧪 Quantify | what is loaded, load buttons, settings | quantifies (disabled, with the reason, until a target table is loaded) |
 | 7 🧬 Classify | 14 eV switch, rule file, class list, results | assigns a compound class to every blob of the open 70 eV run |
 | 8 🏷️ Identify | notes | opens the identifier window |
-| 9 🧪 Quantify | what is loaded, load buttons, settings | quantifies (disabled, with the reason, until a target table is loaded) |
-| 10 🧩 Cluster | scope, method, thresholds | groups peaks by spectrum, within or across runs |
-| 11 🏷️ Internal standards | IS library, labelled peaks, thresholds on Δt₁, Δt₂ and spectral match | finds every labelled standard in every run; results table in the bottom dock |
+| 9 🧩 Cluster | scope, method, thresholds | groups peaks by spectrum, within or across runs |
 
-**Why this order.** Each step's panel shows a "Why here" line, the toolbar tooltips repeat it, and Help → Workflow guide lists all eleven. In short:
+**Why this order.** Each step's panel says why it sits where it does, the toolbar tooltips repeat it, and Help → Workflow guide lists every step. In short:
 
 1. **Fold first.** Every later step works on the folded image, and a wrong phase splits peaks across its top and bottom edges.
 2. **Align second.** Retention drifts between runs. Aligning early puts every run on the reference run's coordinates, so a blank can be subtracted through the alignment in step 3. With a single run, skip it.
 3. **Background third.** It removes bleed, the repeating t₂ stripes and spikes, and builds the noise map that peak detection uses for signal-to-noise.
-4. **Blobs fourth.** Detection needs the flat baseline from step 3. Steps 5 to 10 all start from these blobs.
-5. **Siloxane fifth.** It blocks out whole blobs, so it needs step 4. It runs before the ladder and identification so contaminants do not enter them.
-6. **Hydrocarbons sixth.** The n-alkane ladder gives the retention index that identification uses.
-7. **Classify seventh.** It reads each blob's class from its spectrum and uses the ladder from step 6 for retention evidence, so it follows both. It comes before Identify because a class says what a peak is without a library.
-8. **Identify eighth.** It searches the blobs from step 4 and uses the retention index from step 6 when there is one.
-9. **Quantify ninth.** It needs the phase and the cleaned data; everything before it makes its peaks clean and correctly placed.
-10. **Cluster tenth.** It groups peaks by spectral shape and can compare them with the classes from step 7.
-11. **Internal standards** can run any time after step 4. Label each standard once, find it on every run, then **Use as target table** so the same peaks anchor the phase and normalise step 9.
+4. **Peaks fourth.** Detection needs the flat baseline from step 3. Every later step starts from these peaks. The siloxane filterer blocks out whole blobs and runs before the internal standards, classification and identification so contaminants do not enter them. The hydrocarbon identifier anchors the n-alkane ladder, which gives the retention index that identification uses.
+5. **IS fifth.** It needs the peaks from step 4. Label each standard once, find it on every run, then **Use as target table** so the same peaks anchor the phase and normalise step 6.
+6. **Quantify sixth.** It needs the phase, the cleaned data and the internal standards. The steps after it describe peaks and do not feed it.
+7. **Classify seventh.** It reads each blob's class from its spectrum and uses the alkane ladder for retention evidence. It comes before Identify because a class says what a peak is without a library.
+8. **Identify eighth.** It searches the blobs from step 4 and uses the retention index from the ladder when there is one.
+9. **Cluster ninth.** It groups peaks by spectral shape and can compare them with the classes from step 7.
 
 The order is a recommendation. Nothing stops you running a step early or again after changing something upstream, but results from later steps are not rerun for you: rerun them.
 
@@ -72,6 +75,8 @@ On the toolbar a ✓ marks a finished step, ▸ marks the suggested next one and
 - **Scale** can be log, square root or linear (L cycles through them). **Auto levels** (Ctrl+L) resets the colour range.
 - **🔒 Lock levels** (on by default) keeps the colour range when you flick between runs, so differences stand out.
 - **S/N** shows signal-to-noise. It needs 🧹 on that run, because the noise map comes from background removal.
+
+![Signal-to-noise view of the diesel sample after background removal, with the spectrum of pristane](images/screenshot_snr.png)
 
 ### Ion box (M)
 
@@ -92,6 +97,8 @@ In the spectrum, click an ion to image it; Shift+click adds it to the current su
 - **Bottom:** the raw detector stream for that band. Zoom in to a few minutes and the modulation boundaries appear, which is the quickest way to see how peaks are sliced and to spot wrap-around.
 - Double-click either plot for the spectrum at that time.
 
+![1D view of the diesel sample: the reconstructed chromatogram above and the raw detector stream below](images/screenshot_1d.png)
+
 ### Runs
 
 - Select a row, or use PgUp/PgDn, to change run. Zoom, ion and colour levels stay put.
@@ -100,7 +107,11 @@ In the spectrum, click an ion to image it; Shift+click adds it to the current su
 - Right-click a run to remove it from the project.
 - The Timing column warns about dropped scans or irregular timing.
 
+![The Runs table of the demonstration data: type, level and volume from sequence.csv, phase from the internal standards](images/screenshot_runs.png)
+
 ### 🔄 Fold
+
+![Step 1: the period from method.json and this run's phase from five internal standards](images/screenshot_fold.png)
 
 - Set the modulation period, and the current run's phase, with the spin box or slider. The image refolds as you drag.
 - **Go** (or the Process menu) re-estimates every run. With a target table it uses the internal standards; runs where they aren't found, such as tube blanks, borrow the phase of the others.
@@ -117,6 +128,8 @@ When runs open and no period has been set by hand or by `method.json`, the perio
 - On the command line, `pygcgc fold`, `phase`, `clean` and `quant` estimate the period when `--period` is omitted (and no `method.json`), print the estimate, and stop if none can be found reliably. `pygcgc batch` does the same and records `modulation_period_estimated` in `provenance.json`.
 
 ### 🧹 Background
+
+![Before/after split on m/z 73: behenic acid emerging from the column bleed in the wood-smoke sample](images/screenshot_background_split.png)
 
 - Step **3 🧹 Background** shows the settings; **Go** cleans every run with them (Process → 🧹 Background does the same).
 - Tick **Preview on this run** to try settings live on the current run before applying.
@@ -146,9 +159,9 @@ Background layers are rebuilt automatically when a run's phase or the period cha
 
 ### 🧪 Quantification
 
-![Review gallery: benz[a]anthracene across the sequence, flagged where it shares a peak with chrysene](images/screenshot_review.png)
+![Step 6 after Go: targets circled and internal standards squared on the urban sample](images/screenshot_quant.png)
 
-Step **9 🧪 Quantify** (Go) runs the whole thing in the background:
+Step **6 🧪 Quantify** (Go) runs the whole thing in the background:
 1. Every target and internal standard is found in the calibration runs on its own quantifier ion, and their average positions are learned from there, together with the qualifier ratios of any row that leaves them blank. Each later search is also shifted by however far its internal standard has moved in that run.
 2. Every run is measured with those positions. Several candidate peaks may sit inside a target's window; each is scored on its distance from the expected position, how well its qualifier ratios match, and how clearly it stands out of the noise. If the runner-up scores almost as well, the result is flagged as ambiguous.
 3. Every other peak in every run (a TIC blob) is found as well.
@@ -158,6 +171,8 @@ Step **9 🧪 Quantify** (Go) runs the whole thing in the background:
 It works on 🧹 cleaned data where that has been applied, and on raw data otherwise. A compound whose true t₂ is longer than the period (give it that way in the table, for example 9.1 s at an 8 s period) is matched and reported on that side of the wrap.
 
 **Choosing ions.** On a busy ion (m/z 57 among alkanes, m/z 105 among alkylbenzenes) the matrix adds to the peak: in a planted test on the real exhaust and diesel runs, targets on such ions were 15 to 60% off, and qualifier ratios only catch interferents with a different spectrum. A less common ion of the same compound is almost always the better quantifier. See [the September 2026 audit](validation/audit-2026-09-24.md).
+
+![Review gallery: benz[a]anthracene across the sequence, flagged where it shares a peak with chrysene](images/screenshot_review.png)
 
 **Peak overlay.** On the 2D view every peak found is outlined. Targets are marked with circles (lilac, amber when flagged, red when rejected) and internal standards with teal squares. O shows or hides the overlay.
 
@@ -175,7 +190,7 @@ A tile is flagged amber when:
 - it sits on the flank of a larger peak
 - it is off position
 
-![Calibration tab: fluorene, weights chosen automatically, with the relative-error plot below](images/screenshot_calibration.png)
+![Calibration tab: fluorene, weights and model chosen automatically, with the relative-error plot below](images/screenshot_calibration.png)
 
 **Calibration tab (4).**
 - **Plot:** each compound's curve with its points, the samples as diamonds, and a relative-error plot underneath with the acceptance limits dashed. Choose the calibration set, and whether to show the quantifier-ion curve or the whole-peak (TIC) curve used for nearby unknowns.
@@ -183,7 +198,9 @@ A tile is flagged amber when:
 - **Points:** click a point to select it. Exclude… asks for a reason, which is saved; Include puts it back; Open peak shows it.
 - **Statistics:** the text below lists the model, weights, R², worst back-calculation, LOD, LOQ, Mandel p and intercept p, plus any points with large studentised residuals or Cook's distance.
 
-**🧪 Results panel.** Four views of the same results. Double-click any row to jump to the peak. Filter by run and compound, or tick Only to check. Export CSV… writes all four tables.
+![The Results tab: every target in every run, with its status, flags and amount](images/screenshot_results.png)
+
+**🧪 Results tab** (in the Workspace). Four views of the same results. Double-click any row to jump to the peak. Filter by run and compound, or tick Only to check. Export CSV… writes all four tables.
 
 | View | Contents |
 |---|---|
@@ -196,7 +213,7 @@ A tile is flagged amber when:
 
 **Semi-quantitative amounts for nearby peaks.** An unknown peak within 3 distance units of a calibrated target is given an amount "as" that target. This uses the target's whole-peak (TIC) curve, so it assumes the unknown gives the same total signal per nanogram as its neighbour. That is roughly true within a compound class and can be badly wrong across classes, which is why these amounts are labelled with the target used and kept in their own table. Treat them as estimates.
 
-**Settings** (⚙️ in the Results panel, or Process → Quantification settings). The main ones:
+**Settings** (⚙️ in the Results tab, or Process → Quantification settings). The main ones:
 
 | Setting | Default | What it does |
 |---|---|---|
@@ -211,13 +228,77 @@ A tile is flagged amber when:
 | Peak S/N | 10 (blobs), 5 (targets) | minimum signal-to-noise for a peak |
 | Calibration limits | ±15%, ±20% lowest | back-calculation acceptance |
 
-Changing settings marks the results out of date; the banner in the Results panel reruns them.
+Changing settings marks the results out of date; the banner in the Results tab reruns them.
+
+### 📈 Calibrate (the calibration builder)
+
+A separate window for building calibration curves from a set of standard runs, with or without a
+compound list, and reading the curves off for samples. It keeps its own runs, fold and peaks, apart
+from the main window's project, and never saves over it. The science is in `core/calbuilder.py`;
+`examples/tutorials/07_calibration_builder.py` does the same without the window.
+
+Select the standards in the Runs table (Ctrl+click), then press **📈 Calibrate** on the toolbar (or
+*📈 Build curves from my standards…* in step 6). The banner above each tab says what to do on it
+next; a tab title is ticked when it is done.
+
+![Tab 1, Standards: four calibration runs taken from the main window, cleaned and searched, with their level amounts](images/screenshot_calibrate_standards.png)
+
+1. **Standards.** *Use the runs selected in the main window* (or open a folder or files). The runs
+   are cleaned, their peaks found (MS-aware components, as in step 4, or legacy blobs from
+   ⚙️ Settings ▾) and their phases lined up: a run whose second dimension sits apart from the others,
+   judged from peaks with the same spectrum, is moved onto them. The level amount of each run is read
+   from its name where it says (`L6_5ng` is 5; `025ng` is 0.25, as written on the vials); type it in
+   the table otherwise.
+2. **Compounds.** Three ways in: *🔎 Suggest from the standards…* finds peaks that grow with the
+   level along a straight log-log line (calibrants) and peaks that stay constant (internal-standard
+   candidates, named when their spectrum carries a shipped standard's signature), with no table at all;
+   *📄 Load a compound table…* reads a CSV (`compound`, `t1_s` or `t1_min`, `t2_s`, `role`,
+   `quant_ion`, `istd`, then one amount column per run, named after the run or after the part of its
+   name that differs, such as `L3`; a `target_table.csv` also reads); or click peaks on the
+   chromatogram: by default a click puts that peak's t₁ and t₂ into the selected compound (a new row
+   when none is selected), and *A click on the chromatogram* switches to adding a compound or an
+   internal standard, or to matching the selected compound to the clicked peak in the run shown only.
+   Each compound is matched to the peak at its position in every run, its signal is the peak volume
+   (or its quantifier ion's), and it is divided by its own or its nearest internal standard. Select a
+   compound to see its peak outlined in bold and its spectrum; *No peak in this run* removes it from
+   the run shown, *Automatic match* forgets a hand match.
+
+![Tab 2, Compounds: the compound table loaded, fluorene selected and outlined in the 5 ng standard](images/screenshot_calibrate_compounds.png)
+
+3. **Curves.** One curve per compound, IS-normalised response against amount, fitted by the same
+   weighted least squares as 🧪 (weights by back-calculation error, straight or quadratic by Mandel's
+   test). The list marks ✅ curves that pass and ⚠️ those that do not. Click a point to select it:
+   *Leave out* (Delete) drops it with a reason, which is kept; retype its amount; *Show in
+   chromatogram* and click the right peak to rematch it. Weights, model and zero can be overridden per
+   compound, and the x axis can be the amount ratio to the internal standard when the standard was not
+   spiked equally into every run. Every change refits at once and can be undone (Ctrl+Z).
+
+![Tab 3, Curves: fluorene against phenanthrene-d10 at four levels, with the back-calculation errors](images/screenshot_calibrate_curves.png)
+
+4. **Apply to samples.** Tick the main window's other runs and press ▶ Quantify. Each is cleaned and
+   searched like the standards; every compound is found by position (moved by the run's own t₂ offset
+   from the standards) and spectrum, and read off its curve with a standard error. Amber cells say why a
+   result is flagged: not found, its internal standard not found, no curve, a curve that fails its
+   check, or an amount below the lowest or above the highest standard. Concentrations follow from each
+   run's volume (m³). *📤 Export results* writes the table as CSV.
+
+![Tab 4, Apply to samples: the three demonstration samples quantified on the curves](images/screenshot_calibrate_apply.png)
+
+**Session ▾** saves and reopens a session (runs, fold, settings, compounds, hand matches, exclusions
+and curve choices) as JSON, exports the curves, points, compounds and every normalised peak as CSV,
+and saves the compound table. **⚙️ Settings ▾** holds background, peak, matching (search window,
+nearest-IS distance scale, saturation flag) and curve rules.
+
+On the August 2026 standards, run without a compound list, the builder suggested 59 calibrants and
+recognised four internal standards ([report](validation/calibration-standards-2026-10-06.md)).
 
 ### 📍 Alignment and compare
 
 Retention drifts a little from run to run: a few seconds in t1, a few hundredths of a second in t2. Alignment fits a map from one run's true coordinates onto a chosen reference run's, so images can be resampled onto the same grid and compared pixel for pixel.
 
 **Picking a reference.** In the 📍 Align panel, choose the run everything else will be aligned to (a calibration run in the middle of the sequence is a reasonable default). The reference is always shown as itself, never resampled.
+
+![Step 2: seven anchors on the urban sample against the reference CAL_L3_20ng, with their residuals](images/screenshot_align.png)
 
 **Anchors, by hand.** ➕ Add anchor (A) starts a two-click flow: the view switches to the reference run for you to click a peak, then to the target run to click the same peak, and the pair is recorded. Add a few (spread across the run) and a transform is fitted automatically:
 - **1 anchor:** a plain shift in t1 and t2.
@@ -240,13 +321,15 @@ Auto (the default) picks the simplest tier that already fits the anchors well; y
 
 **Undo.** Every anchor added, removed or cleared, and every reference or transform-kind change, is undoable.
 
-![Compare tab: SAMPLE_B in green overlaid on the reference CAL_L4 in magenta, aligned on their internal standards](images/screenshot_align_overlay.png)
+![Compare tab: the urban sample in green overlaid on the reference CAL_L3_20ng in magenta, aligned on seven anchors](images/screenshot_align_overlay.png)
 
 **Not built:** clicks don't yet snap to a peak's intensity-weighted centre (click precisely, or zoom in first); the batch search matches anchors independently rather than with a full Hungarian-plus-RANSAC pass across every blob; and there's no small-multiples gallery of one target across every run yet. These are candidates for the milestone 11 batch upgrade once real data show whether they're worth it.
 
 ### 🔍 Peak detection and separation
 
 Step 4 offers two peer detection methods in a saved selector. **MS-aware separation** is the new route for crowded real data. **Legacy blob borders** keeps the old behaviour for comparison and for existing tools that still consume `BlobSet`. Both run across every loaded run from **Find peaks**.
+
+![Step 4, MS-aware separation: overlapping contours and one table row per component in the urban sample](images/screenshot_peaks.png)
 
 **MS-aware separation** finds local peaks on individual mass channels, groups channels that independently agree on position, and fits their shapes and mass spectra together. Its normal result is one table row and a pair of contours per proposed component. The contours may overlap because several compounds can contribute to the same measured pixel. The table reports estimated intensity, diagnostic ions and confidence. Weak or poorly modelled groups remain visible and are labelled unresolved. Select a row and press **Resolve selected region…** to inspect or refit its calculation window. **Export peaks CSV…** writes every component together with its quality warning.
 
@@ -262,6 +345,8 @@ Three further points apply to MS-aware peaks:
 
 In legacy mode, **🔍 Find peaks** detects blobs on every loaded run: the sum of every ion's own signal-to-noise image combined with plain total-ion S/N. A watershed grows each seed into a footprint, trimmed to 1% of its own apex.
 
+![Step 4, legacy blob borders on the same region: every pixel belongs to one blob](images/screenshot_peaks_legacy.png)
+
 In legacy mode, the table lists every blob on the current run: position, volume, S/N, width in t1 and t2, how many modulations it spans, a co-elution flag, and whether it looks like siloxane (see 🫧 below).
 
 - **🔍 Blob outlines** (toolbar or View menu) draws every footprint in amber; clicking a peak in the 2D view selects the nearest one in the panel, and selecting a row in the panel bolds its outline in the view.
@@ -274,6 +359,8 @@ In legacy mode, the table lists every blob on the current run: position, volume,
 
 ### ✂️ Resolve overlap
 
+![✂️ Resolve overlap: the peak-shape fit of the region holding benz[a]anthracene and chrysene](images/screenshot_overlap_fit.png)
+
 Open a selected MS-aware component group directly from step 4, or inspect a legacy blob from the toolbar. Press **Accept components** to replace the automatic result for that group. Acceptance is saved with the project and can be undone. Component spectra are available to identification and CSV export, but component amounts are not yet sent to production quantification.
 
 - **Region/blob picker.** MS-aware regions are listed when that method is active; otherwise every legacy blob is available, with co-elution flags first.
@@ -284,7 +371,11 @@ Open a selected MS-aware component group directly from step 4, or inspect a lega
 
 **Not built:** a way to draw a straight-line or valley-path split by hand in the 2D view (`core/overlap.split_by_line`/`split_by_valley` exist and are tested, just not wired to a drawing tool); PARAFAC across several runs at once (`core/overlap.parafac`, `core_consistency`, `split_half_stability`, `build_run_tensor` are all built and tested, but there's no button anywhere yet -- call them from Python); PARAFAC2 itself was never built (see [Known limitations](../ROADMAP.md)).
 
-### 🫧 Siloxane removal
+### 🫧 Siloxane filterer (siloxane removal)
+
+Opened from the **🫧 Siloxane filterer…** button under the 4 🔍 Peaks table.
+
+![The siloxane filterer on the urban sample (m/z 73+281+355): D4 to D8, with the large D5, at 15% certainty](images/screenshot_siloxane.png)
 
 Column bleed and cyclic siloxane contaminants (Dn) fragment under EI onto a recognisable set of ions, but differently: bleed is dominated by m/z 207, a discrete Dn peak by 73 and 281. Blobs are therefore scored against two **reference spectra** and keep the larger score; the per-pixel method fits the first one only.
 
@@ -312,13 +403,21 @@ On its own the bleed reference leaves a discrete Dn peak alone (its ion ratios d
 
 **Not built:** more than two references, and a second reference for the per-pixel fit; automatic re-fitting when 🧹 or the fold changes underneath an applied 🫧 layer (it's cleared instead, so a stale fit is never shown silently); wiring into 🧪's own measurement, which still reads the 🧹 layer directly.
 
-### ⛓️ Hydrocarbon and isomer mapper
+### ⛓️ Hydrocarbon identifier (and isomer mapper)
+
+Opened from the **⛓️ Hydrocarbon identifier…** button under the 4 🔍 Peaks table.
+
+![The hydrocarbon identifier on the diesel sample (m/z 57): the n-alkane ladder from two clicks, over the unresolved hump](images/screenshot_hydrocarbons.png)
 
 A hydrocarbon chromatogram is usually a big diagonal smudge: every homologous series (n-alkanes, branched alkanes, cycloalkanes, ...) climbs across the plot together, because adding a CH2 group moves a compound almost the same distance in t1 whichever series it belongs to. This tool names the one series you can be confident about (the n-alkanes) and describes everything else relative to it, which is also what makes a stencil drawn on the alkane standard transfer straight onto a sample: it's recorded against the standard's own ladder, and reads back out against the sample's.
 
 **➕ Find alkane series** starts a two-click flow: click an n-alkane peak (on m/z 57 by default) and type its carbon number, then do the same for a second one further along. The ladder then grows outward one carbon at a time. Each carbon is predicted from its two nearest confirmed neighbours and searched for on m/z 57 within a window in t1 (at most 45 s, and never more than 0.45 of the local spacing) and in t2 (0.25 s) around the predicted alkane line; the tallest pulse whose qualifier ratios match is taken. The t2 restriction matters: on the real hydrocarbon run a brighter m/z 57 pulse from a branched or cyclic compound at another t2 is nearly always close by, and a time-only search locks onto it. The 🔍 Blobs panel doesn't need to have found anything first; this searches the raw ion directly, the same way 📍 add anchor and 🧪 pick a peak do.
 
 **Alkane qualifier ratios** (top of the ⛓️ panel). Each candidate's m/z 71 and 85 are compared with the quantifier (57). The defaults, 71/57 = 0.66 and 85/57 = 0.44 with a 30% relative tolerance, are the medians over C13 to C28 in the real run. A candidate outside the tolerance is rejected (untick the gate to fall back to the tallest pulse, flagged). Three ways to change them: type new ratios, press **🖱 Pick from 2D view** and click an n-alkane (its baseline-subtracted ratios become the expected ones), or **Reset to measured default**. The ladder table shows each hit's measured ratios, shaded where they are outside the tolerance. The ratios fall for light alkanes (C12 0.54/0.32, C11 0.48/0.25), so the default gate stops the ladder at C12; the seeds you click are trusted regardless.
+
+**Ladder shape** (⛓️ panel, below the ladder table). A real ladder is rarely straight across the plot, because the spacing between alkanes shrinks through the temperature programme and individual alkanes can be found a modulation off. The shape sets how the ladder is read between and beyond the confirmed alkanes: *Straight between points* (the default, and the earlier behaviour), *Smooth curve through points* (a monotone cubic that bends through every alkane without overshooting), or *Polynomial fit* (degree 1 to 6, an averaged curve that ignores one wonky point). Beyond the first and last alkane every shape continues along the end slope. The shape is a setting saved with the project and applies to stencils, the t₂-above-the-alkane-line axis and assignment alike.
+
+**🏷️ Assign peaks to hydrocarbons** labels every 🔍 legacy blob on every run that has a ladder, and lists the current run's labels (double-click a row to go to the peak). A blob is an *n-alkane* ("n-C17") only if it sits on a whole carbon number of the ladder (within 0.15 carbon-equivalents, setting `assign_carbon_tol`), within 0.3 s of the alkane line in t₂ (`assign_t2_tol_s`), has an alkane-like spectrum and passes the 57/71/85 ratio gate. An alkane-like blob that fails any of those is a *branched alkane* at its carbon-equivalent number ("branched alkane C17-eq"). The other families are chosen by the share of the blob's signal on their diagnostic ions: cycloalkane (55, 69, 83, 97, 82, 96), alkylbenzene (91, 92, 105, 119, 133) and alkylnaphthalene (128, 141, 142, 155, 156, 170). A blob that matches none stays *unassigned*. The ion sets and minimum shares (`TYPE_RULES` in `core/hcassign.py`) are starting values, not validated on real data. Labels are not saved with the project; press the button again after changing the ladder, its shape or the peaks.
 
 **⛓️ Propagate to other runs** searches every other loaded run for the same confirmed carbons, centred on where they are in the reference run (retention drifts a little run to run, not by a whole modulation — the same assumption 📍 batch alignment makes for internal standards).
 
@@ -335,6 +434,8 @@ A hydrocarbon chromatogram is usually a big diagonal smudge: every homologous se
 **On the current instrument tune.** On the four September 2026 runs the n-alkane ratios are 71/57 = 0.60 and 85/57 = 0.38 (medians, C13 to C28), below the defaults. The defaults are nonetheless the better gate: the branched isomers it has to reject have lower ratios still, and a gate centred on the n-alkane values let one in and put a whole ladder one carbon out. The gate drops the odd alkane (C12 on one run, one carbon above C25 on others); untick it to fill gaps, then check them. From two correct clicks the ladder reaches C9 or C10 to C29 or C30 on all four runs; seeds typed in the wrong carbon order are refused. Ladders are saved with the project.
 
 ### 🧬 Classify
+
+![Step 7 on the wood-smoke sample: peaks outlined by compound group, with the class summary](images/screenshot_classify.png)
 
 Step 7 on the toolbar. It gives every blob of the open run a compound class (alkane, alkene, cycloalkane, alkylbenzene, indane, naphthalene, PAH, N-heteroaromatic, aliphatic amine, alcohol or ether, ketone or aldehyde, carboxylic acid, ester, aromatic oxygenate, siloxane, phthalate) from its mass spectrum, its retention relative to the n-alkane ladder and, when available, its 14 eV spectrum. It needs no library. It replaces the rule language of commercial packages (GC Image's CLIC) with a plain text file you can read and edit.
 
@@ -375,6 +476,8 @@ The settings are saved with the project; results are not, so classify again afte
 
 ### 🏷️ Identify
 
+![The identifier window: the urban sample's peaks searched against the demonstration library](images/screenshot_identify.png)
+
 Search every 🔍 blob on the current run against an MSP library (toolbar, or Process menu). Opens on whichever run is open when it's shown; reopening it is how it picks up a run switch, but the loaded library stays put since it isn't tied to any one run. Read-only in the sense that nothing here is saved or undoable, the same as ✂️ and 🗂️ -- but "Promote to target…" and "Add to in-house library…" do write files.
 
 - **Load library (MSP)…** reads any plain-text MSP file (NIST via `lib2nist`, MoNA, MassBank, or one built here). "Generate decoys automatically" (on by default) adds a shuffled decoy per real entry, so a target-decoy q-value can be estimated even from a library that doesn't carry its own decoys already.
@@ -386,7 +489,9 @@ Search every 🔍 blob on the current run against an MSP library (toolbar, or Pr
 
 ### 🏷️ Internal standards
 
-Step 11 on the toolbar. A small library of standards (the seven in the shipped mix; ➕ Add to library for your own, kept in `~/.pygcgc/istd_library.json`), each labelled once by clicking its peak, then looked for in every chromatogram on the first dimension, the second dimension and the mass spectrum.
+![Step 5: five internal standards labelled on CAL_L1_1ng and searched for in every run; the Standards tab gives the spectral match where each passed](images/screenshot_istd.png)
+
+Step 5 on the toolbar. A small library of standards (the seven in the shipped mix; ➕ Add to library for your own, kept in `~/.pygcgc/istd_library.json`), each labelled once by clicking its peak, then looked for in every chromatogram on the first dimension, the second dimension and the mass spectrum.
 
 1. Find peaks (step 4) first: labelling picks the detected peak nearest the click and keeps its spectrum.
 2. Select a standard in the table, press **🏷️ Label peak on this run** and click its peak. The table then shows where it was labelled, its t₁ and t₂, and later on how many runs it was found.
@@ -399,14 +504,16 @@ Step 11 on the toolbar. A small library of standards (the seven in the shipped m
    | Min spectral match | 0.80 | weighted dot product (Stein and Scott, 1994) with the labelled peak's spectrum, 1 = identical |
 
    With **Expect each standard where the others moved to** ticked (the default), the expected position on each run is the labelled one moved by the median offset of the *other* standards found there with a confident spectrum (0.90 or better), so a run-wide retention shift does not break tight position thresholds. Unticked, it is the labelled position. Of the peaks that pass, the best spectral match is taken.
-4. **Go** (🔎 Find in every chromatogram) searches every loaded run, the labelled one included. The **🏷️ Internal standards** dock along the bottom shows one row per standard and one column per run: ✓ where it passed (amber if more than one peak did), ✗ where it did not, · where the run has no peaks. **Show** picks what the cells display (spectral match, t₁, t₂, or Δt₁ and Δt₂ from the expected or labelled position); hover a cell for every number and, for a ✗, which threshold failed. Click a cell to open that run on the peak; double-click to label it there by hand. **Export results (CSV)…** writes one row per standard per run, with the thresholds used.
+4. **Go** (🔎 Find in every chromatogram) searches every loaded run, the labelled one included. The **Standards** tab of the Workspace shows one row per standard and one column per run: ✓ where it passed (amber if more than one peak did), ✗ where it did not, · where the run has no peaks. **Show** picks what the cells display (spectral match, t₁, t₂, or Δt₁ and Δt₂ from the expected or labelled position); hover a cell for every number and, for a ✗, which threshold failed. Click a cell to open that run on the peak; double-click to label it there by hand. **Export results (CSV)…** writes one row per standard per run, with the thresholds used.
 5. **📋 Use as target table…** writes the labelled standards as `istd` rows into the target table (the quantifier and two qualifiers are the strongest ions weighted by m/z, with their measured ratios), keeping any other rows, and loads it: the standards then anchor the phase and normalise 🧪.
 
 On the September 2026 runs, five standards are present (acenaphthene-d10, phenanthrene-d10, n-tetracosane-d50, chrysene-d12, perylene-d12; perylene wraps, true t₂ about 9.1 s at an 8 s period). Labelled on ATWC, all five passed the default thresholds on the other three runs: within 2.3 s in t₁ and 0.09 s in t₂ of the expected position, spectral match 0.97 to 0.99. Twice a second peak also passed (phenanthrene-d10 on BTWC, perylene-d12 on T191), so check the amber cells. n-Dotriacontane-d66 elutes after the end of those runs and di-n-octyl phthalate-d4 was not found.
 
 ### 🧩 Peak clusters
 
-Step 10 on the toolbar. It groups peaks by the shape of their mass spectra, with no rules and no library, so a chromatogram divides into chemically similar regions and, when several runs are pooled, the runs can be compared cluster by cluster. Where 🧬 says what kind of compound a peak is from rules you write, this asks which peaks look alike; the "Made of" column compares the two once a run has been classified.
+![Step 9 on the diesel sample: peaks filled with their cluster colour](images/screenshot_cluster.png)
+
+Step 9 on the toolbar. It groups peaks by the shape of their mass spectra, with no rules and no library, so a chromatogram divides into chemically similar regions and, when several runs are pooled, the runs can be compared cluster by cluster. Where 🧬 says what kind of compound a peak is from rules you write, this asks which peaks look alike; the "Made of" column compares the two once a run has been classified.
 
 **Method.** Each peak's spectrum is weighted (intensity^0.5 × m/z^1, m/z ≥ 35) and scaled to unit length; peaks with fewer than five ions are left unassigned. The largest 5000 peaks are grouped by average-linkage hierarchical clustering of the cosine distance, cut at a merge distance (default 0.3, i.e. a mean similarity of 0.7 within a merged group), and groups of fewer than three peaks are not called clusters. Every other peak joins the cluster with the nearest centroid if that is within 0.4, otherwise it stays unassigned. Clusters are numbered by total volume, largest first. Retention time is not part of the distance: two runs never line up exactly, so using position would turn drift into false differences, and it means no alignment is needed to compare runs.
 
@@ -436,6 +543,8 @@ Step 10 on the toolbar. It groups peaks by the shape of their mass spectra, with
 
 ### 🗂️ Batch
 
+![🗂️ Batch on the demonstration folder: PCA of the seven runs](images/screenshot_batch.png)
+
 A one-shot, whole-folder analysis (toolbar, or Process menu), separate from the per-run project the rest of the app is built around: pick a folder, choose which steps to run, and go.
 
 **The pipeline** reads the sequence the same way `pygcgc quant` does (`sequence.csv`, `target_table.csv`, calibration levels, `method.json`), then runs 🧹 (always), 🫧 and 🔍 (optional) on every run **in a process pool** -- real multiprocessing, not the thread pool used elsewhere in the app for responsiveness, because the GIL means a thread pool doesn't actually parallelise this kind of work. Every step's result is cached to disk keyed by a hash of its inputs and settings, in `<folder>/.pygcgc_cache`; re-running the same folder with the same settings loads straight from the cache instead of recomputing, which is also how an interrupted batch resumes -- just run it again. 🧪 quantification (optional) runs once, in the main process, on the results of that parallel prep, the same `quantify_prepared` the CLI and the GUI already use.
@@ -464,7 +573,7 @@ Every format also records **provenance**: the PyGCGC version, the modulation per
 
 ### Working order, settings and figures
 
-**Toolbar order** follows the workflow: 📂 Open | the eleven numbered steps (1 🔄 Fold, 2 📍 Align, 3 🧹 Background, 4 🔍 Peaks, 5 🫧 Siloxane, 6 ⛓️ Hydrocarbons, 7 🧬 Classify, 8 🏷️ Identify, 9 🧪 Quantify, 10 🧩 Cluster, 11 🏷️ IS) | ✂️ Resolve overlap, 🗂️ Batch, 📤 Figure. The step buttons only open that step's settings on the left; see [Workflow panel](#workflow-panel). 🧹 with a blank reads the blank through both runs' alignment to the reference, which is why 📍 comes first (an applied blank subtraction is not redone when an alignment changes; the status bar says so). Give the blank and every non-reference run anchors; a run with no transform counts as the reference.
+**Toolbar order** follows the workflow: 📂 Open | the nine numbered steps (1 🔄 Fold, 2 📍 Align, 3 🧹 Background, 4 🔍 Peaks, with 🫧 Siloxane and ⛓️ Hydrocarbons opened from it, 5 🏷️ IS, 6 🧪 Quantify, 7 🧬 Classify, 8 🏷️ Identify, 9 🧩 Cluster) | ✂️ Resolve overlap, 📈 Calibrate, 🗂️ Batch, 📤 Figure. The step buttons only open that step's settings on the left; see [Workflow panel](#workflow-panel). 🧹 with a blank reads the blank through both runs' alignment to the reference, which is why 📍 comes first (an applied blank subtraction is not redone when an alignment changes; the status bar says so). Give the blank and every non-reference run anchors; a run with no transform counts as the reference.
 
 **Settings.** Every settings object has a form: Process → 🔍 Peak detection settings… edits whichever method is selected, ⛓️ Hydrocarbon settings… (or ⚙️ in the ⛓️ panel), ⚙️ in the 🏷️ dialog, ⚙️ Settings… in 🗂️ Batch (every step, plus the feature-table reference run), the 🫧 tab, and 🧪 Quantification settings. Restore defaults is in each. Changing legacy settings clears hand edits to the blob list.
 

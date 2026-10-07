@@ -1,7 +1,7 @@
 """Milestone 7 walkthrough: flag which blobs look like siloxane, and fit
 and subtract the siloxane component from the whole run.
 
-    python examples/tutorials/06_siloxane.py path/to/dummy_gcxgc
+    python examples/tutorials/06_siloxane.py path/to/demo_gcxgc
 """
 
 import sys
@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pygcgc as g
 
-folder = Path(sys.argv[1] if len(sys.argv) > 1 else "dummy_gcxgc")
-period = 4.0
+folder = Path(sys.argv[1] if len(sys.argv) > 1 else "demo_gcxgc")
+period = 8.0
 
 anchors = g.load_anchors(folder / "target_table.csv")
-run = g.read_run(folder / "data" / "CAL_L4.cdf")
+run = g.read_run(folder / "data" / "SAMPLE_1_urban_air.cdf")
 phase = g.auto_phase(run, period, anchors).phase
 fold = g.fold(run, period, phase)
 
@@ -35,23 +35,22 @@ result = g.remove_siloxanes(bg.run, fold)
 print(result.summary())
 
 
-def box_sum(run, f, apex_scan_time_s, ion, before=0.4, after=0.6, cb=5, ca=6):
-    col, t2 = f.to_fold(apex_scan_time_s)
+def box_sum(run, f, t1, t2, ion, before=0.4, after=0.6, cb=2, ca=3):
+    """Signal on one ion in a box around the apex at (t1, t2)."""
+    col = int((t1 - f.t1[0]) // f.spec.period)
     img, _ = f.extend(f.ion_image(run, ion), 1.99)
     r0 = int(round(t2 / f.row_pitch))
     return img[max(r0 - int(before / f.row_pitch), 0):r0 + int(after / f.row_pitch),
-               col - cb:col + ca].sum()
+               max(col - cb, 0):col + ca].sum()
 
 
-behenic_t = None
 import csv
 
-with open(folder / "truth_per_file.csv", newline="") as fh:
-    for row in csv.DictReader(fh):
-        if row["file"] == "CAL_L4.cdf" and row["compound"] == "behenic acid":
-            behenic_t = float(row["apex_scan_time_s"])
-if behenic_t is not None:
-    before = box_sum(bg.run, fold, behenic_t, 73)
-    after = box_sum(result.run, fold, behenic_t, 73)
-    print(f"behenic acid on m/z 73: {before:,.0f} -> {after:,.0f} "
-         f"({100 * after / before:.1f}% remains, milestone bar is >= 95%)")
+truth = {r["compound"]: (float(r["t1_s"]), float(r["t2_s"]))
+         for r in csv.DictReader(open(folder / "truth" / "truth_amounts.csv", newline=""))
+         if r["run"] == run.name}
+t1, t2 = truth["behenic acid"]
+before = box_sum(bg.run, fold, t1, t2, 73)
+after = box_sum(result.run, fold, t1, t2, 73)
+print(f"behenic acid on m/z 73: {before:,.0f} -> {after:,.0f} "
+      f"({100 * after / before:.1f}% remains, milestone bar is >= 95%)")

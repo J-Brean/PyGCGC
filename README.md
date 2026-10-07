@@ -4,7 +4,16 @@ A desktop app and Python package for comprehensive two-dimensional gas chromatog
 electron-ionisation time-of-flight mass spectrometry (GC×GC-EI-ToF-MS). It reads native Markes
 FT04/SD04 `.lsc` files (including tandem 70/14 eV acquisitions) and ANDI (AIA) `.cdf` exports.
 
-![The 2D view of a cleaned run, shown as signal-to-noise](docs/images/screenshot_snr.png)
+![The main window: a synthetic diesel-exhaust run after background removal](docs/images/screenshot_main.png)
+
+| | | |
+|---|---|---|
+| ![Peaks](docs/images/screenshot_peaks.png) MS-aware peaks | ![Hydrocarbons](docs/images/screenshot_hydrocarbons.png) n-alkane ladder | ![Internal standards](docs/images/screenshot_istd.png) internal standards |
+| ![Calibration](docs/images/screenshot_calibration.png) calibration curves | ![Classes](docs/images/screenshot_classify.png) compound classes | ![Clusters](docs/images/screenshot_cluster.png) spectral clusters |
+| ![Calibrate window](docs/images/screenshot_calibrate_curves.png) 📈 calibration builder | ![Compare](docs/images/screenshot_align_overlay.png) alignment overlay | ![Batch](docs/images/screenshot_batch.png) batch PCA |
+
+Every screenshot is of the synthetic [demonstration data](examples/demo_data/README.md) and is
+described in the [user guide](docs/user-guide.md).
 
 ## Status
 
@@ -20,13 +29,14 @@ right-hand column says what has been checked on real runs; the details are in
 | 2 📍 Align | anchors, shift/affine/smooth transforms, compare modes | Not yet checked on real drift |
 | 3 🧹 Background | bleed, stripes, spikes, noise map, blank subtraction | Used on every real run; blank subtraction unchecked |
 | 4 🔍 Peaks | MS-aware overlapping components (default) or legacy blobs | Benchmarked with planted peaks in real background; no labelled real standard yet |
-| 5 🫧 Siloxane | score blobs against bleed and cyclic references; block their siloxane ions, or fit per pixel | Defaults chosen on two runs: every siloxane-like blob caught, none of the hydrocarbon signal removed |
-| 6 ⛓️ Hydrocarbons | n-alkane ladder, stencils, homologous series | Ladder from two clicks reaches C9–C30 on four runs; one or two carbons wrong per run |
+| 4a 🫧 Siloxane filterer (in Peaks) | score blobs against bleed and cyclic references; block their siloxane ions, or fit per pixel | Defaults chosen on two runs: every siloxane-like blob caught, none of the hydrocarbon signal removed |
+| 4b ⛓️ Hydrocarbon identifier (in Peaks) | n-alkane ladder (straight, smooth or polynomial), peak assignment, stencils, homologous series | Ladder from two clicks reaches C9–C30 on four runs; one or two carbons wrong per run. Assignment and ladder shapes not yet checked on real data |
+| 5 🏷️ IS | label internal standards, find them on every run, write them to the target table | Five deuterated standards found with high confidence on all four runs |
+| 6 🧪 Quantify | targets, internal standards, weighted calibration, bracketing | Planted standards in real matrix: within a few % on selective ions, 15–60% off on busy ones |
 | 7 🧬 Classify | compound classes from readable rules | Checked on one earlier run |
 | 8 🏷️ Identify | MSP library search with target-decoy confidence | No real library yet |
-| 9 🧪 Quantify | targets, internal standards, weighted calibration, bracketing | Planted standards in real matrix: within a few % on selective ions, 15–60% off on busy ones |
-| 10 🧩 Cluster | peaks or pixels grouped by spectrum, within and across runs | Checked on one earlier run; not on a sample set |
-| 11 🏷️ IS | label internal standards, find them on every run, write them to the target table | Five deuterated standards found with high confidence on all four runs |
+| 9 🧩 Cluster | peaks or pixels grouped by spectrum, within and across runs | Checked on one earlier run; not on a sample set |
+| 📈 Calibrate | separate window: standard runs, compounds from a table or clicks, IS-normalised blobs, curves edited point by point | Four real levels without a compound list: 59 calibrants and four internal standards suggested; phases lined up; responses bend at 25 ng |
 | 🗂️ Batch, 📤 Reports | cached parallel pipeline, feature table, QC, PCA, volcano, Excel/HTML/PDF | Ran end to end on nine real-matrix runs |
 
 ## Install
@@ -56,6 +66,20 @@ peak detections are cached on local disk, so reopening does not recompute them. 
 
 For native files, confirm the modulation period in the Fold step (it is not stored in the file);
 folder opening picks untreated 70 eV, and **Open files…** loads 14 eV or DBC channels.
+
+## Demonstration data
+
+Seven synthetic runs (four calibration standards, three samples) with about 150 compounds,
+impurities, artefacts and the true answer for every number:
+
+```powershell
+python examples/demo_data/generate_demo_data.py demo_gcxgc
+pygcgc-gui demo_gcxgc
+```
+
+[examples/demo_data/README.md](examples/demo_data/README.md) lists what is in the pack and gives
+a tour of every step, including the 📈 calibration builder. The tutorials in
+`examples/tutorials/` run on the same pack.
 
 ## Supporting files
 
@@ -135,7 +159,8 @@ print(ladder.carbon_of(2500.0))          # retention as a carbon number
 ```
 
 Every module in `pygcgc.core` opens with a plain-English account of its method. The tutorials in
-`examples/tutorials/` walk through a whole sequence on the dummy data pack.
+`examples/tutorials/` walk through a whole sequence on the demonstration data pack: reading and
+folding, background, quantification, alignment, peaks, siloxanes and the calibration builder.
 
 ## Tests
 
@@ -151,6 +176,7 @@ repository, or `PYGCGC_DUMMY_DATA`) and skip without it; one needs a native run 
 | File | What it holds |
 |---|---|
 | [docs/user-guide.md](docs/user-guide.md) | every step and panel, and how the methods work |
+| [examples/demo_data/](examples/demo_data/README.md) | the synthetic demonstration pack, its generator and a tour of the app; `docs/images/make_screenshots.py` retakes every screenshot from it |
 | [ROADMAP.md](ROADMAP.md) | known limits, recommended changes and suggested features, in priority order |
 | [CHANGELOG.md](CHANGELOG.md) | dated record of what changed and what real-data checks found |
 | [docs/architecture.md](docs/architecture.md) | code layout, rules, design decisions, gotchas |

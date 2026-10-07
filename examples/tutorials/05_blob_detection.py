@@ -1,7 +1,7 @@
 """Milestone 6 walkthrough: find every blob in a run, look at what makes
 each one interesting, and try the hand-editing operations.
 
-    python examples/tutorials/05_blob_detection.py path/to/dummy_gcxgc
+    python examples/tutorials/05_blob_detection.py path/to/demo_gcxgc
 """
 
 import sys
@@ -10,11 +10,11 @@ from pathlib import Path
 import pygcgc as g
 from pygcgc.core.peaks import add_blob_at, delete_blobs, merge_blobs
 
-folder = Path(sys.argv[1] if len(sys.argv) > 1 else "dummy_gcxgc")
-period = 4.0
+folder = Path(sys.argv[1] if len(sys.argv) > 1 else "demo_gcxgc")
+period = 8.0
 
 anchors = g.load_anchors(folder / "target_table.csv")
-run = g.read_run(folder / "data" / "CAL_L4.cdf")
+run = g.read_run(folder / "data" / "CAL_L4_50ng.cdf")
 phase = g.auto_phase(run, period, anchors).phase
 fold = g.fold(run, period, phase)
 

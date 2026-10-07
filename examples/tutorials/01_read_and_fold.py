@@ -2,7 +2,7 @@
 check the period, fold, and save a figure.
 
 Run from the repository folder:
-    python examples/tutorials/01_read_and_fold.py path/to/dummy_gcxgc
+    python examples/tutorials/01_read_and_fold.py path/to/demo_gcxgc
 """
 
 import sys
@@ -16,8 +16,8 @@ from matplotlib.colors import LogNorm
 
 import pygcgc as g
 
-folder = Path(sys.argv[1] if len(sys.argv) > 1 else "dummy_gcxgc")
-period = 4.0  # from the instrument method
+folder = Path(sys.argv[1] if len(sys.argv) > 1 else "demo_gcxgc")
+period = 8.0  # from the instrument method (method.json)
 
 # 1. Read every run in the sequence (threaded).
 files = sorted((folder / "data").glob("*.cdf"))
@@ -38,11 +38,11 @@ for run, est in zip(runs, phases):
     print(f"{run.name:<12} {est.summary()}")
 
 # 4. Check the modulation period on one calibration run.
-cal = next(r for r in runs if r.name == "CAL_L4")
+cal = next(r for r in runs if r.name == "CAL_L4_50ng")
 print(g.period_from_anchors(cal, anchors, period).summary())
 
 # 5. Fold one sample with and without the phase correction, and plot both.
-sample = next(r for r in runs if r.name == "SAMPLE_B")
+sample = next(r for r in runs if r.name == "SAMPLE_2_diesel_exhaust")
 phase = phases[runs.index(sample)].phase
 naive = g.fold(sample, period, 0.0)
 fixed = g.fold(sample, period, phase)
@@ -64,5 +64,5 @@ for ax, img, f, t2, title in [
 axes[1].axhspan(period, t2_ext[-1] + fixed.row_pitch, color="w", alpha=0.12, lw=0)
 axes[1].set_xlabel("$t_1$ (min)", fontsize=8)
 fig.tight_layout()
-fig.savefig("01_sample_B.png")
-print("Saved 01_sample_B.png")
+fig.savefig("01_diesel.png")
+print("Saved 01_diesel.png")

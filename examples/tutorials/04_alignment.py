@@ -1,7 +1,7 @@
 """Milestone 5 walkthrough: align two runs on their internal standards and
 compare them.
 
-    python examples/tutorials/04_alignment.py path/to/dummy_gcxgc
+    python examples/tutorials/04_alignment.py path/to/demo_gcxgc
 """
 
 import sys
@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pygcgc as g
 
-folder = Path(sys.argv[1] if len(sys.argv) > 1 else "dummy_gcxgc")
-period = 4.0
+folder = Path(sys.argv[1] if len(sys.argv) > 1 else "demo_gcxgc")
+period = 8.0
 
 anchors = g.load_anchors(folder / "target_table.csv")
-ref = g.read_run(folder / "data" / "CAL_L4.cdf")
-run = g.read_run(folder / "data" / "SAMPLE_B.cdf")
+ref = g.read_run(folder / "data" / "CAL_L3_20ng.cdf")
+run = g.read_run(folder / "data" / "SAMPLE_1_urban_air.cdf")
 
 ref_fold = g.fold(ref, period, g.auto_phase(ref, period, anchors).phase)
 run_fold = g.fold(run, period, g.auto_phase(run, period, anchors).phase)
@@ -32,7 +32,7 @@ print(transform.summary())
 for r in transform.residuals():
     print(f"  {r['name']:<20s} resid t1 {r['resid_t1']:+.2f} s   resid t2 {r['resid_t2'] * 1e3:+.0f} ms")
 
-# Resample SAMPLE_B's TIC image onto CAL_L4's grid, so they can be compared
+# Resample the urban sample's TIC image onto CAL_L3_20ng's grid, so they can be compared
 # pixel for pixel (this is what the Compare tab's blink/difference/overlay
 # modes are built on).
 run_tic = run_fold.tic_image(run)
