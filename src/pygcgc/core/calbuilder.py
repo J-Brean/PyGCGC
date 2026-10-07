@@ -62,6 +62,23 @@ class ComponentBlobs(BlobSet):
         return np.array([]), np.array([])
 
 
+def peak_coverage(peaks: BlobSet, reference: BlobSet, n: int = 300, t1_s: float = 10.0, t2_s: float = 0.1) -> float:
+    """Share of the `n` largest `reference` peaks with a `peaks` apex within `t1_s` and `t2_s`.
+
+    A plain check that one peak list sits on the same peaks as another found on the same run
+    and fold (MS-aware components against legacy blobs: about half on the real standards,
+    as the two methods split and merge peaks differently; a list found at another fold falls
+    far below that)."""
+    if reference is None or len(reference) == 0:
+        return float("nan")
+    if peaks is None or len(peaks) == 0:
+        return 0.0
+    top = np.argsort(-reference.volume)[:n]
+    hit = [np.min(_wrapped_distance(peaks.t1, peaks.t2, reference.t1[i], reference.t2[i], t1_s, t2_s,
+                                    reference.period)) <= 1.0 for i in top]
+    return float(np.mean(hit))
+
+
 def peaks_from_components(peaks, fold, wrap_below_s: float = 0.5) -> ComponentBlobs:
     """`ComponentPeaks` from `peaktable.respectrum_components` wrapped as `ComponentBlobs`."""
     frame = make_frame(fold, PeakSettings(wrap_below_s=wrap_below_s))

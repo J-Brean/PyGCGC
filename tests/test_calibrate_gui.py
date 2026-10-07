@@ -401,6 +401,20 @@ def test_the_main_windows_ms_aware_peaks_are_used_as_they_are(qtbot, cal_folder,
     mw.undo.clear()
 
 
+def test_phases_are_left_alone_when_most_runs_disagree(qtbot, cal_folder):
+    # On the real standards a bad set of peaks once moved every run's phase. Lining up exists to
+    # bring a stray run back to the others; with no majority to bring it back to, nothing moves.
+    w = _open(qtbot, cal_folder)
+    w.project.set_phases({i: (GUI_PHASE + 0.3 * i, "manual", "") for i in range(len(w.project.entries))})
+    _process(qtbot, w)
+    before = [e.phase for e in w.project.entries]
+    assert not w.line_up_phases(min_pairs=3)
+    assert [e.phase for e in w.project.entries] == before
+    assert "disagree" in w.statusBar().currentMessage()
+    w.jobs.cancel_all()
+    w.jobs.wait(5000)
+
+
 def test_standards_get_their_own_period_not_the_main_windows(qtbot, window, cal_folder, tmp_path):
     # The main window's runs are at one period (set by hand here); standards in a folder
     # without a method.json are folded at the period estimated from themselves.

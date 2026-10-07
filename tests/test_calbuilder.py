@@ -293,6 +293,17 @@ def test_noise_blobs_are_neither_suggested_nor_used_to_line_up_phases():
     assert all(np.isnan(o) or abs(o) < 0.05 for o, _ in off.values())
 
 
+def test_peak_coverage_tells_peaks_found_at_another_fold(blobs_by_run):
+    # Components taken from elsewhere are checked against the run's own blobs: the same peaks
+    # cover each other; peaks found at another fold (here: t2 off by 0.5 s) do not.
+    from dataclasses import replace
+    from pygcgc.core.calbuilder import peak_coverage
+    b = blobs_by_run["CAL_L2"]
+    assert peak_coverage(b, b) == 1.0
+    assert peak_coverage(replace(b, t2=b.t2 + 0.5), b) == 0.0
+    assert peak_coverage(replace(b, t1=b.t1[:0], t2=b.t2[:0], volume=b.volume[:0]), b) == 0.0
+
+
 def test_level_amounts_stand_in_for_every_compound_without_its_own(blobs_by_run):
     s = _session()
     for c in s.compounds:

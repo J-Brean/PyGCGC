@@ -49,7 +49,12 @@ from .project import RunEntry
 from ..core.siloxane import SiloxaneSettings, flag_siloxane_blobs
 from ..core.quant import write_dicts
 from .blob_state import LEGACY, MS_AWARE
-from ..core.calbuilder import ComponentBlobs, peaks_from_components
+from ..core.calbuilder import ComponentBlobs, peak_coverage, peaks_from_components
+
+# Share of a run's 300 largest legacy blobs that MS-aware components must sit on before
+# components taken from the main window are trusted (fresh detection on the real standards: 0.51;
+# the bad shared-cache entry of 7 October 2026: 0.21).
+MIN_COVERAGE = 0.35
 from ..core.components import detect_components
 from ..core.peaktable import respectrum_components
 from .dialogs import SettingsDialog
@@ -848,7 +853,13 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self.view.set_empty_message("Choose the standard runs first (tab 1)")
         self.view.set_blob_overlay_visible(True)
         self.renderer.ready.connect(self.view.show_result)
+        self.renderer.ready.connect(self._view_levels)
         self.renderer.ready.connect(lambda _r: self._draw_overlay())
+        self.scale = QtWidgets.QComboBox()
+        for label, key in (("Log", "log"), ("Square root", "sqrt"), ("Linear", "linear")):
+            self.scale.addItem(label, key)
+        self.scale.setToolTip("Colour scale of the chromatogram")
+        self.scale.currentIndexChanged.connect(lambda _i: self._set_scale())
         self.view.pointClicked.connect(self._view_clicked)
         self.view.hovered.connect(lambda t1, t2, v: self.statusBar().showMessage(
             f"t₁ {t1 / 60:.2f} min   t₂ {t2:.3f} s   {v:.4g}", 3000))
@@ -962,6 +973,8 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         view_bar = QtWidgets.QHBoxLayout()
         view_bar.addWidget(QtWidgets.QLabel("Ion"))
         view_bar.addWidget(self.ion)
+        view_bar.addWidget(QtWidgets.QLabel("Scale"))
+        view_bar.addWidget(self.scale)
         view_bar.addWidget(self.all_blobs)
         view_bar.addSpacing(12)
         view_bar.addWidget(QtWidgets.QLabel("A click on the chromatogram:"))
@@ -1416,6 +1429,28 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             self.project.set_period(v)
             self.project.estimate_phases()
 
+    def _set_scale(self) -> None:
+        self.view.set_scale(self.scale.currentData())
+        if self.view.result is not None:
+            self._view_levels(self.view.result)
+
+    def _view_levels(self, result) -> None:
+        """Colour limits that show the peaks against the cleaned background, not just the tallest.
+
+        The shared view starts a cleaned image's log scale at its 90th percentile (most cleaned
+        pixels are noise near zero), which on these sparse calibration runs leaves only the largest
+        peaks in colour and looks like a linear scale. Here the limits run from the median of the
+        pixels with any signal to the 99.9th percentile."""
+        if not result.processed or self.view.scale != "log":
+            return
+        img = np.asarray(result.image, dtype=float)
+        pos = img[np.isfinite(img) & (img > 0)]
+        if pos.size < 10:
+            return
+        lo, hi = np.log10(np.percentile(pos, [50.0, 99.9]))
+        if hi > lo:
+            self.view.set_levels(float(lo), float(hi))
+
     def _set_ion(self) -> None:
         try:
             self.renderer.set_expression(self.ion.text().strip())
@@ -1475,9 +1510,6 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         self._fill_run_table()
 
         def finished():
-            if line_up and self.line_up_phases():
-                self.run_pipeline(on_ready, line_up=False)
-                return
             self.processing = False
             self._blobs_done()
             if on_ready:
@@ -1514,14 +1546,32 @@ class CalibrationWindow(QtWidgets.QMainWindow):
             if not todo:
                 finished()
 
-        def cleaned(results):
-            self.project.set_backgrounds(results, settings, None)
+        def peaks():
             if method == MS_AWARE:
                 components()
+            elif line_up:
+                finished()                  # the legacy blobs used to line up are the peaks
+            else:
+                self._stage = "🔍 finding blobs"
+                self._update_guide()
+                self.project.blobs.run_all(on_done=finished, method=LEGACY)
+
+        def lined_up():
+            # Phases are lined up on legacy blobs, which take a minute a run and were checked on
+            # real standards; MS-aware components then need finding only once, at the final fold.
+            if self.line_up_phases():
+                self.run_pipeline(on_ready, line_up=False)
                 return
-            self._stage = "🔍 finding blobs"
-            self._update_guide()
-            self.project.blobs.run_all(on_done=finished, method=method)
+            peaks()
+
+        def cleaned(results):
+            self.project.set_backgrounds(results, settings, None)
+            if line_up:
+                self._stage = "🔍 finding blobs to line the phases up"
+                self._update_guide()
+                self.project.blobs.run_all(on_done=lined_up, method=LEGACY)
+            else:
+                peaks()
 
         self.say("🧹 Cleaning the standard runs…")
         self.project.compute_background(idx, settings, None, on_done=cleaned)
@@ -1548,8 +1598,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
 
     def _component_work(self, project, i: int, preset=None, raw=None, fold=None, clean=None, bg_key=None):
         """A job making one run's MS-aware peak list: the given component set, or components found
-        (through the shared cache, under the key the main window's 🔍 step uses), re-solved on
-        every ion. Standards pass their builder project index; samples pass the main project's
+        (cached under the builder's own key), re-solved on every ion. Standards pass their builder project index; samples pass the main project's
         index with their own raw run, fold and cleaning."""
         comp = self.project.blobs.component_settings
         wrap = comp.candidates.wrap_below_s
@@ -1560,14 +1609,28 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         bg_key = project.base_key(i) if (bg_key is None and clean is None) else bg_key
         floor = storage_threshold(raw) / 3.0
         name = e.name
+        # Legacy blobs of this run at this fold, when the line-up step found them: a check on
+        # components taken from elsewhere.
+        legacy = project.blobs.by_run.get(e) if project is self.project else None
 
         def work(token, progress):
             if preset is not None:
                 cs, run = preset                 # the main window's own peaks, on its own data
+                if legacy is not None:
+                    peaks, _model, _footprint = respectrum_components(run, fold, cs, wrap_below_s=wrap)
+                    taken = peaks_from_components(peaks, fold, wrap)
+                    if peak_coverage(taken, legacy) >= MIN_COVERAGE:
+                        return taken
+                    # They do not sit on this run's peaks (found at another fold or by other code):
+                    # find them again here.
+                    cs, run = None, base if clean is None else clean()
             else:
                 cs, run = None, clean() if clean is not None else base
             if cs is None:
-                key = _hash_key(bg_key, MS_AWARE, comp.to_dict(), floor) if bg_key else None
+                # The builder's own key: on 7 October 2026 the entry shared with the main window's 🔍
+                # step for one real standard held components that matched its peaks far worse than a
+                # fresh detection (64 of its 300 largest blobs against 153), origin unknown.
+                key = _hash_key(bg_key, MS_AWARE, comp.to_dict(), floor, "calbuilder-1") if bg_key else None
                 cs = project.cached(key, lambda: detect_components(
                     run, fold, name, comp, floor=floor, cancel=token.check,
                     progress=lambda done, total: progress(done, total, "Separating overlapping components")))[2]
@@ -1606,17 +1669,27 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         `min_shift` are made. Returns whether any phase moved (blobs must then be found
         again)."""
         p = self.project
-        names = [e.name for e in p.entries if self.peaks.get(e) is not None]
+        # Always on legacy blobs (MS-aware components broke this on the real standards: every run
+        # was moved, by up to 1.2 s), so a run's phase is settled before components are fitted.
+        legacy = {e.name: p.blobs.by_run.get(e) for e in p.entries}
+        names = [n for n, b in legacy.items() if b is not None]
         if len(names) < 2:
             return False
-        blobs = self.blobs_by_run()
-        offsets = t2_offsets({n: blobs[n] for n in names}, names[0], self.usable_masks(), min_pairs=min_pairs)
+        sil = SiloxaneSettings()
+        usable = {n: usable_blobs(legacy[n], p.period) & ~flag_siloxane_blobs(legacy[n], sil) for n in names}
+        offsets = t2_offsets({n: legacy[n] for n in names}, names[0], usable, min_pairs=min_pairs)
         good = {n: o for n, (o, _pairs) in offsets.items() if np.isfinite(o)}
         if len(good) < 2:
             return False
         centre = float(np.median(list(good.values())))
         moves = {n: o - centre for n, o in good.items() if abs(o - centre) > min_shift}
         if not moves:
+            return False
+        if len(moves) * 2 > len(good):
+            # The point is to bring a stray run or two back to the rest; when most runs disagree,
+            # there is no "rest", and moving them would only make things worse.
+            self.say("Phases not lined up: the runs disagree about where their peaks sit (" +
+                     ", ".join(f"{n} {o:+.2f} s" for n, o in good.items()) + "). Check the phases in tab 1.")
             return False
         phases = {}
         for n, move in moves.items():
@@ -1631,6 +1704,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         p.blobs.by_run = {}
         self.ms_peaks = {}
         p.set_phases(phases)
+        self.processing = True               # set_phases refreshes the guide; this pass is not over
         self.say("Phases lined up: " + ", ".join(f"{n} {-m:+.2f} s" for n, m in moves.items())
                  + "; cleaning and finding blobs again")
         return True
