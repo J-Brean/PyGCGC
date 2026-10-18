@@ -11,6 +11,14 @@ from pygcgc.core.overlap import (BlobCube, _emg_1d, _shape, fit_shapes_fast,
                                   predict_overlap, refit_spectra)
 
 
+def test_old_project_uses_corrected_fitting_defaults_without_losing_custom_budgets():
+    upgraded = ComponentDetectionSettings.from_dict({'fast_max_nfev': 24})
+    assert upgraded.adaptive_shapes and upgraded.fast_max_nfev == 60
+    assert ComponentDetectionSettings.from_dict({'fast_max_nfev': 120}).fast_max_nfev == 120
+    explicit = ComponentDetectionSettings.from_dict({'adaptive_shapes': False, 'fast_max_nfev': 24})
+    assert not explicit.adaptive_shapes and explicit.fast_max_nfev == 24
+
+
 def test_emg_rendering_is_independent_of_which_pixels_are_requested():
     x = np.arange(40.0)
     whole = _emg_1d(x, 12.3, 2.1, 5.0)

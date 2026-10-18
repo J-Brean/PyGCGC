@@ -101,6 +101,11 @@ class ComponentDetectionSettings:
     @classmethod
     def from_dict(cls, data: dict) -> "ComponentDetectionSettings":
         data = dict(data or {})
+        # Older projects saved the previous fast default. Upgrade that default
+        # for the corrected solver, while retaining other explicit budgets and
+        # all settings already saved with the adaptive fitter.
+        if 'adaptive_shapes' not in data and data.get('fast_max_nfev') == 24:
+            data['fast_max_nfev'] = cls().fast_max_nfev
         data["candidates"] = CandidateSettings.from_dict(data.get("candidates", {}))
         return cls(**{key: value for key, value in data.items()
                       if key in cls.__dataclass_fields__})
