@@ -179,10 +179,17 @@ class IstdMatch:
     n_passing: int = 0                  # peaks passing all three thresholds; more than one is worth a look
     n_drift_anchors: int = 0            # other standards the expected position came from
     reason: str = ""
+    peak_confidence: str = ""
+    peak_unresolved: bool = False
 
     @property
     def found(self) -> bool:
         return self.status == FOUND
+
+    @property
+    def needs_review(self) -> bool:
+        """A passing spectral match can still belong to an uncertain peak fit."""
+        return self.found and (self.n_passing > 1 or self.peak_unresolved or self.peak_confidence == "low")
 
     @property
     def off_t1(self) -> float:
@@ -259,10 +266,18 @@ def find_istd_on_run(reference: IstdReference, run_name: str, peaks,
         status = NOT_FOUND
         reason = (f"{box.size} peak(s) in position, best spectral match {spectral:.2f} "
                   f"below {settings.min_spectral:.2f}")
+    confidence = getattr(peaks, "confidence", [])
+    unresolved = getattr(peaks, "unresolved", [])
+    peak_confidence = str(confidence[i]) if len(confidence) > i else ""
+    peak_unresolved = bool(unresolved[i]) if len(unresolved) > i else False
+    if status == FOUND and (peak_unresolved or peak_confidence == "low"):
+        warning = "Peak fit is unresolved or has low confidence; review this match"
+        reason = f"{reason}. {warning}" if reason else warning
     return IstdMatch(status=status, peak_id=_peak_id(peaks, i), t1=float(t1[i]), t2=float(t2[i]),
                      dt1=float(t1[i] - reference.t1), dt2=float(t2[i] - reference.t2),
                      spectral_score=float(spectral), forward=float(forward), reverse=float(reverse),
-                     n_passing=int(n_passing), reason=reason, **base)
+                     n_passing=int(n_passing), reason=reason, peak_confidence=peak_confidence,
+                     peak_unresolved=peak_unresolved, **base)
 
 
 def match_run(references: list[IstdReference], run_name: str, peaks,
@@ -335,7 +350,8 @@ def references_to_targets(references: list[IstdReference], n_quals: int = 2, min
 # ------------------------------------------------------------------ report
 REPORT_FIELDS = ["run", "name", "status", "t1_min", "t2_s", "dt1_s", "dt2_s", "off_expected_t1_s",
                  "off_expected_t2_s", "spectral_match", "forward", "reverse", "n_passing", "n_drift_anchors",
-                 "max_dt1_s", "max_dt2_s", "min_spectral", "reason"]
+                 "max_dt1_s", "max_dt2_s", "min_spectral", "reason",
+                 "peak_confidence", "peak_unresolved", "needs_review"]
 
 
 def build_report(matches: list[IstdMatch], settings: IstdMatchSettings = IstdMatchSettings()) -> list[dict]:
@@ -344,7 +360,8 @@ def build_report(matches: list[IstdMatch], settings: IstdMatchSettings = IstdMat
                  off_expected_t1_s=m.off_t1, off_expected_t2_s=m.off_t2, spectral_match=m.spectral_score,
                  forward=m.forward, reverse=m.reverse, n_passing=m.n_passing, n_drift_anchors=m.n_drift_anchors,
                  max_dt1_s=settings.max_dt1, max_dt2_s=settings.max_dt2, min_spectral=settings.min_spectral,
-                 reason=m.reason)
+                 reason=m.reason, peak_confidence=m.peak_confidence,
+                 peak_unresolved=m.peak_unresolved, needs_review=m.needs_review)
             for m in matches]
 
 
