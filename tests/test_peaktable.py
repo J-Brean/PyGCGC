@@ -84,3 +84,32 @@ def test_signal_accounting_flags_a_peak_the_model_does_not_contain(scene):
     assert not top["inside_a_fitted_footprint"]
     assert top["t2_s"] == pytest.approx(115 * 0.02, abs=0.4)
     assert report["percent_unexplained_outside_all_peaks"] > 5.0
+
+
+def test_downstream_spectra_use_the_same_constrained_solve_as_the_fitter(scene):
+    from pygcgc.core.candidates import CandidateRegion, _fold_region
+    from pygcgc.core.components import component_profiles_from_durable
+    from pygcgc.core.overlap import BlobCube, initialise_overlap, refit_spectra
+    from pygcgc.core.peaks import PeakSettings, make_frame
+
+    run, folded, found, *_ = scene
+    peaks, *_ = respectrum_components(run, folded, found)
+    offset = 0
+    frame = make_frame(folded, PeakSettings())
+    for group in found.groups:
+        region = CandidateRegion((), group.row0, group.row0 + group.n_rows,
+                                  group.col0, group.col0 + group.n_cols)
+        data = _fold_region(run, folded, np.arange(run.n_mz), region, frame.wrap_rows)
+        cube = BlobCube(data, np.ones(data.shape[:2], bool), run.mz,
+                         group.row0, group.col0, group.pitch, group.period, group.t1_start)
+        # Reconstruct shapes through the durable representation, independently
+        # of the downstream adapter's coefficients.
+        shaped = initialise_overlap(cube, len(group.components))
+        shaped.model = 'template'
+        shaped.profiles = np.stack([component_profiles_from_durable(c, cube.mask.shape)
+                                    for c in group.components], axis=2)
+        fit = refit_spectra(shaped, cube)
+        for component in fit.components:
+            np.testing.assert_allclose(peaks.spectra[offset], component.spectrum, rtol=2e-6, atol=1e-5)
+            assert peaks.volume[offset] == pytest.approx(component.volume, rel=2e-6)
+            offset += 1

@@ -382,7 +382,7 @@ def test_fast_shared_width_fit_recovers_two_known_overlapping_areas():
     cube = BlobCube(data, np.ones(rr.shape, bool), np.array([50, 51, 52, 53]),
                     0, 0, 0.02, 10.0, 0.0)
     hints = [SimpleNamespace(row=r, col=c) for r, c in centres]
-    shaped = fit_shapes_fast(cube, 2, apex_hint=hints, max_nfev=30)
+    shaped = fit_shapes_fast(cube, 2, apex_hint=hints, max_nfev=30, shared_widths=True)
     fit = refit_spectra(shaped, cube, background_order=1)
     truth = [profile.sum() * spectrum.sum()
              for profile, spectrum in zip(profiles, spectra)]

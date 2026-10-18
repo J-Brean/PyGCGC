@@ -60,7 +60,8 @@ class ComponentDetectionSettings:
     max_ions: int = 30
     fast_max_sigma_row: float = 3.0
     fast_max_sigma_col: float = 1.2
-    fast_max_nfev: int = 24
+    fast_max_nfev: int = 60
+    adaptive_shapes: bool = True
     # Model-order selection. "pursuit" grows each window's model from one peak and
     # accepts extra peaks only when spectra and held-out data justify them (see
     # modelselect.py); "seeds" is the older behaviour in which the number of
@@ -345,7 +346,11 @@ def write_components_csv(component_set: ComponentSet, path,
 
 def component_profiles_from_durable(component: Component,
                                     shape: tuple[int, int]) -> np.ndarray:
-    """Reconstruct one normalised analytic profile from stored parameters."""
+    """Restore the measured profile or render the stored analytic parameters."""
+    if component.profile.size:
+        if component.profile.shape != shape:
+            raise ValueError("stored component profile does not match its fit window")
+        return np.asarray(component.profile, dtype=float)
     from .overlap import OverlapComponent
 
     fitted = OverlapComponent(
@@ -626,13 +631,16 @@ def _fit_windows(run, fold, candidates, windows: list, run_name: str,
     workers = min(max(1, int(settings.workers)), max(len(windows), 1))
     groups = []
     if workers == 1 or len(windows) < 2:
-        for done, (index, region) in enumerate(windows, start=1):
-            if cancel is not None:
-                cancel()
-            groups.append(_fit_candidate_cubes(
-                *_prepare_window(run, fold, candidates, region, index, run_name, settings)))
-            if progress is not None:
-                progress(done, len(windows))
+        # These are many small solves, not one large matrix operation. Letting
+        # each solve start a BLAS thread pool makes numerical derivatives slow.
+        with threadpool_limits(limits=1):
+            for done, (index, region) in enumerate(windows, start=1):
+                if cancel is not None:
+                    cancel()
+                groups.append(_fit_candidate_cubes(
+                    *_prepare_window(run, fold, candidates, region, index, run_name, settings)))
+                if progress is not None:
+                    progress(done, len(windows))
         return groups
     with ProcessPoolExecutor(
             max_workers=workers, initializer=_limit_component_worker_threads) as executor:

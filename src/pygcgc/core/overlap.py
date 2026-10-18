@@ -63,11 +63,10 @@ cost of more assumptions:
    extra machinery hasn't been available, the same reasoning that has
    kept 🫧's ROC threshold and ⛓️'s qualifier-ratio gate provisional.
 
-The candidate-region path has now been exercised on one crowded real region,
-but without known chemical truth. Synthetic and software-copy recovery tests
-provide known numerical answers; identified co-eluting standards are still
-needed for chemical validation. See ROADMAP.md and
-docs/history/blob-diagnosis-and-plan.md.
+Fitting has been compared in 32 windows from four calibration acquisitions.
+Known-area injections on measured backgrounds test numerical recovery;
+identified co-eluting standards are still needed for chemical validation.
+See docs/validation/peak-fitting-2026-10-18.md and ROADMAP.md.
 """
 
 from __future__ import annotations
@@ -298,13 +297,14 @@ def _cell_gaussian_1d(x: np.ndarray, x0: float, s: float) -> np.ndarray:
 def _emg_1d(x: np.ndarray, x0: float, sigma: float, tau: float) -> np.ndarray:
     """Exponentially modified Gaussian (a Gaussian elution profile with
     an exponential tail, `tau` its time constant), in the numerically
-    stable log-CDF form. The returned profile is scaled to a maximum of one;
-    its fitted linear coefficient absorbs that arbitrary scale."""
+    stable log-CDF form. Scaling depends only on the parameters, so rendering a
+    subset of pixels gives exactly the same values as rendering the full image.
+    The fitted linear coefficient absorbs the scale."""
     sigma, tau = max(sigma, 1e-6), max(tau, 1e-6)
     dx = np.asarray(x, dtype=float) - x0
     log_profile = (-np.log(tau) + sigma ** 2 / (2.0 * tau ** 2) - dx / tau +
                    log_ndtr(dx / sigma - sigma / tau))
-    log_profile -= np.max(log_profile)
+    log_profile += np.log(sigma * np.sqrt(2.0 * np.pi))
     return np.exp(np.clip(log_profile, -745.0, 0.0))
 
 
@@ -558,17 +558,18 @@ def fit_shapes_fast(cube: BlobCube, k: int, model: str = "gaussian",
                     max_nfev: int = 12, position_rows: float = 1.0,
                     position_cols: float = 0.6, max_sigma_row: float = 3.0,
                     max_sigma_col: float = 1.2,
-                    shared_widths: bool = True) -> OverlapFit:
-    """Fit positions and widths with a vectorised approximate spectral solve.
+                    shared_widths: bool = False) -> OverlapFit:
+    """Fit local shapes with the same constrained objective as the final spectra.
 
-    The production spectrum is solved later by :func:`refit_spectra`.  Here a
-    shared pixel weight and one matrix solve replace an NNLS call per ion at
-    every nonlinear iteration, making run-wide shape refinement practical.
+    Spectra stay non-negative, while the local background can be signed after
+    cleaning. Widths are independent unless explicitly shared. Projected
+    derivatives include the change in the re-solved spectra; holding spectra
+    fixed gave an inconsistent Jacobian and frequent false non-convergence.
     """
     rows, cols = np.nonzero(cube.mask)
     rr, cc = rows.astype(float), cols.astype(float)
     data = cube.data[rows, cols].astype(float)
-    pixel_weight = 1.0 / np.sqrt(np.clip(data.mean(axis=1), 1.0, None))
+    weights = 1.0 / np.sqrt(np.clip(data, 1.0, None))
     if background_order == 1:
         rn = rr / max(cube.mask.shape[0] - 1, 1)
         cn = cc / max(cube.mask.shape[1] - 1, 1)
@@ -591,11 +592,9 @@ def fit_shapes_fast(cube: BlobCube, k: int, model: str = "gaussian",
     hi_matrix[:, 3] = np.minimum(hi_matrix[:, 3], max_sigma_col)
     initial = np.clip(initial, lo, hi)
 
-    # Nearby GCxGC peaks normally pass through the same column system and have
-    # similar widths.  Sharing the two Gaussian widths gives a weak component
-    # far less freedom to absorb background by becoming a very broad peak.  It
-    # also removes two nonlinear parameters for every component after the
-    # first.  More flexible peak models retain their independent parameters.
+    # Optional width sharing removes two parameters per additional Gaussian.
+    # Independent widths are the default: enforcing equality biased recovery
+    # when a narrow peak overlapped a broader one in the calibration windows.
     share = bool(shared_widths and model == "gaussian" and k > 1)
     if share:
         initial_matrix = initial.reshape(k, p)
@@ -620,71 +619,33 @@ def fit_shapes_fast(cube: BlobCube, k: int, model: str = "gaussian",
         def expand(theta):
             return theta
 
-    def solve(theta, return_coefficients=False):
-        peaks = _shapes_from_theta(theta, k, model, rr, cc)
-        design = np.column_stack((peaks, background))
-        weighted_design = design * pixel_weight[:, None]
-        weighted_data = data * pixel_weight[:, None]
-        coefficients, *_ = np.linalg.lstsq(weighted_design, weighted_data, rcond=None)
-        peak_coefficients = np.maximum(coefficients[:k], 0.0)
-        remainder = weighted_data - (peaks * pixel_weight[:, None]) @ peak_coefficients
-        background_coefficients, *_ = np.linalg.lstsq(
-            background * pixel_weight[:, None], remainder, rcond=None)
-        coefficients = np.vstack((peak_coefficients, background_coefficients))
-        prediction = design @ coefficients
-        return (prediction, peak_coefficients) if return_coefficients else prediction
+    cached = {}
+
+    def solve(theta):
+        if 'theta' not in cached or not np.array_equal(cached['theta'], theta):
+            peaks = _shapes_from_theta(expand(theta), k, model, rr, cc)
+            design = np.column_stack((peaks, background))
+            coefficients = _solve_linear(design, data, True, weights, n_nonnegative=k)
+            cached.update(theta=theta.copy(), peaks=peaks, design=design,
+                          coefficients=coefficients, residual=(design@coefficients-data)*weights)
+        return cached
 
     def residual(theta):
-        return ((solve(expand(theta)) - data) * pixel_weight[:, None]).ravel()
+        return solve(theta)['residual'].ravel()
 
-    def gaussian_jacobian(theta):
-        """Variable-projection Jacobian with the linear spectra held fixed.
+    def jacobian(theta):
+        solved = solve(theta)
+        derivatives = _gaussian_shape_derivatives(
+            expand(theta).reshape(k, p), solved['peaks'], rr, cc)
+        return _projected_shape_jacobian(
+            solved['design'], solved['coefficients'], weights,
+            solved['residual'], derivatives, shared_widths=share)
 
-        The spectra are re-solved at every trial point.  Holding their current
-        values while differentiating the Gaussian profiles is the standard
-        separable-least-squares approximation and avoids two extra complete
-        spectral solves for every nonlinear parameter.
-        """
-        full = expand(theta).reshape(k, p)
-        _prediction, coefficients = solve(full.ravel(), return_coefficients=True)
-        peaks = _shapes_from_theta(full.ravel(), k, model, rr, cc)
-        if share:
-            derivatives = []
-            for j in range(k):
-                r0, c0, sr, sc = full[j, :4]
-                dr = peaks[:, j] * (rr - r0) / max(sr, 1e-6) ** 2
-                dc = peaks[:, j] * (cc - c0) / max(sc, 1e-6) ** 2
-                derivatives.extend((dr[:, None] * coefficients[j][None, :],
-                                    dc[:, None] * coefficients[j][None, :]))
-            width_row = np.zeros_like(data)
-            width_col = np.zeros_like(data)
-            for j in range(k):
-                r0, c0, sr, sc = full[j, :4]
-                dsr = peaks[:, j] * (rr - r0) ** 2 / max(sr, 1e-6) ** 3
-                dsc = peaks[:, j] * (cc - c0) ** 2 / max(sc, 1e-6) ** 3
-                width_row += dsr[:, None] * coefficients[j][None, :]
-                width_col += dsc[:, None] * coefficients[j][None, :]
-            derivatives.extend((width_row, width_col))
-        else:
-            derivatives = []
-            for j in range(k):
-                r0, c0, sr, sc = full[j, :4]
-                dr = peaks[:, j] * (rr - r0) / max(sr, 1e-6) ** 2
-                dc = peaks[:, j] * (cc - c0) / max(sc, 1e-6) ** 2
-                dsr = peaks[:, j] * (rr - r0) ** 2 / max(sr, 1e-6) ** 3
-                dsc = peaks[:, j] * (cc - c0) ** 2 / max(sc, 1e-6) ** 3
-                derivatives.extend((dr[:, None] * coefficients[j][None, :],
-                                    dc[:, None] * coefficients[j][None, :],
-                                    dsr[:, None] * coefficients[j][None, :],
-                                    dsc[:, None] * coefficients[j][None, :]))
-        return np.column_stack([
-            (derivative * pixel_weight[:, None]).ravel()
-            for derivative in derivatives])
-
-    jacobian = gaussian_jacobian if model == "gaussian" else "2-point"
     result = least_squares(residual, reduced_initial,
                            bounds=(reduced_lo, reduced_hi), max_nfev=max_nfev,
-                           ftol=1e-5, xtol=1e-5, gtol=1e-5, jac=jacobian)
+                           ftol=1e-5, xtol=1e-5, gtol=1e-5,
+                           jac=jacobian if model in ('gaussian', 'tilt') else '2-point',
+                           x_scale="jac")
     result_theta = expand(result.x)
     fitted = initialise_overlap(cube, k, model, apex_hint)
     for index, component in enumerate(fitted.components):
@@ -708,6 +669,52 @@ def fit_shapes_fast(cube: BlobCube, k: int, model: str = "gaussian",
     fitted.n_starts = 1
     fitted.restart_position_spread = np.nan  # one start cannot establish stability
     return fitted
+
+
+def _gaussian_shape_derivatives(parameters, peaks, rr, cc):
+    """Profile derivatives for independent or correlated Gaussians."""
+    derivatives = np.zeros((len(rr), *parameters.shape))
+    for j, values in enumerate(parameters):
+        r0, c0, sr, sc = values[:4]
+        rho = values[4] if len(values) == 5 else 0.0
+        zr, zc = (rr-r0)/sr, (cc-c0)/sc
+        den = 1-rho*rho
+        derivatives[:, j, 0] = peaks[:, j]*(zr-rho*zc)/(sr*den)
+        derivatives[:, j, 1] = peaks[:, j]*(zc-rho*zr)/(sc*den)
+        derivatives[:, j, 2] = derivatives[:, j, 0]*zr
+        derivatives[:, j, 3] = derivatives[:, j, 1]*zc
+        if len(values) == 5:
+            derivatives[:, j, 4] = peaks[:, j]*(zr*zc*(1+rho*rho)-rho*(zr*zr+zc*zc))/den**2
+    return derivatives
+
+
+def _projected_shape_jacobian(design, coefficients, weights, residual, derivatives,
+                               shared_widths=False):
+    """Differentiate the constrained separable solve on its current active set.
+
+    Both terms from differentiating the linear optimum are retained. The
+    projection removes changes which the spectra/background can absorb; the
+    second term accounts for a nonzero residual. Inactive spectral coefficients
+    stay zero locally. This agrees with finite differences away from active-set
+    transitions and avoids re-solving every ion for every shape parameter.
+    """
+    n_pixels, k, p = derivatives.shape
+    n_parameters = 2*k+2 if shared_widths else k*p
+    jac = np.zeros((n_pixels, coefficients.shape[1], n_parameters))
+    for ion in range(coefficients.shape[1]):
+        active_peaks = np.flatnonzero(coefficients[:k, ion] > 0)
+        active = np.r_[active_peaks, np.arange(k, design.shape[1])]
+        matrix = design[:, active]*weights[:, ion, None]
+        inverse = np.linalg.pinv(matrix)
+        direct = np.zeros((n_pixels, n_parameters))
+        gradient = np.zeros((len(active), n_parameters))
+        for index, j in enumerate(active_peaks):
+            weighted = derivatives[:, j]*weights[:, ion, None]
+            columns = [2*j, 2*j+1, 2*k, 2*k+1] if shared_widths else list(range(j*p, (j+1)*p))
+            direct[:, columns] += weighted*coefficients[j, ion]
+            gradient[index, columns] = weighted.T@residual[:, ion]
+        jac[:, ion] = direct-matrix@(inverse@direct)-inverse.T@gradient
+    return jac.reshape(-1, n_parameters)
 
 
 def component_maps(fit: OverlapFit, cube: BlobCube) -> np.ndarray:
@@ -764,7 +771,8 @@ def refit_spectra(fit: OverlapFit, cube: BlobCube,
         for index, component in enumerate(fit.components)]
     n_background = background_basis.shape[1]
     n_shape_parameters = (fit.n_shape_parameters or
-                          fit.k * _n_shape_params(fit.model))
+                          (2 * fit.k if fit.model == 'template'
+                           else fit.k * _n_shape_params(fit.model)))
     n_parameters = int(n_shape_parameters
                        + (fit.k + n_background) * data.shape[1])
     n_obs = data.size

@@ -12,9 +12,9 @@ is accepted only when every one of these holds:
    allowed to be broad. A single wide peak is therefore the null hypothesis.
 2. The peak carries a mass spectrum different from every peak it overlaps
    (cosine similarity below ``distinct_cosine``), or it is spatially resolved from
-   them (centres more than ``resolved_sigma`` widths apart). Two components
-   with the same spectrum sitting on top of one another describe one compound
-   whose shape is not Gaussian, not two compounds.
+   them (centres more than ``resolved_sigma`` widths apart). Two overlapping
+   components with indistinguishable spectra are not sufficient evidence for
+   two compounds: one non-Gaussian profile can also explain that signal.
 3. It carries at least ``min_relative_volume`` of the window's signal.
 4. Refitting on held-out spatial blocks improves reconstruction in most folds.
 
@@ -25,6 +25,10 @@ an unresolved shoulder is visible to the user rather than silently absorbed.
 Model comparisons run on a handful of diagnostic ions (the screening cube). The
 spectra used to judge distinctness and reported to the user come from the wider
 ion set.
+
+With adaptive shapes enabled, each count is compared as independent Gaussians
+and correlated Gaussians. Correlation must earn the additional BIC penalty;
+neighbouring compounds are never forced to have identical widths.
 """
 
 from __future__ import annotations
@@ -56,28 +60,35 @@ def spectral_cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def separation_in_widths(a, b) -> float:
-    """Distance between two fitted peaks in units of their mean Gaussian widths."""
+    """Distance in mean peak widths, accounting for fitted axis correlation."""
     sigma_row = max(0.5 * (a.sigma_row + b.sigma_row), 1e-6)
     sigma_col = max(0.5 * (a.sigma_col + b.sigma_col), 1e-6)
-    return float(np.hypot((a.row0 - b.row0) / sigma_row, (a.col0 - b.col0) / sigma_col))
+    dr, dc = (a.row0-b.row0)/sigma_row, (a.col0-b.col0)/sigma_col
+    rho = np.clip(.5*((getattr(a, 'rho', None) or 0.0)
+                         +(getattr(b, 'rho', None) or 0.0)), -.95, .95)
+    return float(np.sqrt(max((dr*dr+dc*dc-2*rho*dr*dc)/(1-rho*rho), 0)))
 
 
 def has_valley(a, b, depth: float = 0.95) -> bool:
     """True when the summed profile of two fitted peaks dips between their centres.
 
-    Two same-spectrum peaks are separate compounds only if the data show them as
-    two maxima. A tail on one peak gives a second component that never produces
+    We accept two same-spectrum peaks as separate components only when their
+    combined profile shows two maxima. A tail gives a second component without
     a dip, however far away it sits. Heights follow from volume and widths.
     """
     def amplitude(p):
-        return p.volume / max(2.0 * np.pi * p.sigma_row * p.sigma_col, 1e-12)
+        rho = getattr(p, 'rho', None) or 0.0
+        return p.volume / max(2.0 * np.pi * p.sigma_row * p.sigma_col
+                              * np.sqrt(1-rho*rho), 1e-12)
 
     t = np.linspace(0.0, 1.0, 41)
     rows = a.row0 + t * (b.row0 - a.row0)
     cols = a.col0 + t * (b.col0 - a.col0)
-    total = sum(amplitude(p) * np.exp(-0.5 * (((rows - p.row0) / p.sigma_row) ** 2
-                                              + ((cols - p.col0) / p.sigma_col) ** 2))
-                for p in (a, b))
+    total = np.zeros_like(rows)
+    for p in (a, b):
+        dr, dc = (rows-p.row0)/p.sigma_row, (cols-p.col0)/p.sigma_col
+        rho = getattr(p, 'rho', None) or 0.0
+        total += amplitude(p)*np.exp(-.5*(dr*dr+dc*dc-2*rho*dr*dc)/(1-rho*rho))
     return bool(total[1:-1].min() < depth * min(total[0], total[-1]))
 
 
@@ -101,14 +112,21 @@ class _Search:
 
     # ------------------------------------------------------------------ fitting
     def fit(self, cube: BlobCube, hints: list, slack=(1.0, 0.6)) -> OverlapFit:
-        self.n_fits += 1
-        shaped = fit_shapes_fast(
-            cube, len(hints), model="gaussian", apex_hint=hints,
-            background_order=self.s.screening_background_order,
-            max_nfev=self.s.fast_max_nfev, position_rows=slack[0], position_cols=slack[1],
-            max_sigma_row=self.caps[0], max_sigma_col=self.caps[1])
-        return refit_spectra(shaped, cube, include_background=True,
-                             background_order=self.s.screening_background_order)
+        fits = []
+        models = ("gaussian", "tilt") if self.s.adaptive_shapes else ("gaussian",)
+        for model in models:
+            self.n_fits += 1
+            shaped = fit_shapes_fast(
+                cube, len(hints), model=model, apex_hint=hints,
+                background_order=self.s.background_order,
+                max_nfev=self.s.fast_max_nfev, position_rows=slack[0], position_cols=slack[1],
+                max_sigma_row=self.caps[0], max_sigma_col=self.caps[1])
+            fits.append(refit_spectra(shaped, cube, include_background=True,
+                                      background_order=self.s.background_order))
+        # Retain the simpler shape unless correlation earns its extra parameters.
+        if len(fits) == 2 and fits[1].bic + self.s.min_bic_gap < fits[0].bic:
+            return fits[1]
+        return fits[0]
 
     def with_shapes(self, fit: OverlapFit, keep: list, extra=None) -> OverlapFit:
         """The same fitted shapes with some peaks dropped and/or one more added.
@@ -123,14 +141,15 @@ class _Search:
             components.append(OverlapComponent(
                 row0=float(extra[0]), col0=float(extra[1]), sigma_row=sigma_row,
                 sigma_col=sigma_col, tau=None, t1=0.0, t2=0.0, volume=0.0,
-                spectrum=np.zeros(self.screen.data.shape[2]), row0_se=np.nan, col0_se=np.nan))
+                spectrum=np.zeros(self.screen.data.shape[2]), row0_se=np.nan, col0_se=np.nan,
+                rho=0.0 if fit.model == "tilt" else None))
         k = len(components)
         return replace(fit, k=k, components=components,
-                       n_shape_parameters=2 * k + 2 if k > 1 else 4)
+                       n_shape_parameters=k * (5 if fit.model == "tilt" else 4))
 
     def linear(self, shaped: OverlapFit) -> OverlapFit:
         return refit_spectra(shaped, self.screen, include_background=True,
-                             background_order=self.s.screening_background_order)
+                             background_order=self.s.background_order)
     def on_full(self, fit: OverlapFit) -> OverlapFit:
         return refit_spectra(fit, self.full, include_background=True,
                              background_order=self.s.background_order)

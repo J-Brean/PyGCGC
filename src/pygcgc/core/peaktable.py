@@ -23,6 +23,7 @@ from scipy import ndimage as ndi
 from .candidates import CandidateRegion, _fold_region
 from .components import ComponentSet, component_profiles_from_durable
 from .peaks import PeakSettings, make_frame
+from .overlap import _solve_linear
 
 
 @dataclass
@@ -56,9 +57,9 @@ def respectrum_components(run, fold, component_set: ComponentSet, wrap_below_s: 
     Returns ``(peaks, model_tic, footprint)``. ``model_tic`` is the summed-ion image
     of all components in the extended frame; ``footprint`` marks pixels within three
     fitted widths of a component. Per window: fold every ion into the window, solve
-    all ions at once with a shared pixel weight, keep the peak coefficients
-    non-negative and let a bilinear background follow the signed residual (the same
-    approximation the rapid shape fit uses, so amounts are comparable with it).
+    each ion with the same count weights and non-negative spectral constraints
+    as the shape fitter. A bilinear background follows signed cleaning residuals.
+    Clipping an unconstrained solution is insufficient when peak profiles overlap.
     """
     frame = make_frame(fold, PeakSettings(wrap_below_s=wrap_below_s))
     shape = (frame.rows, len(frame.mid_t1))
@@ -80,16 +81,16 @@ def respectrum_components(run, fold, component_set: ComponentSet, wrap_below_s: 
         if profiles is None:
             continue
         flat = data.reshape(-1, n_ions)
-        weight = 1.0 / np.sqrt(np.clip(flat.mean(axis=1), 1.0, None))
+        weights = 1.0 / np.sqrt(np.clip(flat, 1.0, None))
         peak_design = profiles.reshape(-1, profiles.shape[2])
         rr, cc = np.indices((n_rows, n_cols), dtype=float)
         rn, cn = rr.ravel() / max(n_rows - 1, 1), cc.ravel() / max(n_cols - 1, 1)
         background = (np.column_stack(((1 - rn) * (1 - cn), (1 - rn) * cn, rn * (1 - cn), rn * cn))
                       if background_order == 1 else np.ones((rn.size, 1)))
         k = peak_design.shape[1]
-        coef, *_ = np.linalg.lstsq(np.column_stack((peak_design, background)) * weight[:, None],
-                                   flat * weight[:, None], rcond=None)
-        peak_coef = np.maximum(coef[:k], 0.0)
+        coef = _solve_linear(np.column_stack((peak_design, background)), flat,
+                             True, weights, n_nonnegative=k)
+        peak_coef = coef[:k]
         for j, component in enumerate(group.components):
             profile = profiles[:, :, j]
             spectrum = peak_coef[j]
