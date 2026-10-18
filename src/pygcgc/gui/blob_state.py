@@ -157,8 +157,26 @@ class BlobState(QtCore.QObject):
         self.running = True
         self.runningChanged.emit(True)
         remaining = set(entries)
+        unsuccessful = set()
         settings = self.settings
         component_settings = self.component_settings
+
+        def finished(entry, success: bool) -> None:
+            if not success:
+                unsuccessful.add(entry)
+            remaining.discard(entry)
+            if remaining:
+                return
+            self.running = False
+            if not unsuccessful:
+                if method == MS_AWARE:
+                    self.candidates_were_run = True
+                else:
+                    self.was_run = True
+            self.runningChanged.emit(False)
+            self.changed.emit()
+            if not unsuccessful and on_done:
+                on_done()
 
         for e in entries:
             idx = self.project.entries.index(e)
@@ -172,12 +190,16 @@ class BlobState(QtCore.QObject):
             def work(token, progress, run=run, fold=fold, edits=edits,
                      raw_floor=raw_floor, run_name=e.name, key=key):
                 if method == MS_AWARE:
+                    current_stage = ["Finding candidate peaks"]
+                    def stage(message):
+                        current_stage[0] = message
+                        progress(0, 0, message)
                     def report(done, total):
-                        progress(done, total, "Separating overlapping components")
+                        progress(done, total, current_stage[0])
                     progress(0, 0, "Finding candidate peaks")      # the first stage reports nothing itself
                     return self.project.cached(key, lambda: detect_components(
                         run, fold, run_name, component_settings, floor=raw_floor, progress=report,
-                        cancel=token.check))
+                        cancel=token.check, stage=stage))
                 blobs = self.project.cached(key, lambda: find_blobs(run, fold, settings, floor=raw_floor))
                 return _replay(blobs, run, fold, edits)
 
@@ -207,30 +229,15 @@ class BlobState(QtCore.QObject):
                 else:
                     self.by_run[e] = result
                     self.stale.discard(e)
-                remaining.discard(e)
-                if not remaining:
-                    self.running = False
-                    if method == MS_AWARE:
-                        self.candidates_were_run = True
-                    else:
-                        self.was_run = True
-                    self.runningChanged.emit(False)
-                    self.changed.emit()
-                    if on_done:
-                        on_done()
+                finished(e, True)
 
             def failed(text, e=e):
                 self.project.message.emit(f"🔍 {e.name} failed: {text}")
-                remaining.discard(e)
-                if not remaining:
-                    self.running = False
-                    self.runningChanged.emit(False)
-                    self.changed.emit()
-                    if on_done:
-                        on_done()
+                finished(e, False)
 
             label = "MS-aware peaks" if method == MS_AWARE else "legacy blobs"
-            self.project.jobs.submit(f"🔍 Finding {label}: {e.name}", work, done, failed)
+            self.project.jobs.submit(f"🔍 Finding {label}: {e.name}", work, done, failed,
+                                     on_cancel=lambda e=e: finished(e, False))
         return True
 
     # ------------------------------------------------------------ editing

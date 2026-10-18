@@ -95,6 +95,20 @@ def test_a_peak_passing_all_three_thresholds_is_found():
     assert m.n_passing == 1 and m.reason == ""
 
 
+@pytest.mark.parametrize("confidence,unresolved", [("low", False), ("provisional", True)])
+def test_a_strong_spectral_match_keeps_the_peak_fit_warning(confidence, unresolved):
+    reference = _reference(500.0, 2.0, REF_MZ, REF_I)
+    peaks = _blob_set([(505.0, 2.1, REF_MZ, REF_I)])
+    peaks.confidence = [confidence]
+    peaks.unresolved = np.array([unresolved])
+    match = find_istd_on_run(reference, "sample", peaks)
+    assert match.found and match.spectral_score > .99
+    assert match.needs_review and "review this match" in match.reason
+    row = build_report([match])[0]
+    assert row["needs_review"] and row["peak_confidence"] == confidence
+    assert row["peak_unresolved"] == unresolved
+
+
 @pytest.mark.parametrize("t1,t2", [(531.0, 2.0), (500.0, 2.6)], ids=["t1", "t2"])
 def test_a_peak_just_outside_either_position_threshold_is_not_found(t1, t2):
     """First and second dimension are each tested on their own: 31 s is outside

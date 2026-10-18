@@ -47,7 +47,7 @@ from .project import Project, SIDECAR_NAME
 from .render import Renderer
 from .icons import make_icon, plain
 from .theme import DARK, LIGHT, FadeTabWidget, apply_theme
-from .workflow import IdentifyStepPanel, QuantStepPanel, WorkflowPanel
+from .workflow import IdentifyStepPanel, QuantStepPanel, ToolChoicesPanel, WorkflowPanel
 from .views.compare import CompareView
 from .views.image2d import SCALE_NAMES, SCALES, ChromatogramView
 from .views.review import ReviewView
@@ -198,30 +198,38 @@ class MainWindow(QtWidgets.QMainWindow):
         self.identify_step = IdentifyStepPanel()
         self.workflow = WorkflowPanel()
         add = self.workflow.add_step
+        self.load_step = ToolChoicesPanel(
+            [("files", "Add individual files…"), ("project", "Resume a saved project…"),
+             ("fold", "Check modulation period and phase…")],
+            "Open a folder below. Runs appear in the Runs tab; period and phase are estimated automatically.")
+        add("load", "Load data", "Load data",
+            "Open your chromatograms, then check the 2D image. Folder import chooses the original 70 eV channel.",
+            "Period and phase are estimated on import. Check them if peaks wrap across the image edges.",
+            self.load_step, "Open data folder…")
         add("fold", "🔄 Fold", "Fold and phase",
             "Cuts the detector stream into modulations and stacks them into the 2D image. Set the "
             "modulation period, then estimate the phase (where each modulation starts) of every run.",
             "Every later step works on the folded image. A wrong phase splits each peak across the "
             "top and bottom edges of the image.",
-            self.fold_panel, "Fix phase on all runs")
+            self.fold_panel, "Fix phase on all runs", parent="load")
         add("align", "📍 Align", "Alignment",
             "Retention times drift by a few seconds between runs. Pick a reference run, mark the same "
-            "peaks (anchors) on it and on one other run, then find them on every run. Skip this with "
-            "a single run or no blank.",
+            "peaks (anchors) on it and on one other run, then find them on every run. Skip this if "
+            "the runs already overlap or you have a single run.",
             "Aligning now puts every run on the reference run's coordinates, so the background step "
             "can subtract a blank through the alignment and later steps compare like with like.",
-            self.align_panel, "Auto-find anchors on all runs", scrolled=False)
+            self.align_panel, "Auto-find anchors on all runs", scrolled=False, optional=True)
         add("background", "🧹 Background", "Background removal",
             "Removes column bleed, the stripe pattern that repeats every modulation, and single-scan "
             "spikes, and can subtract a blank. Preview on this run before applying to every run.",
             "Peaks are found by signal-to-noise, and the noise map comes from this step. It follows "
             "alignment so that a blank can be subtracted through it.",
             self.bg_panel, "Remove background")
-        add("blobs", "🔍 Peaks", "Peak detection and separation",
+        add("blobs", "🔍 Peaks", "Peak detection",
             "Find overlapping blobs automatically from intensity and mass spectra on every run. "
             "The older hard-border detector remains available for comparison.",
-            "Detection uses the cleaned baseline from the background step. The siloxane filterer and the "
-            "hydrocarbon identifier (buttons below) open from here and work on the peaks found on this step.",
+            "Detection uses the cleaned baseline from the background step. Peak tools contains fit "
+            "diagnostics and the siloxane filter. Assign opens the hydrocarbon and library tools.",
             self.blobs_panel, "Find peaks", scrolled=False)
         add("siloxane", "🫧 Siloxane filterer", "Siloxane filterer",
             "Scores each blob against a siloxane reference spectrum and blocks out the ones above the "
@@ -229,6 +237,17 @@ class MainWindow(QtWidgets.QMainWindow):
             "It works on whole blobs, so it needs peaks first. It runs before the internal standards, "
             "classification and identification so contaminant peaks do not enter them.",
             self.sil_panel, "Remove siloxanes", parent="blobs")
+        self.assign_step = ToolChoicesPanel(
+            [("setup", "Set up named targets, calibration and units…"),
+             ("identify", "Search a spectral library…"), ("targets", "Load named target peaks…"), ("hydro", "Assign hydrocarbons…"),
+             ("classify", "Assign compound classes…"), ("cluster", "Explore spectral clusters…")],
+            "Use a target table for known compounds, or open library search below. Review suggested names "
+            "and promote accepted matches to targets before quantification.")
+        add("assign", "Assign peaks", "Assign peaks",
+            "Give the detected peaks compound names or classes. Choose a target table, a spectral library "
+            "or the hydrocarbon tools.",
+            "Assignments define what will be quantified. A spectral match is a suggestion to review.",
+            self.assign_step, "Use assignments and continue")
         add("hydro", "⛓️ Hydrocarbon identifier", "Hydrocarbon identifier",
             "Anchors the n-alkane ladder (click two n-alkanes and type their carbon numbers), then assigns "
             "every blob to the hydrocarbon it is: n-alkane, branched alkane, cycloalkane, alkylbenzene or "
@@ -236,7 +255,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "(lumped classes) transfer between runs.",
             "The ladder is searched for on clean data. It gives the retention index that identification "
             "uses, and the t2-above-the-alkane-line axis that classification uses.",
-            self.hydro_panel, "Find alkane series", parent="blobs")
+            self.hydro_panel, "Find alkane series", parent="assign")
         add("istd", "🏷️ IS", "Internal standards",
             "Select an internal standard and click its peak on the run that is open. Set three thresholds: how "
             "far in t1 and in t2 a peak may sit from where the standard is expected, and how well its mass "
@@ -248,7 +267,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "Finds every target and internal standard in every run, fits the calibration curves and "
             "quantifies the samples.",
             "It needs the phase (step 1), the cleaned data (step 3) and the internal standards (step 5). "
-            "The steps after it describe the peaks and do not feed it.",
+            "Assign target compounds first, then supply their known calibration amounts in your chosen unit.",
             self.quant_step, "Quantify")
         add("classify", "🧬 Classify", "Compound classes",
             "Says what kind of compound each blob is (alkane, alkylbenzene, PAH, N-heteroaromatic, siloxane, "
@@ -257,20 +276,33 @@ class MainWindow(QtWidgets.QMainWindow):
             "It classifies the blobs from step 4 after siloxanes are flagged, and uses the alkane ladder for "
             "a polarity axis when there is one. It comes before library identification because "
             "it needs no library and can tell you what to expect.",
-            self.class_panel, "Classify blobs")
+            self.class_panel, "Classify blobs", parent="assign")
         add("identify", "🏷️ Identify", "Identify blobs",
             "Matches each blob's spectrum to a mass spectral library (MSP) and reports a confidence "
             "tier. Go opens the identifier window.",
             "It searches the blobs from step 4 and uses the retention index from the alkane ladder when "
             "one exists, so identification comes after both.",
-            self.identify_step, "Open identifier")
+            self.identify_step, "Open identifier", parent="assign")
         add("cluster", "🧩 Cluster", "Peak clusters",
             "Groups peaks by the shape of their mass spectra, with no rules and no library, so the chromatogram "
             "divides into chemically similar regions. Cluster the selected run, or pool every 70 eV run so each "
             "cluster means the same thing everywhere and runs can be compared cluster by cluster.",
             "It groups the blobs from step 4. Spectra do not drift between runs, so no alignment is needed to "
             "compare runs. It sits last because it is analysis, not preparation: nothing else depends on it.",
-            self.cluster_panel, "Cluster peaks")
+            self.cluster_panel, "Cluster peaks", parent="assign")
+        self.export_step = ToolChoicesPanel(
+            [("figure", "Export the current figure…")],
+            "Export all available tables, internal-standard matches, peak assignments, processing settings "
+            "and a project snapshot to one folder. Amounts use the unit of your calibration levels. "
+            "Raw instrument files are referenced, so keep them with the project.")
+        add("export", "Export", "Export everything",
+            "Save the results and the settings needed to trace how they were produced.",
+            "Review peak matches and calibration curves before sharing quantitative results.",
+            self.export_step, "Export everything…")
+        # Widget indices stay in registration order; workflow order is explicit.
+        self.workflow.set_order(["load", "fold", "align", "background", "blobs", "siloxane",
+                                 "istd", "assign", "hydro", "classify", "identify", "cluster",
+                                 "quant", "export"])
         # One left-hand dock with three tabs, so the run list, the layers and the open
         # step's settings share the space instead of competing for it.
         self.left_tabs = FadeTabWidget()
@@ -301,7 +333,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_status()
         self._connect()
         apply_theme(self, dark)
-        self.left_tabs.setTabText(self.tool_tab, "Fold")
+        self.left_tabs.setTabText(self.tool_tab, "Load data")
+        self.left_tabs.setCurrentIndex(self.tool_tab)
+        self._workflow_status()
         self._default_layout = self.saveState()
 
     # ================================================================ setup
@@ -363,15 +397,14 @@ class MainWindow(QtWidgets.QMainWindow):
         step_group = QtGui.QActionGroup(self)
         # Siloxane filterer and hydrocarbon identifier have no toolbar button: they open from the 🔍 Peaks panel.
         for key, text, tip in ([
-                ("fold", "1 🔄 Fold", "Modulation period and phase"),
-                ("align", "2 📍 Align", "Reference run and anchors"),
+                ("load", "1 Load", "Open chromatograms and check modulation period and phase"),
+                ("align", "2 Align", "Optional: reference run and anchors, or skip alignment"),
                 ("background", "3 🧹 Background", "Background removal settings"),
                 ("blobs", "4 🔍 Peaks", "Peak detection and separation, siloxane filterer, hydrocarbon identifier"),
-                ("istd", "5 🏷️ IS", "Internal standards: labelled once, found in every run by t1, t2 and spectrum"),
-                ("quant", "6 🧪 Quantify", "Targets, calibration and quantification"),
-                ("classify", "7 🧬 Classify", "Compound classes from the spectrum"),
-                ("identify", "8 🏷️ Identify", "Library search"),
-                ("cluster", "9 🧩 Cluster", "Unsupervised peak clusters, within and between runs")]):
+                ("istd", "5 Standards", "Internal standards: labelled once, found in every run by t1, t2 and spectrum"),
+                ("assign", "6 Assign", "Assign compound names and classes to detected peaks"),
+                ("quant", "7 🧪 Quantify", "Targets, calibration and quantification"),
+                ("export", "8 Export", "Export all available results and processing settings")]):
             info = self.workflow.step_info(key)
             act = A(text, lambda _checked=False, k=key: self.workflow.show_step(k), None,
                     f"{tip}. Opens its settings on the left; press Go there to run it.\n"
@@ -380,7 +413,7 @@ class MainWindow(QtWidgets.QMainWindow):
             step_group.addAction(act)
             self.step_actions[key] = act
             self._step_names[key] = text
-        self.step_actions["fold"].setChecked(True)
+        self.step_actions["load"].setChecked(True)
         self.act_siloxane = A("🫧 Siloxanes", lambda: self.apply_siloxane(), None,
                               "Fit and subtract the siloxane component on every loaded run, "
                               "on top of 🧹 where that's been applied")
@@ -406,6 +439,9 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "Run the selected peak-detection method on every loaded run")
         self.act_blob_overlay = A("🔍 Detected peaks",self.view2d.set_blob_overlay_visible, None,
                                   "Show overlapping MS-aware contours or legacy outlines", checkable=True)
+        self.act_half_contours = A("Half-height rings", lambda _on: self._update_blob_overlay(), None,
+                                   "Also draw a dotted ring at half of each peak's height inside its outline",
+                                   checkable=True)
         self.act_add_blob = A("➕ Add peak", self.start_add_blob, None,
                               "Click a peak in the 2D view that automatic detection missed")
         self.act_merge_blobs = A("Merge selected peaks", self.merge_selected_blobs, "G",
@@ -504,15 +540,21 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly)
         # Left to right, the order one works through the data: load, then the eight
         # numbered steps (each opens its settings on the left), then the extras.
-        tb.addAction(self.act_open)
-        tb.addSeparator()
         for key in self.step_actions:
             tb.addAction(self.step_actions[key])
         tb.addSeparator()
-        tb.addAction(self.act_overlap)
-        tb.addAction(self.act_calibrate)
-        tb.addAction(self.act_batch)
-        tb.addAction(self.act_export_figure)
+        tools = QtWidgets.QToolButton()
+        tools.setText("Tools")
+        tools.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.tools_menu = QtWidgets.QMenu(tools)
+        for key in ("fold", "siloxane", "hydro", "classify", "identify", "cluster"):
+            self.tools_menu.addAction(self.workflow.step_info(key)["label"],
+                                      lambda _checked=False, k=key: self.workflow.show_step(k))
+        self.tools_menu.addSeparator()
+        for action in (self.act_overlap, self.act_calibrate, self.act_batch):
+            self.tools_menu.addAction(action)
+        tools.setMenu(self.tools_menu)
+        tb.addWidget(tools)
         # Closed panels can always be brought back from here (also View → Panels),
         # kept on this bar because the View bar is full.
         tb.addSeparator()
@@ -520,7 +562,6 @@ class MainWindow(QtWidgets.QMainWindow):
                           (self.spectrum_dock, "Show or hide the spectrum panel")):
             act = dock.toggleViewAction()
             act.setToolTip(tip)
-            tb.addAction(act)
         panels = QtWidgets.QToolButton()
         panels.setText("Panels ▾")
         panels.setToolTip("Every panel: tick to show, untick to hide. Reset layout restores the default.")
@@ -550,17 +591,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self.scale_box.addItem(SCALE_NAMES[s], s)
         self.scale_box.currentIndexChanged.connect(lambda i: self.set_scale(SCALES[i]))
         vb.addWidget(self.scale_box)
-        vb.addAction(self.act_snr)
-        vb.addAction(self.act_overlay)
-        vb.addAction(self.act_blob_overlay)
-        vb.addAction(self.act_stencil_overlay)
-        vb.addSeparator()
         vb.addAction(self.act_processed)
-        vb.addAction(self.act_lock)
-        vb.addAction(self.act_auto)
-        vb.addAction(self.act_extend)
-        vb.addAction(self.act_region)
         vb.addAction(self.act_home)
+        display = QtWidgets.QToolButton()
+        display.setText("Display options")
+        display.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        display_menu = QtWidgets.QMenu(display)
+        for action in (self.act_snr, self.act_overlay, self.act_blob_overlay, self.act_stencil_overlay,
+                       self.act_lock, self.act_auto, self.act_extend, self.act_region):
+            display_menu.addAction(action)
+        display.setMenu(display_menu)
+        vb.addWidget(display)
         vb.addSeparator()
         vb.addAction(self.act_prev)
         vb.addAction(self.act_next)
@@ -568,9 +609,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_icons(self):
         """Toolbar buttons and tabs show one-colour line icons and plain labels; the emoji stay
         in menus, tooltips and the docs. `refresh_icons` redraws them when the theme changes."""
-        step_icons = {"fold": "fold", "align": "align", "background": "background", "blobs": "peaks",
-                      "classify": "classify", "identify": "identify", "quant": "quant",
-                      "cluster": "cluster", "istd": "istd"}
+        step_icons = {"load": "open", "align": "align", "background": "background", "blobs": "peaks",
+                      "assign": "identify", "quant": "quant", "export": "export", "istd": "istd"}
         self._action_icons = {self.step_actions[k]: n for k, n in step_icons.items()}
         self._action_icons.update({
             self.act_open: "open", self.act_overlap: "overlap", self.act_batch: "batch",
@@ -674,7 +714,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for a in (self.act_view2d, self.act_view1d, self.act_review, self.act_calib, self.act_compare,
                   self.act_toggle_dim, None,
                   self.act_processed, self.act_aligned, self.act_snr, self.act_overlay,
-                  self.act_blob_overlay, self.act_stencil_overlay, self.act_ion, self.act_scale, self.act_lock,
+                  self.act_blob_overlay, self.act_half_contours, self.act_stencil_overlay, self.act_ion, self.act_scale, self.act_lock,
                   self.act_auto, self.act_extend, self.act_region, self.act_home, None,
                   self.act_prev, self.act_next, None, self.act_theme):
             v.addSeparator() if a is None else v.addAction(a)
@@ -686,7 +726,7 @@ class MainWindow(QtWidgets.QMainWindow):
             menu.addAction("Reset layout", self.reset_layout)
         # The Process menu follows the workflow order, one headed section per step.
         p = m.addMenu("&Process")
-        p.addSection("1  Fold")
+        p.addSection("1  Load: modulation period and phase")
         p.addAction(self.act_fix)
         p.addSection("2  Align")
         p.addAction(self.act_align_panel)
@@ -706,7 +746,7 @@ class MainWindow(QtWidgets.QMainWindow):
         p.addSection("4  Siloxane filterer")
         p.addAction(self.act_siloxane)
         p.addAction(QtGui.QAction("Remove 🫧 from all runs", self, triggered=self.remove_siloxane_all))
-        p.addSection("4  Hydrocarbon identifier")
+        p.addSection("6  Assign hydrocarbons")
         p.addAction(self.act_hydro_panel)
         p.addAction(self.act_find_alkanes)
         p.addAction(QtGui.QAction("⛓️ Propagate alkanes to all runs", self, triggered=self.propagate_alkanes))
@@ -716,7 +756,7 @@ class MainWindow(QtWidgets.QMainWindow):
         p.addAction(self.act_istd_panel)
         p.addAction(self.act_label_istd)
         p.addAction(QtGui.QAction("🔎 Find internal standards on all runs", self, triggered=self.propagate_istd))
-        p.addSection("6  Quantify")
+        p.addSection("7  Quantify")
         p.addAction(self.act_calibrate)
         p.addAction(self.act_quant)
         p.addAction(self.act_quant_settings)
@@ -726,12 +766,14 @@ class MainWindow(QtWidgets.QMainWindow):
         p.addAction(self.act_reset_footprint)
         p.addAction(self.act_calib)
         p.addAction(self.act_export)
-        p.addSection("7  Classify")
+        p.addSection("6  Assign compound classes")
         p.addAction(self.act_classify)
-        p.addSection("8  Identify")
+        p.addSection("6  Assign compound names")
         p.addAction(self.act_identify)
-        p.addSection("9  Cluster")
+        p.addSection("6  Explore clusters")
         p.addAction(self.act_cluster)
+        p.addSection("8  Export")
+        p.addAction(QtGui.QAction("Export everything…", self, triggered=lambda: self.export_everything()))
         p.addSection("Whole folder")
         p.addAction(self.act_batch)
         h = m.addMenu("&Help")
@@ -750,7 +792,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def go(self, key: str):
         """The workflow panel's Go button: run the step that is open."""
+        if hasattr(self, 'workflow_assistant'):
+            self.workflow_assistant.refresh()
+            if not self.workflow.step_info(key)['go_enabled']:
+                self.say(self.workflow.step_info(key).get('guidance') or "Complete the prerequisites first.")
+                return
         {"fold": self.fix_phase,
+         "load": self.open_folder_dialog,
          "background": self.apply_background,
          "siloxane": self.apply_siloxane,
          "align": self.propagate_anchors,
@@ -758,6 +806,8 @@ class MainWindow(QtWidgets.QMainWindow):
          "hydro": self.start_find_alkanes,
          "classify": self.start_classify,
          "identify": self._go_identify,
+         "assign": self._accept_assignments,
+         "export": self.export_everything,
          "quant": self.run_quant,
          "cluster": self.start_cluster,
          "istd": self.propagate_istd}[key]()
@@ -790,13 +840,31 @@ class MainWindow(QtWidgets.QMainWindow):
         """Toolbar step buttons carry the progress: ✓ when done, ▸ on the suggested next step."""
         nxt = self.workflow.next_key()
         for key, act in self.step_actions.items():
-            mark = "✓ " if self.workflow.is_done(key) else ("▸ " if key == nxt else "")
+            mark = ("✓ " if self.workflow.is_done(key) else "Skipped: " if self.workflow.is_skipped(key)
+                    else "▸ " if key == nxt else "")
             act.setText(mark + self._step_names[key])
             act.setIconText(plain(mark + self._step_names[key]))
 
     def _go_identify(self):
         self.show_identify_dialog()
-        self.workflow.mark_done("identify", "Identifier opened. Load a library there and search.")
+
+    def _accept_assignments(self):
+        self.workflow.mark_done("assign", "Assignments reviewed. Supply calibration amounts to quantify them.")
+        self.workflow.show_step("quant")
+
+    def _workflow_status(self, *_):
+        loaded = self.project.loaded()
+        for key in ("fold", "align", "background", "blobs", "istd", "assign", "export"):
+            self.workflow.set_go_enabled(key, bool(loaded), "Load chromatograms first.")
+        n = len(loaded)
+        self.load_step.status.setText(
+            f"{n} of {len(self.project.entries)} runs loaded. Check the modulation period and phase if peaks "
+            "wrap across the image edges." if n else "Open a folder of chromatograms to begin.")
+        if n and all(e.run is not None or e.error for e in self.project.entries):
+            if not self.workflow.is_done("load"):
+                self.workflow.mark_done("load", f"{n} chromatograms loaded. Check the 2D image.")
+        elif not self.project.entries:
+            self.workflow.clear_done()
 
     def _quant_step_status(self, *_):
         ok, why = self.quant.ready()
@@ -875,6 +943,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.blobs.changed.connect(self._hydrocarbons_changed)   # stencil totals depend on 🔍 blobs
         self.blobs.runningChanged.connect(self._blobs_running)
         self.blobs_panel.findRequested.connect(self.run_blobs)
+        self.blobs_panel.previewRequested.connect(self.show_peak_preview)
         self.blobs_panel.methodChanged.connect(self._blob_method_changed)
         self.blobs_panel.resolveRequested.connect(self.resolve_region)
         self.blobs_panel.addRequested.connect(self.start_add_blob)
@@ -951,6 +1020,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.istd_panel.settingsChanged.connect(self.istd.set_settings)
         self.istd_results.cellChosen.connect(self.goto_istd)
         self.istd_results.relabelRequested.connect(self.relabel_istd)
+        self.istd_results.reviewRequested.connect(self.show_standard_review)
+        self.istd_panel.reviewRequested.connect(self.show_standard_review)
         # Layers tab: raw image visibility/alpha, and mirrors of the blob, stencil and
         # cluster overlay toggles that live in the top bar and the Cluster panel.
         self.layers_panel.raw.toggled.connect(self.view2d.set_image_visible)
@@ -975,11 +1046,117 @@ class MainWindow(QtWidgets.QMainWindow):
         self.quant_step.levelsRequested.connect(self.load_levels_dialog)
         self.quant_step.settingsRequested.connect(self.quant_settings_dialog)
         self.quant_step.calibrateRequested.connect(self.show_calibrate_window)
+        self.quant_step.setupRequested.connect(self.show_calibration_setup)
+        self.workflow.prerequisiteRequested.connect(self._open_prerequisite)
+        self.load_step.chosen.connect(lambda key: {
+            "files": self.open_files_dialog, "project": self.open_project_dialog,
+            "fold": lambda: self.workflow.show_step("fold")}[key]())
+        self.assign_step.chosen.connect(lambda key: self.show_calibration_setup() if key == "setup"
+                                        else self.load_targets_dialog() if key == "targets"
+                                        else self.show_identify_dialog() if key == "identify"
+                                        else self.workflow.show_step(key))
+        self.export_step.chosen.connect(lambda _key: self.export_figure())
+        self.project.runsChanged.connect(self._workflow_status)
         self.project.runsChanged.connect(self._quant_step_status)
         self.quant.changed.connect(self._quant_step_status)
         self.project.layersChanged.connect(self._quant_step_status)
         self._quant_step_status()
         self._step_progress()
+        from .workflow_assistant import WorkflowAssistant
+        self.workflow_assistant = WorkflowAssistant(self)
+
+    def _open_prerequisite(self, key):
+        if key == 'setup':
+            self.show_calibration_setup()
+        elif key == 'review_istd':
+            self.show_standard_review()
+        elif key in self.workflow.keys():
+            self.workflow.show_step(key)
+
+    def show_calibration_setup(self):
+        from .calibration_setup import CalibrationSetupWizard
+        from ..core.targets import Target
+        selected = None
+        if self.index >= 0:
+            ids = self.blobs_panel.selected_component_ids()
+            components = self.blobs.components_for(self.index)
+            if len(ids) == 1 and components is not None and self.blobs.method == MS_AWARE:
+                selected_id = next(iter(ids))
+                c = next((c for c in components.components if c.id == selected_id), None)
+                if c is not None and c.spectrum.size:
+                    selected = Target('', quant_ion=int(c.mz[np.argmax(c.mz*c.spectrum)]), t1=c.t1, t2=c.t2)
+            elif self.blobs.method == LEGACY:
+                rows = self.blobs_panel.selected_indices()
+                peaks = self.blobs.blobs_for(self.index)
+                if len(rows) == 1 and peaks is not None:
+                    from ..core.istd import peak_spectrum
+                    row = rows[0]
+                    spectrum = peak_spectrum(peaks, row)
+                    selected = Target('', quant_ion=int(peaks.mz[np.argmax(peaks.mz*spectrum)]),
+                                      t1=float(peaks.t1[row]), t2=float(peaks.t2[row]))
+        dialog = getattr(self, 'calibration_setup_wizard', None)
+        if dialog is not None and dialog.isVisible():
+            dialog.raise_()
+            return
+        self.calibration_setup_wizard = CalibrationSetupWizard(self.project, self, selected_target=selected)
+        self.calibration_setup_wizard.applied.connect(self._calibration_setup_applied)
+        self.calibration_setup_wizard.show()
+
+    def _calibration_setup_applied(self):
+        self.workflow.mark_done('assign', 'Named targets, internal-standard assignments and calibration inputs supplied.')
+        self.workflow.show_step('quant')
+        self._quant_step_status()
+        self.workflow_assistant.refresh()
+        self.say('Calibration setup saved. Review the inputs, then Quantify to produce calibrated amounts.')
+
+    def show_peak_preview(self):
+        from .peak_preview import PeakPreviewDialog
+        if self.index < 0 or self.project.entries[self.index].run is None:
+            self.say('Select a loaded run first.')
+            return
+        previous = getattr(self, 'peak_preview', None)
+        if previous is not None:
+            previous.close()
+        bounds = self.view2d.region()
+        if bounds is None:
+            xr, yr = self.view2d.plot.vb.viewRange()
+            bounds = (xr[0]*60, xr[1]*60, yr[0], yr[1])
+        transform = self.align.transforms.get(self.project.entries[self.index].name)
+        if self.act_aligned.isChecked() and transform is not None:
+            x0, x1, y0, y1 = bounds
+            x, y = np.meshgrid(np.linspace(x0, x1, 17), np.linspace(y0, y1, 17))
+            x, y = transform.inverse(x, y)
+            bounds = (float(np.min(x)), float(np.max(x)), float(np.min(y)), float(np.max(y)))
+        self.peak_preview = PeakPreviewDialog(self.project, self.index, bounds, self)
+        self.peak_preview.fitAllRequested.connect(self.run_blobs)
+        self.peak_preview.show()
+        apply_theme(self, self.dark)
+
+    def show_standard_review(self):
+        from .standard_review import StandardReviewDialog
+        dialog = getattr(self, 'standard_review', None)
+        if dialog is None:
+            dialog = StandardReviewDialog(self.istd, self)
+            dialog.searchRequested.connect(self.propagate_istd)
+            dialog.gotoRequested.connect(self._review_goto)
+            dialog.refitRequested = self._review_refit
+            self.standard_review = dialog
+        dialog.show()
+        dialog.raise_()
+        apply_theme(self, self.dark)
+
+    def _review_goto(self, run, t1, t2):
+        index = self.project.index_of(run)
+        if index is not None:
+            self.set_run(index)
+            self.tabs.setCurrentIndex(0)
+            self.view2d.centre_on(t1, t2)
+
+    def _review_refit(self, run, group_index):
+        index = self.project.index_of(run)
+        if index is not None and group_index is not None:
+            self.set_run(index)
+            self.show_overlap_dialog(candidate_region=group_index)
 
     # =============================================================== runs
     def open_folder_dialog(self):
@@ -1028,10 +1205,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if path:
             try:
                 self.project.load_targets(path, estimate=False)
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, OSError) as exc:
                 self.error("Couldn't read the target table", str(exc))
                 return
-            self.fix_phase()
+            self.say("Target assignments loaded. Use Load → Check modulation period and phase to re-estimate phase if needed.")
 
     def clear_results_cache(self):
         cache = self.project.cache
@@ -1487,6 +1664,36 @@ class MainWindow(QtWidgets.QMainWindow):
                 paths.append(prov.write(Path(folder) / 'provenance.json'))
             self.say(f"Wrote {', '.join(p.name for p in paths)} to {folder}")
 
+    def export_everything(self, folder=None):
+        if not self.project.loaded():
+            self.say("Load chromatograms first")
+            return
+        if self.jobs.active_count():
+            self.say("Wait for processing to finish before exporting")
+            return
+        if not folder:
+            folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Export all available results to")
+        if not folder:
+            return
+        from .export import export_project
+        dialog = getattr(self, "identify_dialog", None)
+        identifications = ({"run": dialog._name, "results": list(dialog.results)}
+                           if dialog is not None and dialog.results else None)
+        self.workflow.set_busy("export", True)
+
+        def finished(paths):
+            self.workflow.set_busy("export", False)
+            self.workflow.mark_done("export", f"Exported {len(paths)} files to {folder}.")
+            self.say(f"Exported all available results to {folder}")
+
+        def failed(message):
+            self.workflow.set_busy("export", False)
+            self.say(f"Export failed: {message}")
+
+        self.jobs.submit("Export results", lambda token, progress: export_project(
+            self.project, folder, identifications=identifications), finished, failed,
+            on_cancel=lambda: self.workflow.set_busy("export", False))
+
     def _quant_running(self, on: bool):
         self.act_quant.setEnabled(not on)
         self.workflow.set_busy("quant", on)
@@ -1494,6 +1701,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _quant_changed(self):
         q = self.quant
+        self.results.set_amount_unit(q.amount_unit)
+        if q.stale or q.running:
+            for key in ("quant", "export"):
+                if self.workflow.is_done(key):
+                    self.workflow.clear_done(key)
         self.results.set_report(q.report, stale=q.stale, running=q.running)
         self.calibration_panel.set_report(q.report, q.decisions)
         self.review.set_report(q.report)
@@ -2005,6 +2217,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.say(f"🔍 Peak-detection method: {label}")
 
     def _blobs_running(self, on: bool):
+        if on:
+            self.workflow.clear_done("blobs")
         self.act_find_blobs.setEnabled(not on)
         self.workflow.set_busy("blobs", on)
         self._blobs_changed()
@@ -2055,8 +2269,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 for group in component_set.groups:
                     for component_index, component in enumerate(group.components):
                         colour = colours[component_index % len(colours)]
-                        for fraction, style in ((0.10, QtCore.Qt.PenStyle.SolidLine),
-                                                (0.50, QtCore.Qt.PenStyle.DotLine)):
+                        # One outline per peak; the dotted half-height ring is opt-in.
+                        rings = [(0.10, QtCore.Qt.PenStyle.SolidLine)]
+                        if self.act_half_contours.isChecked():
+                            rings.append((0.50, QtCore.Qt.PenStyle.DotLine))
+                        for fraction, style in rings:
                             contour = self._cached_contour(group, component_index, fraction, used)
                             component_overlays.append({
                                 "outline": contour, "colour": colour, "style": style,
@@ -3088,7 +3305,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.workspace_dock.show()
             self.left_tabs.setCurrentWidget(self.istd_results.parentWidget().parentWidget())
             self.workflow.mark_done("istd", "Every chromatogram searched. The Standards tab shows "
-                                            "where each standard passed; hover a ✗ for why.")
+                                            "the matches. Review missing or uncertain matches before quantifying.")
 
         self.istd.propagate_to(loaded, on_done=finished)
 
@@ -3158,7 +3375,7 @@ class MainWindow(QtWidgets.QMainWindow):
             for m in found.values():
                 if m.found:
                     markers.append(dict(t1=m.t1, t2=m.t2, label=f"✓ {m.name} {m.spectral_score:.2f}",
-                                        tier="medium" if m.n_passing > 1 else "high"))
+                                        tier="medium" if m.needs_review else "high"))
         self.view2d.set_istd_overlay(markers)
 
     def _layers_changed(self):

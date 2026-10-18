@@ -929,6 +929,10 @@ class Project(QtCore.QObject):
             self.quant.set_targets(self.targets_path)
             self.anchorsChanged.emit()
         self.quant.from_dict(data.get("quant", {}), resolve)
+        if self.quant._inline_targets:
+            self.anchors = [Anchor(t.compound, t.quant_ion, t.t1, t.t2, t.t1_window)
+                            for t in self.quant.targets if t.is_istd]
+            self.anchorsChanged.emit()
         self.align.from_dict(data.get("align", {}))
         self.blobs.from_dict(data.get("blobs", {}))
         self.hydrocarbons.from_dict(data.get("hydrocarbons", {}))

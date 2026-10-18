@@ -2,6 +2,7 @@
 
 import numpy as np
 import pytest
+from PySide6 import QtCore
 
 from pygcgc.core.components import Component, ComponentGroup, ComponentSet
 from pygcgc.core.overlap import _shape
@@ -111,7 +112,22 @@ def test_clicking_one_blob_selects_and_highlights_only_that_blob(qtbot, window):
     _click(w, target.t1, target.t2)
     assert w.blobs_panel.selected_component_ids() == {target.id}
     wide = [o for o in w.view2d._component_overlays if o["width"] > 1]
-    assert len(wide) == 2                                        # its 10% and 50% outlines, nothing else
+    assert len(wide) == 1                                        # its outline alone, nothing else
+    w.act_half_contours.setChecked(True)
+    wide = [o for o in w.view2d._component_overlays if o["width"] > 1]
+    assert len(wide) == 2                                        # plus the optional half-height ring
+
+
+def test_each_blob_is_drawn_as_one_outline_unless_half_height_rings_are_asked_for(qtbot, window):
+    w, _i, group = _two_blob_window(qtbot, window)
+    blobs = [o for o in w.view2d._component_overlays if o["colour"] in
+             {(0, 220, 255), (255, 105, 180)}]
+    assert len(blobs) == len(group.components)
+    assert all(o["style"] == QtCore.Qt.PenStyle.SolidLine for o in blobs)
+    w.act_half_contours.setChecked(True)
+    blobs = [o for o in w.view2d._component_overlays if o["colour"] in
+             {(0, 220, 255), (255, 105, 180)}]
+    assert len(blobs) == 2 * len(group.components)
 
 
 def test_clicking_between_blobs_selects_the_one_whose_outline_contains_the_click(qtbot, window):
@@ -132,7 +148,7 @@ def test_clicking_empty_chromatogram_selects_no_blob(qtbot, window):
     assert w.blobs_panel.selected_component_ids() == set()
 
 
-def test_fit_and_residual_map_opens_with_three_matching_images(qtbot, window):
+def test_fit_and_residual_map_opens_with_four_matching_images(qtbot, window):
     from pygcgc.gui.blob_state import MS_AWARE
 
     w = window
@@ -148,5 +164,10 @@ def test_fit_and_residual_map_opens_with_three_matching_images(qtbot, window):
     assert len(shapes) == 1
     d = w.fit_map._data
     np.testing.assert_allclose(d["residual"], d["tic"] - d["model"])
+    assert len(w.fit_map.images) == 4
+    share = d["fraction"][np.isfinite(d["fraction"])]
+    assert share.size and share.min() >= 0.0
+    measured = d["tic"] > 3.0 * d["noise"]
+    np.testing.assert_array_equal(np.isfinite(d["fraction"]), measured)
     assert "explain" in w.fit_map.summary.text()
     w.fit_map.close()

@@ -41,3 +41,18 @@ def test_opening_another_window_does_not_replace_the_application_theme(qtbot, qa
     assert qapp.styleSheet() != stylesheet
     apply_theme(first, False)
     assert qapp.styleSheet() == stylesheet
+
+
+def test_colour_theme_switch_does_not_replace_the_shared_fusion_style(qtbot, qapp, monkeypatch):
+    from PySide6 import QtWidgets
+    from pygcgc.gui.theme import apply_theme
+    widget = QtWidgets.QWidget()
+    widget.view2d = widget.view1d = widget.spectrum = None
+    qtbot.addWidget(widget)
+    apply_theme(widget, False)
+    replaced = []
+    original = qapp.setStyle
+    monkeypatch.setattr(qapp, 'setStyle', lambda style: (replaced.append(style), original(style))[1])
+    apply_theme(widget, True)
+    apply_theme(widget, False)
+    assert replaced == []

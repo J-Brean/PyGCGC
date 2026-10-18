@@ -18,6 +18,7 @@ COMPONENT_COLUMNS = ["#", "t1 (min)", "t2 (s)", "estimated intensity", "relative
 
 class BlobsPanel(QtWidgets.QWidget):
     findRequested = QtCore.Signal()
+    previewRequested = QtCore.Signal()
     methodChanged = QtCore.Signal(str)
     resolveRequested = QtCore.Signal(int)
     addRequested = QtCore.Signal()
@@ -58,6 +59,9 @@ class BlobsPanel(QtWidgets.QWidget):
         self.explanation.setWordWrap(True)
         self.find_btn = QtWidgets.QPushButton("Find peaks")
         self.find_btn.clicked.connect(self.findRequested)
+        self.preview_btn = QtWidgets.QPushButton("Preview fitting…")
+        self.preview_btn.setToolTip("Try fitting the selected region, visible interval or current run before processing all runs")
+        self.preview_btn.clicked.connect(self.previewRequested)
         self.fitting_help_btn = fitting_help_button(self)
         method_row.addWidget(self.fitting_help_btn)
         self.resolve_btn = QtWidgets.QPushButton("Inspect/refit selected blob…")
@@ -90,7 +94,7 @@ class BlobsPanel(QtWidgets.QWidget):
         more.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QtWidgets.QMenu(more)
         self.tools_menu = menu
-        menu_buttons = (self.add_btn, self.merge_btn, self.delete_btn, self.export_btn,
+        menu_buttons = (self.resolve_btn, self.add_btn, self.merge_btn, self.delete_btn, self.export_btn,
                         self.account_btn, self.siloxane_btn, self.hydrocarbon_btn)
         actions = []
         for button in menu_buttons:
@@ -115,7 +119,7 @@ class BlobsPanel(QtWidgets.QWidget):
         self.status.setWordWrap(True)
 
         buttons = QtWidgets.QHBoxLayout()
-        for widget in (self.find_btn, self.resolve_btn, more):
+        for widget in (self.find_btn, self.preview_btn, more):
             buttons.addWidget(widget)
         buttons.addStretch(1)
         layout = QtWidgets.QVBoxLayout(self)
@@ -137,6 +141,7 @@ class BlobsPanel(QtWidgets.QWidget):
         self.method_box.blockSignals(False)
         ms_aware = method == MS_AWARE
         self.fitting_help_btn.setVisible(ms_aware)
+        self.preview_btn.setVisible(ms_aware)
         self.explanation.setText(
             "Fits overlapping tilted Gaussian peaks using both position and mass spectrum. Each row and "
             "colour is one proposed peak; unresolved estimates remain visible with a warning." if ms_aware else
@@ -348,7 +353,7 @@ class BlobsPanel(QtWidgets.QWidget):
         selected = len(self.selected_indices())
         legacy = self.method == LEGACY
         self.resolve_btn.setEnabled(not legacy and selected == 1)
-        self.resolve_btn.setVisible(not legacy)
+        self.resolve_btn.hide()
         self.add_btn.setEnabled(legacy and self.current_run is not None)
         self.add_btn.hide()
         self.merge_btn.setEnabled(legacy and selected >= 2)

@@ -18,12 +18,14 @@ re-measures that one run.
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import asdict, replace
 
 from PySide6 import QtCore
 
 from ..core import (QuantDecisions, QuantReport, QuantSettings, SequenceRun, finish_sequence,
                     learn_positions, learn_qual_ratios, load_levels, load_targets, quantify_run,
                     with_positions)
+from ..core.targets import Target
 
 
 class QuantState(QtCore.QObject):
@@ -35,8 +37,11 @@ class QuantState(QtCore.QObject):
         self.project = project
         self.targets = None
         self.targets_error = ""
+        self._inline_targets = False
         self.levels: dict | None = None
         self.levels_path: Path | None = None
+        self.amount_unit = "calibration units"
+        self.calibration_setup: dict = {}
         self.settings = QuantSettings()
         self.decisions = QuantDecisions()
         self.report: QuantReport | None = None
@@ -46,9 +51,12 @@ class QuantState(QtCore.QObject):
         self.stale = False
         self.running = False
         self.was_run = False
+        self._input_revision = 0
 
     # ------------------------------------------------------------ inputs
     def set_targets(self, path) -> None:
+        self._inline_targets = False
+        self.calibration_setup = {}
         try:
             self.targets = load_targets(path)
             self.targets_error = ""
@@ -58,11 +66,18 @@ class QuantState(QtCore.QObject):
         self._invalidate()
 
     def set_levels(self, path) -> None:
+        levels = load_levels(path)
+        self.calibration_setup = {}
+        self.amount_unit = "calibration units"
         self.levels_path = Path(path)
-        self.levels = load_levels(path)
+        self.levels = levels
+        self._input_revision += 1
         self.project.message.emit(f"Calibration levels from {self.levels_path.name}: "
                                   f"{', '.join(self.levels)}")
-        if self.runquants:
+        if self.running:
+            self.stale = True
+            self.changed.emit()
+        elif self.runquants:
             self.refit()
         else:
             self.changed.emit()
@@ -74,6 +89,8 @@ class QuantState(QtCore.QObject):
     def ready(self) -> tuple[bool, str]:
         if not self.project.loaded():
             return False, "Open some runs first"
+        if hasattr(self.project, 'istd') and self.project.istd.outdated_reviews():
+            return False, "Reviewed standard choices are out of date; search Standards and review the new matches"
         runs = [self.project.entries[i].run for i in self.project.loaded()]
         energies = {r.meta.get('energy_ev') for r in runs if r.meta.get('energy_ev') is not None}
         if len(energies) > 1:
@@ -109,12 +126,14 @@ class QuantState(QtCore.QObject):
 
     # ------------------------------------------------------------ running
     def _invalidate(self) -> None:
-        if self.report is not None or self.runquants:
+        self._input_revision += 1
+        if self.report is not None or self.runquants or self.running:
             self.stale = True
         self.changed.emit()
 
     def mark_stale(self, *_):
-        if self.runquants and not self.running:
+        if self.runquants or self.running:
+            self._input_revision += 1
             self.stale = True
             self.changed.emit()
 
@@ -126,10 +145,24 @@ class QuantState(QtCore.QObject):
         """Measure some runs in parallel; call on_done() when all have finished."""
         p = self.project
         remaining = set(entries)
+        unsuccessful = set()
         if not entries:
             on_done()
             return
         settings = self.settings
+
+        def settled(entry, success):
+            if not success:
+                unsuccessful.add(entry)
+            remaining.discard(entry)
+            if remaining:
+                return
+            if unsuccessful:
+                self.stale = True
+                self._set_running(False)
+                self.changed.emit()
+            else:
+                on_done()
         for e in entries:
             idx = p.entries.index(e)
             bg = e.background
@@ -137,26 +170,31 @@ class QuantState(QtCore.QObject):
             noise = bg.noise if bg is not None else None
             raw, fold = e.run, p.fold(idx)
             assigned = {c: v for (r, c), v in self.decisions.assigned.items() if r == e.name}
+            reviewed = p.istd.reviewed_matches(e.name)
+            assigned.update({name: (match.t1, match.t2) for name, match in reviewed.items() if match.found})
+            missing_standards = [name for name, match in reviewed.items() if not match.found]
             polys = {c: v for (r, c), v in self.decisions.footprints.items() if r == e.name}
 
             def work(token, progress, raw=raw, clean=clean, fold=fold, noise=noise, assigned=assigned,
-                     polys=polys):
-                return quantify_run(raw, clean, fold, noise, targets, settings, assigned, progress,
-                                    footprints=polys)
+                     polys=polys, missing_standards=missing_standards):
+                result = quantify_run(raw, clean, fold, noise, targets, settings, assigned, progress,
+                                      footprints=polys)
+                for name in missing_standards:
+                    if name in result.hits:
+                        result.hits[name] = replace(result.hits[name], found=False,
+                            quant_volume=float('nan'), tic_volume=float('nan'), manual=True)
+                return result
 
             def done(rq, e=e):
                 self.runquants[e] = rq
-                remaining.discard(e)
-                if not remaining:
-                    on_done()
+                settled(e, True)
 
             def failed(text, e=e):
                 p.message.emit(f"🧪 {e.name} failed: {text}")
-                remaining.discard(e)
-                if not remaining:
-                    on_done()
+                settled(e, False)
 
-            p.jobs.submit(f"🧪 {label}: {e.name}", work, done, failed)
+            p.jobs.submit(f"🧪 {label}: {e.name}", work, done, failed,
+                          on_cancel=lambda e=e: settled(e, False))
 
     def run(self, on_done=None) -> bool:
         ok, why = self.ready()
@@ -165,6 +203,7 @@ class QuantState(QtCore.QObject):
                 self.project.message.emit(why)
             return False
         self._set_running(True)
+        input_revision = self._input_revision
         self.runquants = {}
         self.report = None
         entries = [self.project.entries[i] for i in self.project.loaded()]
@@ -175,6 +214,12 @@ class QuantState(QtCore.QObject):
             self._measure(entries, used, "Measuring", finish)
 
         def finish():
+            if input_revision != self._input_revision:
+                self.stale = True
+                self._set_running(False)
+                self.changed.emit()
+                self.project.message.emit("Quantification inputs changed during processing. Rerun Quantify.")
+                return
             self.finish()
             self._set_running(False)
             self.was_run = True
@@ -245,12 +290,25 @@ class QuantState(QtCore.QObject):
     # ------------------------------------------------------------ files
     def to_dict(self, rel) -> dict:
         return {"settings": self.settings.to_dict(), "decisions": self.decisions.to_dict(),
-                "levels": rel(self.levels_path), "was_run": bool(self.runquants)}
+                "levels": rel(self.levels_path), "levels_data": self.levels if self.levels_path is None else None,
+                "targets_data": [asdict(t) for t in self.targets] if self._inline_targets else None,
+                "amount_unit": self.amount_unit, "calibration_setup": self.calibration_setup,
+                "was_run": bool(self.runquants)}
 
     def from_dict(self, d: dict, resolve) -> None:
         d = d or {}
         self.settings = QuantSettings.from_dict(d.get("settings", {}))
         self.decisions = QuantDecisions.from_dict(d.get("decisions", {}))
+        self.amount_unit = d.get("amount_unit", "calibration units")
+        self.calibration_setup = d.get("calibration_setup", {})
+        self._inline_targets = d.get("targets_data") is not None
+        if d.get("targets_data") is not None:
+            self.targets = [Target(**{**t, "qual_ions": tuple(t.get("qual_ions", ())),
+                                     "qual_ratios": tuple(t.get("qual_ratios", ()))})
+                            for t in d["targets_data"]]
+            self.targets_error = ""
+        elif self.project.targets_path is None:
+            self.targets, self.targets_error = None, ""
         self.report, self.runquants, self.positions, self.ratios = None, {}, {}, {}
         self.stale = False
         self.levels, self.levels_path = None, None
@@ -258,5 +316,7 @@ class QuantState(QtCore.QObject):
         if lv is not None and Path(lv).exists():
             self.levels_path = Path(lv)
             self.levels = load_levels(lv)
+        if d.get("levels_data") is not None:
+            self.levels = d["levels_data"]
         self.was_run = bool(d.get("was_run"))
         self.changed.emit()

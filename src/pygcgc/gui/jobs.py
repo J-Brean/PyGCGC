@@ -24,6 +24,7 @@ from typing import Any, Callable
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .icons import plain
+from .garbage_collection import ensure_gui_collection
 
 
 class Cancelled(Exception):
@@ -113,6 +114,7 @@ class JobManager(QtCore.QObject):
 
     def __init__(self, parent=None, max_threads: int | None = None):
         super().__init__(parent)
+        ensure_gui_collection()
         self.pool = QtCore.QThreadPool(self)
         n = max_threads or max(1, (os.cpu_count() or 2) - 1)
         self.pool.setMaxThreadCount(n)

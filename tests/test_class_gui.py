@@ -27,20 +27,19 @@ def _classified(qtbot, w, i):
     return w.classes.result_for(i)
 
 
-def test_classify_is_step_seven_between_quantify_and_identify(qtbot, window):
+def test_classify_is_an_assignment_tool_before_quantification(qtbot, window):
     keys = window.workflow.keys()
-    assert keys.index("quant") + 1 == keys.index("classify") == keys.index("identify") - 1
-    assert window.step_actions["classify"].text().lstrip("✓▸ ") == "7 🧬 Classify"
-    assert window.step_actions["identify"].text().lstrip("✓▸ ") == "8 🏷️ Identify"
-    assert window.step_actions["quant"].text().lstrip("✓▸ ") == "6 🧪 Quantify"
-    assert window.workflow.step_info("classify")["why"] in window.step_actions["classify"].toolTip()
+    assert keys.index("assign") < keys.index("classify") < keys.index("quant")
+    assert window.workflow.step_info("classify")["parent"] == "assign"
+    assert window.workflow.step_info("identify")["parent"] == "assign"
+    assert "classify" not in window.step_actions
 
 
 def test_go_classifies_legacy_blobs_and_shows_why(qtbot, window):
     w = window
     i = _blobs(qtbot, w)
     blobs = w.blobs.blobs_for(i)
-    w.step_actions["classify"].trigger()
+    w.assign_step.buttons["classify"].click()
     w.workflow.goRequested.emit("classify")
     qtbot.waitUntil(lambda: w.classes.result_for(i) is not None, timeout=TIMEOUT)
     result = w.classes.result_for(i)

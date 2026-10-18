@@ -1,13 +1,17 @@
 """📊 Fit and residual map: what the fitted blobs explain, and what is left over.
 
-Three linked views of one run, on the same axes as the main chromatogram:
+Four linked views of one run, on the same axes as the main chromatogram:
 
 - Observed: the cleaned total-ion image the blobs were fitted to.
-- Fitted: the sum of every fitted blob (each blob's shape times its full spectrum).
+- Fitted: the sum of every fitted blob (each blob's shape times its full spectrum), that is,
+  the integrated area the blobs assign to each pixel.
 - Residual: observed minus fitted. Red is signal no blob explains; blue is where the
   blobs put more signal than was measured. The colour scale is a signed logarithm
   scaled to the residual's own noise level, so both faint leftovers and large misfits
   stay visible: 0 is noise-sized, 1 is ten times the noise, 2 is a hundred times.
+
+- Identified fraction: fitted divided by observed in each pixel, 0 where the blobs explain
+  nothing and 1 where they explain all of it. Pixels within 3 noise levels of zero are blank.
 
 Observed and fitted share one logarithmic colour scale, so they can be compared by eye.
 """
@@ -53,13 +57,15 @@ class FitMapWindow(QtWidgets.QWidget):
 
         self.canvas = pg.GraphicsLayoutWidget()
         self.plots, self.images = [], []
-        for row, title in enumerate(("Observed (cleaned)", "Fitted blobs", "Residual (observed − fitted)")):
+        for row, title in enumerate(("Observed (cleaned)", "Fitted blobs (integrated area per pixel)",
+                                     "Residual (observed − fitted)",
+                                     "Identified fraction (fitted ÷ observed)")):
             plot = self.canvas.addPlot(row=row, col=0)
             plot.setTitle(title, size="9pt")
             plot.setLabel("left", "t₂ (s)")
             plot.setMenuEnabled(False)
             plot.hideButtons()
-            if row == 2:
+            if row == 3:
                 plot.setLabel("bottom", "t₁ (min)")
             if row:
                 plot.setXLink(self.plots[0])
@@ -74,7 +80,9 @@ class FitMapWindow(QtWidgets.QWidget):
                      pg.ColorBarItem(values=(0, 1), colorMap=pg.colormap.get("turbo"), interactive=False,
                                      width=12, label="log₁₀ TIC"),
                      pg.ColorBarItem(values=(-1, 1), colorMap=_diverging_map(), interactive=False,
-                                     width=12, label="signed log₁₀ (residual / noise)")]
+                                     width=12, label="signed log₁₀ (residual / noise)"),
+                     pg.ColorBarItem(values=(0, 1), colorMap=pg.colormap.get("viridis"), interactive=False,
+                                     width=12, label="fitted / observed")]
         for bar, image, plot in zip(self.bars, self.images, self.plots):
             bar.setImageItem(image, insert_in=plot)
         self._outline_items: list = []
@@ -98,8 +106,13 @@ class FitMapWindow(QtWidgets.QWidget):
         centre = float(np.median(residual))
         noise = 1.4826 * float(np.median(np.abs(residual - centre)))
         noise = noise if noise > 0 else float(np.std(residual)) or 1.0
-        self._data = dict(tic=tic, model=model, residual=residual, t1_start=t1_start, period=period,
-                          pitch=pitch, outlines=outlines, noise=noise)
+        # Share of each pixel's signal that the blobs account for. Pixels within 3 noise
+        # levels of zero are left blank: their ratio is noise divided by noise.
+        measured = tic > 3.0 * noise
+        fraction = np.full(tic.shape, np.nan)
+        fraction[measured] = np.clip(model[measured], 0.0, None) / tic[measured]
+        self._data = dict(tic=tic, model=model, residual=residual, fraction=fraction, t1_start=t1_start,
+                          period=period, pitch=pitch, outlines=outlines, noise=noise)
         positive = tic[tic > 0]
         floor = max(float(np.percentile(positive, 1.0)), 1e-12) if positive.size else 1.0
         observed_log = np.log10(np.clip(tic, floor, None))
@@ -111,7 +124,8 @@ class FitMapWindow(QtWidgets.QWidget):
         rect = QtCore.QRectF(t1_start / 60.0, -0.5 * pitch, tic.shape[1] * period / 60.0, tic.shape[0] * pitch)
         for image, values, bar, levels in ((self.images[0], observed_log, self.bars[0], (lo, hi)),
                                            (self.images[1], fitted_log, self.bars[1], (lo, hi)),
-                                           (self.images[2], shown, self.bars[2], (-span, span))):
+                                           (self.images[2], shown, self.bars[2], (-span, span)),
+                                           (self.images[3], fraction, self.bars[3], (0.0, 1.0))):
             image.setImage(values, autoLevels=False)
             image.setRect(rect)
             bar.setLevels(levels)
@@ -154,7 +168,9 @@ class FitMapWindow(QtWidgets.QWidget):
         if not (0 <= row < d["tic"].shape[0] and 0 <= col < d["tic"].shape[1]):
             self.cursor.setText("")
             return
+        share = d["fraction"][row, col]
+        identified = f"   identified {share:.0%}" if np.isfinite(share) else ""
         self.cursor.setText(
             f"t₁ {p.x():.3f} min   t₂ {row * d['pitch']:.2f} s   observed {d['tic'][row, col]:,.4g}   "
             f"fitted {d['model'][row, col]:,.4g}   residual {d['residual'][row, col]:,.4g} "
-            f"({d['residual'][row, col] / d['noise']:+.1f}× noise)")
+            f"({d['residual'][row, col] / d['noise']:+.1f}× noise)" + identified)

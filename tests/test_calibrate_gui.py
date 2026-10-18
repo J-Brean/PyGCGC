@@ -440,6 +440,10 @@ def test_the_main_windows_ms_aware_peaks_are_used_as_they_are(qtbot, cal_folder,
     cw._draw_overlay()
     overlays = cw.view._component_overlays
     assert len(overlays) == 1 and overlays[0]["colour"] == CONTOUR_COLOUR
+    # The image arrives asynchronously; contours cannot be placed before that frame exists.
+    qtbot.waitUntil(lambda: cw.view.result is not None
+                    and cw.view.result.name == cw.project.entries[0].name
+                    and bool(cw.view.component_items), timeout=TIMEOUT)
     assert len(overlays[0]["outline"][0]) > 0 and cw.view.component_items
     # A sample is the main window's own run: its peaks are reused whatever the builder's period
     # (a period check against the builder sent every sample to a fresh search of minutes).

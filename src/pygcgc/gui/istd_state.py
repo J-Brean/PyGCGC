@@ -16,7 +16,9 @@ background job, the same cost model `ClassState.classify` already accepts.
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
+import hashlib
+import json
 
 import numpy as np
 from PySide6 import QtCore
@@ -38,7 +40,14 @@ class IstdState(QtCore.QObject):
         self.references: dict[str, IstdReference] = {}
         self.matches: dict[str, dict[str, IstdMatch]] = {}
         self.settings = IstdMatchSettings()
+        self.running = False
+        self.match_inputs: dict[str, str] = {}
+        self.review_decisions: dict[str, dict] = {}
+        self._signature_cache = {}
         project.runsChanged.connect(self._prune)
+        self.changed.connect(self._invalidate_reviewed_quant)
+        for signal in (project.blobs.changed, project.layersChanged, project.foldChanged):
+            signal.connect(self._invalidate_reviewed_quant)
 
     def _prune(self) -> None:
         names = {e.name for e in self.project.entries}
@@ -46,6 +55,100 @@ class IstdState(QtCore.QObject):
             self.reference_run = None
         for name in [n for n in self.matches if n not in names]:
             self.matches.pop(name, None)
+
+    def input_signature(self, index: int) -> str:
+        """Stable result/input identity; uncacheable layers conservatively need re-review on reload."""
+        p, b = self.project, self.project.blobs
+        e = p.entries[index]
+        result = b.components_for(index) if b.method == MS_AWARE else b.blobs_for(index)
+        key = (p.base_key(index) or f"session:{id(p.base_run(index))}", p.period, e.phase,
+               b.method, repr(b.component_settings if b.method == MS_AWARE else b.settings),
+               tuple(id(g) for g in result.groups) if b.method == MS_AWARE and result is not None else id(result),
+               repr(self.settings), tuple((r.name, r.t1, r.t2, hashlib.sha256(np.asarray(r.spectrum, dtype=np.float64).tobytes()).hexdigest())
+                                         for r in self.references.values()))
+        cached = self._signature_cache.get(e.name)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        if result is None:
+            payload = None
+        elif b.method == MS_AWARE:
+            payload = result.to_dict()
+        else:
+            payload = (result.t1.tolist(), result.t2.tolist(), result.volume.tolist(),
+                       hashlib.sha256(result.spectra.tobytes()).hexdigest())
+        # The object identities above only cache this computation; persisted signatures
+        # contain the reproducible source/settings/result values instead.
+        stable = (key[:5], key[6:], payload)
+        signature = hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()
+        self._signature_cache[e.name] = (key, signature)
+        return signature
+
+    def is_stale(self, run: str) -> bool:
+        index = self.project.index_of(run)
+        if index is None or self.project.entries[index].run is None:
+            return True
+        return (self.project.blobs.running or self.project.blobs.selected_stale(self.project.entries[index])
+                or self.match_inputs.get(run) != self.input_signature(index))
+
+    def _review_key(self, run, name):
+        return json.dumps([run, name])
+
+    def reviewed(self, run, name) -> bool:
+        decision = self.review_decisions.get(self._review_key(run, name))
+        match = self.matches.get(run, {}).get(name)
+        return bool(decision and match and not self.is_stale(run)
+                    and decision['signature'] == self.match_inputs.get(run)
+                    and json.dumps(decision['match'], sort_keys=True) == json.dumps(asdict(match), sort_keys=True))
+
+    def reviewed_matches(self, run):
+        return {name: match for name, match in self.matches.get(run, {}).items() if self.reviewed(run, name)}
+
+    def exceptions(self):
+        """Missing, uncertain, unsearched or stale standard/run pairs, in sequence order."""
+        result = []
+        for i in self.project.loaded():
+            run = self.project.entries[i].name
+            for name in self.references:
+                match = self.matches.get(run, {}).get(name)
+                if (match is None or self.is_stale(run) or not match.found or match.needs_review
+                        or self._review_key(run, name) in self.review_decisions) and not self.reviewed(run, name):
+                    result.append((run, name))
+        return result
+
+    def outdated_reviews(self):
+        return [(self.project.entries[i].name, name) for i in self.project.loaded() for name in self.references
+                if self._review_key(self.project.entries[i].name, name) in self.review_decisions
+                and not self.reviewed(self.project.entries[i].name, name)]
+
+    def _invalidate_reviewed_quant(self, *_):
+        q = self.project.quant
+        if self.review_decisions and (q.runquants or q.running) and not q.stale and self.outdated_reviews():
+            q.mark_stale()
+
+    def review_match(self, run, name, match=None, *, missing=False):
+        """Save a per-run choice/acknowledgement without changing the global reference."""
+        if self.project.quant.running:
+            raise ValueError("Wait for quantification to finish before changing standard decisions.")
+        if self.running:
+            raise ValueError("Wait for the standard search to finish before changing review decisions.")
+        if self.is_stale(run):
+            raise ValueError("Standard matches are out of date; search this sequence again first.")
+        current = self.matches.get(run, {}).get(name)
+        if current is None:
+            raise ValueError("Search for internal standards before recording a review.")
+        if missing:
+            match = replace(current, status="not found", peak_id=None,
+                            reason="Reviewed: internal standard is absent; quantitative results must retain missing-IS flags")
+        elif match is not None:
+            match = replace(match, status="found", reason=("Manual per-run selection. " + match.reason).strip())
+        else:
+            match = current
+        self.matches.setdefault(run, {})[name] = match
+        self.review_decisions[self._review_key(run, name)] = dict(
+            signature=self.match_inputs[run], match=asdict(match), missing=missing,
+            manual=match is not current)
+        self.project.quant.mark_stale()
+        self.changed.emit()
 
     # ------------------------------------------------------------- library
     def add_custom(self, name: str, cas: str = "", product_code: str = "") -> None:
@@ -71,10 +174,11 @@ class IstdState(QtCore.QObject):
         # component id cannot be looked up among them.
         if p.blobs.method == MS_AWARE:
             component_set = p.blobs.components_for(index)
-            if component_set is not None and component_set.groups:
-                base_run, fold = p.base_run(index), p.fold(index)
-                peaks, _model, _footprint = respectrum_components(base_run, fold, component_set)
-                return peaks
+            if component_set is None:
+                return None
+            base_run, fold = p.base_run(index), p.fold(index)
+            peaks, _model, _footprint = respectrum_components(base_run, fold, component_set)
+            return peaks
         return p.blobs.blobs_for(index)
 
     @staticmethod
@@ -135,6 +239,8 @@ class IstdState(QtCore.QObject):
     def propagate_to(self, indices: list[int], on_done=None) -> None:
         """Search every run in `indices` (the labelling run included) for every
         labelled standard, with the current thresholds."""
+        if self.running:
+            return
         if not self.references:
             self.project.message.emit("🏷️ Label at least one internal standard first")
             return
@@ -146,9 +252,25 @@ class IstdState(QtCore.QObject):
         missing: list[str] = []
         references = list(self.references.values())
         settings = self.settings
+        self.running = True
+        unsuccessful = []
+        self.changed.emit()
+
+        def settled(entry, success=True):
+            if not success:
+                unsuccessful.append(entry.name)
+            remaining.discard(entry)
+            if not remaining:
+                self.running = False
+                self.changed.emit()
+                if missing:
+                    self.project.message.emit("Internal standards need review in: " + "; ".join(missing))
+                if not unsuccessful and on_done:
+                    on_done()
 
         def start(entry) -> None:
             idx = p.entries.index(entry)
+            signature = self.input_signature(idx)
 
             def work(token, progress):
                 peaks = self._peaks_for(idx)
@@ -159,20 +281,23 @@ class IstdState(QtCore.QObject):
                 return match_run(references, entry.name, peaks, settings)
 
             def done(results) -> None:
+                if entry not in p.entries or signature != self.input_signature(p.entries.index(entry)):
+                    settled(entry, False)
+                    return
+                for j, match in enumerate(results):
+                    decision = self.review_decisions.get(self._review_key(entry.name, match.name))
+                    if decision and decision['signature'] == signature and decision.get('manual'):
+                        results[j] = IstdMatch.from_dict(decision['match'])
                 self.matches[entry.name] = {m.name: m for m in results}
+                self.match_inputs[entry.name] = signature
                 lost = [m.name for m in results if not m.found]
                 if lost:
                     missing.append(f"{entry.name} ({', '.join(lost)})")
-                remaining.discard(entry)
-                if not remaining:
-                    self.changed.emit()
-                    if missing:
-                        self.project.message.emit(
-                            "🏷️ Not every internal standard passed the thresholds in: " + "; ".join(missing))
-                    if on_done:
-                        on_done()
+                settled(entry)
 
-            p.jobs.submit(f"🏷️ Finding internal standards: {entry.name}", work, done)
+            p.jobs.submit(f"🏷️ Finding internal standards: {entry.name}", work, done,
+                          lambda message, e=entry: (p.message.emit(message), settled(e, False)),
+                          on_cancel=lambda e=entry: settled(e, False))
 
         for e in entries:
             start(e)
@@ -195,7 +320,8 @@ class IstdState(QtCore.QObject):
                        for name, r in self.references.items()},
             matches={run: {name: asdict(m) for name, m in per_run.items()}
                      for run, per_run in self.matches.items()},
-            settings=self.settings.to_dict())
+            settings=self.settings.to_dict(), match_inputs=self.match_inputs,
+            review_decisions=self.review_decisions)
 
     def from_dict(self, d: dict) -> None:
         d = d or {}
@@ -211,4 +337,8 @@ class IstdState(QtCore.QObject):
             run: {name: IstdMatch.from_dict(m) for name, m in per_run.items() if "status" in m}
             for run, per_run in d.get("matches", {}).items()}
         self.settings = IstdMatchSettings.from_dict(d.get("settings", {}))
+        self.match_inputs = d.get("match_inputs", {})
+        self.review_decisions = d.get("review_decisions", {})
+        self._signature_cache = {}
+        self.running = False
         self.changed.emit()

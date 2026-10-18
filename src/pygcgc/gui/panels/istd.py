@@ -49,7 +49,7 @@ SHOW = {
 
 def _colour_key(m) -> str:
     if m.found:
-        return "ambiguous" if m.n_passing > 1 else FOUND
+        return "ambiguous" if m.needs_review else FOUND
     return m.status
 
 
@@ -81,6 +81,7 @@ class IstdPanel(QtWidgets.QWidget):
     exportRequested = QtCore.Signal()
     targetsRequested = QtCore.Signal()            # write the labelled standards as target-table rows
     settingsChanged = QtCore.Signal(object)       # IstdMatchSettings
+    reviewRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -155,6 +156,8 @@ class IstdPanel(QtWidgets.QWidget):
 
         self.find_btn = QtWidgets.QPushButton("🔎 Find in every chromatogram")
         self.find_btn.clicked.connect(self.findAllRequested)
+        self.review_btn = QtWidgets.QPushButton("Review missing or uncertain matches…")
+        self.review_btn.clicked.connect(self.reviewRequested)
         self.export_btn = QtWidgets.QPushButton("Export results (CSV)…")
         self.export_btn.clicked.connect(self.exportRequested)
         self.targets_btn = QtWidgets.QPushButton("📋 Use as target table…")
@@ -183,6 +186,7 @@ class IstdPanel(QtWidgets.QWidget):
         lay.addLayout(row2)
         lay.addWidget(thresholds)
         lay.addWidget(self.find_btn)
+        lay.addWidget(self.review_btn)
         lay.addWidget(self.summary)
         row3 = QtWidgets.QHBoxLayout()
         row3.addWidget(self.export_btn)
@@ -256,6 +260,7 @@ class IstdPanel(QtWidgets.QWidget):
         if self.istd is None:
             return
         istd = self.istd
+        self.review_btn.setText(f"Review {len(istd.exceptions())} exceptions…")
         selected = self.selected_name()
         n_runs = len(istd.matches)
         self.library_table.setRowCount(len(istd.library))
@@ -292,14 +297,17 @@ class IstdPanel(QtWidgets.QWidget):
                                  "chromatogram with these thresholds.")
         else:
             found = sum(m.found for m in matches)
+            review = sum(m.needs_review for m in matches)
             self.summary.setText(f"{found} of {len(matches)} standard-run pairs pass all three thresholds, over "
-                                 f"{n_runs} chromatogram(s). The full table is in the 🏷️ Internal standards dock.")
+                                 f"{n_runs} chromatogram(s). {review} need review. "
+                                 "The full table is in the Standards tab.")
 
 
 class IstdResultsTable(QtWidgets.QWidget):
     """Standards down, chromatograms across."""
     cellChosen = QtCore.Signal(str, str)          # run, standard: open the run on it
     relabelRequested = QtCore.Signal(str, str)    # run, standard: label it there by hand
+    reviewRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -318,6 +326,9 @@ class IstdResultsTable(QtWidgets.QWidget):
         self.table.cellClicked.connect(lambda r, c: self._emit(self.cellChosen, r, c))
         self.table.cellDoubleClicked.connect(lambda r, c: self._emit(self.relabelRequested, r, c))
         top = QtWidgets.QHBoxLayout()
+        self.review_btn = QtWidgets.QPushButton("Review exceptions…")
+        self.review_btn.clicked.connect(self.reviewRequested)
+        top.addWidget(self.review_btn)
         top.addWidget(QtWidgets.QLabel("Show"))
         top.addWidget(self.show_box)
         top.addWidget(self.legend, 1)
@@ -363,8 +374,15 @@ class IstdResultsTable(QtWidgets.QWidget):
                     item.setToolTip("Not searched yet: press Go")
                     item.setForeground(QtGui.QBrush())
                     continue
-                mark = "✓" if m.found else ("·" if m.status == NO_PEAKS else "✗")
+                mark = ("Review" if m.needs_review else "✓") if m.found else ("·" if m.status == NO_PEAKS else "✗")
                 value = show(m)
                 item.setText(f"{mark} {value}" if value else mark)
                 item.setToolTip(_tooltip(m, istd.settings))
+                if istd.reviewed(run, name):
+                    item.setToolTip("Reviewed decision; scientific fit warnings remain.\n" + item.toolTip())
+                    if m.needs_review:
+                        item.setText(item.text().replace("Review", "Reviewed", 1))
+                elif istd.is_stale(run):
+                    item.setText(item.text() + " (stale)")
+                    item.setToolTip("Out of date: search Standards again.\n" + item.toolTip())
                 item.setForeground(QtGui.QBrush(STATUS_COLOURS[_colour_key(m)]))

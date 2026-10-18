@@ -67,6 +67,7 @@ class RowsModel(QtCore.QAbstractTableModel):
         super().__init__(parent)
         self.rows: list[dict] = []
         self.keys: list[str] = []
+        self.amount_unit = "calibration units"
 
     def set_rows(self, rows: list[dict], keys: list[str]) -> None:
         self.beginResetModel()
@@ -82,6 +83,10 @@ class RowsModel(QtCore.QAbstractTableModel):
     def headerData(self, section, orientation, role=QtCore.Qt.ItemDataRole.DisplayRole):
         if role == QtCore.Qt.ItemDataRole.DisplayRole and orientation == QtCore.Qt.Orientation.Horizontal:
             k = self.keys[section]
+            if k in ('amount', 'amount_se', 'lod', 'loq'):
+                return f"{HEADERS.get(k, k)} ({self.amount_unit})"
+            if k == 'concentration':
+                return f"Concentration ({self.amount_unit}/m³)"
             return HEADERS.get(k, k.replace("_", " "))
         return None
 
@@ -233,6 +238,11 @@ class ResultsPanel(QtWidgets.QWidget):
             self.banner.setVisible(stale)
         self._fill_boxes()
         self.refresh()
+
+    def set_amount_unit(self, unit):
+        self.model.amount_unit = unit
+        if self.model.columnCount():
+            self.model.headerDataChanged.emit(QtCore.Qt.Orientation.Horizontal, 0, self.model.columnCount()-1)
 
     def _fill_boxes(self) -> None:
         r = self.report

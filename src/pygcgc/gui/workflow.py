@@ -17,6 +17,7 @@ class WorkflowPanel(QtWidgets.QWidget):
     goRequested = QtCore.Signal(str)        # step key
     stepChanged = QtCore.Signal(str)
     progressChanged = QtCore.Signal()       # a tick or the suggested next step changed
+    prerequisiteRequested = QtCore.Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -31,6 +32,7 @@ class WorkflowPanel(QtWidgets.QWidget):
         self.back_btn.clicked.connect(self._go_back)
         self.back_btn.setVisible(False)
         self.title = QtWidgets.QLabel("")
+        self.title.setWordWrap(True)
         f = self.title.font()
         f.setPointSizeF(f.pointSizeF() * 1.9)
         f.setBold(True)
@@ -67,6 +69,14 @@ class WorkflowPanel(QtWidgets.QWidget):
         self.go_note.setWordWrap(True)
         self.go_note.setStyleSheet("color: palette(mid);")
         self.go_note.setVisible(False)
+        self.prerequisite_btn = QtWidgets.QPushButton()
+        self.prerequisite_btn.setVisible(False)
+        self.prerequisite_btn.clicked.connect(lambda: self.prerequisiteRequested.emit(
+            self._by_key[self.current()].get("prerequisite", "")))
+
+        self.skip_btn = QtWidgets.QPushButton("Skip alignment")
+        self.skip_btn.clicked.connect(self._skip_current)
+        self.skip_btn.setVisible(False)
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 12, 0, 0)
@@ -80,6 +90,8 @@ class WorkflowPanel(QtWidgets.QWidget):
         lay.addWidget(self.stack, 1)
         lay.addWidget(self.banner)
         lay.addWidget(self.go_note)
+        lay.addWidget(self.prerequisite_btn)
+        lay.addWidget(self.skip_btn)
         lay.addWidget(self.go_btn)
 
     def minimumSizeHint(self) -> QtCore.QSize:
@@ -88,7 +100,7 @@ class WorkflowPanel(QtWidgets.QWidget):
     # ---------------------------------------------------------------- setup
     def add_step(self, key: str, label: str, title: str, blurb: str, why: str,
                  widget: QtWidgets.QWidget, go_label: str, scrolled: bool = True,
-                 parent: str | None = None) -> None:
+                 parent: str | None = None, optional: bool = False) -> None:
         """Steps are chosen from the toolbar (the window owns those buttons); this
         panel shows the open step's settings and its Go button. `label` names the
         step in the next-step banner, `title` is the heading, `blurb` says what the
@@ -107,7 +119,8 @@ class WorkflowPanel(QtWidgets.QWidget):
         self.stack.addWidget(host)
         number = None if parent else sum(1 for s in self._steps if not s["parent"]) + 1
         step = dict(key=key, n=number, label=label, title=title, blurb=blurb, why=why, host=host,
-                    go_label=go_label, done=False, go_enabled=True, note="", parent=parent)
+                    go_label=go_label, done=False, skipped=False, optional=optional,
+                    go_enabled=True, note="", parent=parent)
         self._steps.append(step)
         self._by_key[key] = step
         if n == 0:
@@ -116,6 +129,17 @@ class WorkflowPanel(QtWidgets.QWidget):
 
     def next_key(self) -> str | None:
         return self._next_key
+
+    def set_order(self, keys: list[str]) -> None:
+        """Order the workflow independently of the settings widgets' stack indices."""
+        if len(keys) != len(self._steps) or set(keys) != set(self._by_key):
+            raise ValueError("Workflow order must include every step exactly once")
+        self._steps = [self._by_key[k] for k in keys]
+        number = 0
+        for step in self._steps:
+            if not step["parent"]:
+                number += 1
+            step["n"] = None if step["parent"] else number
 
     def step_info(self, key: str) -> dict:
         return self._by_key[key]
@@ -131,13 +155,17 @@ class WorkflowPanel(QtWidgets.QWidget):
 
     # ---------------------------------------------------------------- state
     def current(self) -> str:
-        return self._steps[self.stack.currentIndex()]["key"] if self._steps else ""
+        host = self.stack.currentWidget()
+        return next((s["key"] for s in self._steps if s["host"] is host), "")
 
     def keys(self) -> list[str]:
         return [s["key"] for s in self._steps]
 
     def is_done(self, key: str) -> bool:
         return self._by_key[key]["done"]
+
+    def is_skipped(self, key: str) -> bool:
+        return self._by_key[key]["skipped"]
 
     def show_step(self, key: str, emit: bool = True) -> None:
         s = self._by_key[key]
@@ -151,6 +179,7 @@ class WorkflowPanel(QtWidgets.QWidget):
         self.why.setText(s["why"])
         self.go_btn.setText(f"▶  {s['go_label']}")
         self._refresh_go(s)
+        self.skip_btn.setVisible(s["optional"])
         # The banner belongs to the step that just finished; drop it once the user moves on.
         if self.banner.property("for") not in (None, key):
             self.banner.setVisible(False)
@@ -161,6 +190,7 @@ class WorkflowPanel(QtWidgets.QWidget):
         """A step finished: tick it and offer the next one."""
         s = self._by_key[key]
         s["done"] = True
+        s["skipped"] = False
         nxt = self._following(key)
         self._next_key = nxt
         self.progressChanged.emit()
@@ -178,7 +208,9 @@ class WorkflowPanel(QtWidgets.QWidget):
     def clear_done(self, key: str | None = None) -> None:
         for s in self._steps if key is None else [self._by_key[key]]:
             s["done"] = False
-        first = next((s["key"] for s in self._steps if not s["done"] and not s["parent"]), None)
+            s["skipped"] = False
+        first = next((s["key"] for s in self._steps
+                      if not s["done"] and not s["skipped"] and not s["parent"]), None)
         self._next_key = first
         if key is None:
             self.banner.setVisible(False)
@@ -196,13 +228,31 @@ class WorkflowPanel(QtWidgets.QWidget):
         if key == self.current():
             self._refresh_go(s)
 
+    def set_guidance(self, key: str, message: str, action: str = "", label: str = "") -> None:
+        s = self._by_key[key]
+        s['guidance'], s['prerequisite'], s['prerequisite_label'] = message, action, label
+        if key == self.current():
+            self._refresh_go(s)
+
     # -------------------------------------------------------------- helpers
     def _following(self, key: str) -> str | None:
         # A sub-step hands on from its parent's position, and sub-steps are never offered.
         key = self._by_key[key]["parent"] or key
         keys = [k for k in self.keys() if not self._by_key[k]["parent"]]
-        after = keys[keys.index(key) + 1:] + keys[:keys.index(key)]
-        return next((k for k in after if not self._by_key[k]["done"]), None)
+        after = keys[keys.index(key) + 1:]
+        return next((k for k in after
+                     if not self._by_key[k]["done"] and not self._by_key[k]["skipped"]), None)
+
+    def _skip_current(self) -> None:
+        s = self._by_key[self.current()]
+        if not s["optional"]:
+            return
+        s["skipped"] = True
+        s["done"] = False
+        self._next_key = self._following(s["key"])
+        self.progressChanged.emit()
+        if self._next_key:
+            self.show_step(self._next_key)
 
     def _go_back(self) -> None:
         parent = self._by_key[self.current()]["parent"]
@@ -217,10 +267,31 @@ class WorkflowPanel(QtWidgets.QWidget):
         busy = s.get("busy", False)
         self.go_btn.setEnabled(s["go_enabled"] and not busy)
         self.go_btn.setText("Working…" if busy else f"▶  {s['go_label']}")
-        note = "" if s["go_enabled"] else s["note"]
+        note = s.get('guidance') or ("" if s["go_enabled"] else s["note"])
         self.go_note.setText(note)
         self.go_note.setVisible(bool(note))
+        self.prerequisite_btn.setText(s.get('prerequisite_label', ''))
+        self.prerequisite_btn.setVisible(bool(s.get('prerequisite')) and not busy)
 
+
+
+class ToolChoicesPanel(QtWidgets.QWidget):
+    """A small set of named routes within a workflow step."""
+    chosen = QtCore.Signal(str)
+
+    def __init__(self, choices, note="", parent=None):
+        super().__init__(parent)
+        layout = QtWidgets.QVBoxLayout(self)
+        self.buttons = {}
+        for key, label in choices:
+            button = QtWidgets.QPushButton(label)
+            button.clicked.connect(lambda _checked=False, k=key: self.chosen.emit(k))
+            layout.addWidget(button)
+            self.buttons[key] = button
+        self.status = QtWidgets.QLabel(note)
+        self.status.setWordWrap(True)
+        layout.addWidget(self.status)
+        layout.addStretch(1)
 
 
 class QuantStepPanel(QtWidgets.QWidget):
@@ -229,9 +300,14 @@ class QuantStepPanel(QtWidgets.QWidget):
     levelsRequested = QtCore.Signal()
     settingsRequested = QtCore.Signal()
     calibrateRequested = QtCore.Signal()
+    setupRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setup_btn = QtWidgets.QPushButton("Set up calibration and units…")
+        self.setup_btn.clicked.connect(self.setupRequested)
+        self.unit_label = QtWidgets.QLabel()
+        self.unit_label.setWordWrap(True)
         # The guided route: curves built from the standards in their own window, then applied
         # to the other runs. The rest of this panel is the table-driven route.
         calibrate = QtWidgets.QPushButton("📈 Build curves from my standards…")
@@ -239,8 +315,9 @@ class QuantStepPanel(QtWidgets.QWidget):
         calibrate.setToolTip("Select your calibration runs in the Runs table first. Compounds are suggested or "
                              "loaded, curves can be edited point by point, then applied to the other runs.")
         calibrate.clicked.connect(self.calibrateRequested)
-        guided = QtWidgets.QLabel("Easiest: select your calibration runs in the Runs table and press the button "
-                                  "above. Or, with a target table and calibration levels, press ▶ Quantify below.")
+        guided = QtWidgets.QLabel("Set up compounds, calibration runs, known amounts and units above. "
+                                  "Then press Quantify. Existing CSV inputs and the advanced curve builder "
+                                  "are available in Advanced calibration tools.")
         guided.setWordWrap(True)
         guided.setStyleSheet("color: palette(mid);")
         self.status = QtWidgets.QLabel("")
@@ -257,12 +334,21 @@ class QuantStepPanel(QtWidgets.QWidget):
         note.setStyleSheet("color: palette(mid);")
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
-        lay.addWidget(calibrate)
+        lay.addWidget(self.setup_btn)
+        lay.addWidget(self.unit_label)
         lay.addWidget(guided)
         lay.addSpacing(10)
         lay.addWidget(self.status)
-        for b in (targets, levels, settings):
-            lay.addWidget(b)
+        advanced = QtWidgets.QToolButton(self)
+        advanced.setText("Advanced calibration tools")
+        advanced.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QtWidgets.QMenu(advanced)
+        for button in (targets, levels, calibrate, settings):
+            button.setParent(self)
+            button.hide()
+            menu.addAction(button.text(), button.click)
+        advanced.setMenu(menu)
+        lay.addWidget(advanced)
         lay.addWidget(note)
         lay.addStretch(1)
 

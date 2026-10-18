@@ -1373,8 +1373,8 @@ def test_toolbar_follows_the_working_order(qtbot, hydro_window):
     # Step buttons carry a ✓ (done) or ▸ (suggested next) prefix.
     tb = [a.text().lstrip("✓▸ ") for a in w.findChildren(__import__("PySide6").QtWidgets.QToolBar)[0].actions()
           if a.text()]
-    order = ["📂 Open", "1 🔄 Fold", "2 📍 Align", "3 🧹 Background", "4 🔍 Peaks", "5 🏷️ IS",
-             "6 🧪 Quantify", "7 🧬 Classify", "8 🏷️ Identify", "9 🧩 Cluster", "✂️ Resolve overlap", "🗂️ Batch"]
+    order = ["1 Load", "2 Align", "3 🧹 Background", "4 🔍 Peaks", "5 Standards",
+             "6 Assign", "7 🧪 Quantify", "8 Export"]
     pos = [tb.index(x) for x in order if x in tb]
     assert len(pos) == len(order) and pos == sorted(pos)
     # Siloxane and hydrocarbons open from the Peaks panel, not the toolbar.
@@ -1394,7 +1394,7 @@ def test_siloxane_and_hydrocarbon_tools_open_from_peaks(qtbot, window):
     assert wf.current() == "hydro" and wf.title.text() == "Hydrocarbon identifier"
     # A finished sub-menu offers the next numbered step, never itself or its sibling.
     wf.mark_done("hydro", "done")
-    assert wf.next_key() == "istd"
+    assert wf.next_key() == "quant"
 
 
 def test_left_tabs_and_reopening_closed_panels(qtbot, window):
@@ -1433,7 +1433,7 @@ def test_every_step_says_what_and_why(qtbot, window):
 def test_workflow_step_opens_settings_and_go_runs_it(qtbot, window):
     w = window
     wf = w.workflow
-    assert wf.current() == "fold"
+    assert wf.current() == "load"
     # A toolbar step button only opens the settings; nothing runs.
     n = w.undo.count()
     w.step_actions["background"].trigger()

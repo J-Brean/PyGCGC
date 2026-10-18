@@ -158,11 +158,23 @@ def apply_theme(window, dark: bool) -> None:
     changed = app.styleSheet() != stylesheet
     # New windows inherit the application theme. Resetting it for each dialog
     # repolishes every existing widget, making repeated peak inspection slow.
-    if changed:
+    # Fusion is shared by both colour themes. Replacing the style on every
+    # light/dark switch resets Qt's default font and needlessly traverses every
+    # hidden graphics window; choose it once for the application instead.
+    if not app.property('_pygcgc_fusion_selected'):
         app.setStyle("Fusion")
+        app.setProperty('_pygcgc_fusion_selected', True)
     font = QtGui.QFont("Helvetica Neue" if "Helvetica Neue" in QtGui.QFontDatabase.families()
                         else "Arial", 9)
-    if app.font() != font:
+    # A stylesheet can rewrite the family as a fallback list even though the
+    # effective font is unchanged. Resetting that equivalent font recursively
+    # propagates native FontChange events through hidden pyqtgraph windows.
+    # Compare the resolved face/size/style instead of its request representation.
+    current_font, requested_font = QtGui.QFontInfo(app.font()), QtGui.QFontInfo(font)
+    if (current_font.family() != requested_font.family()
+            or current_font.pointSizeF() != requested_font.pointSizeF()
+            or current_font.weight() != requested_font.weight()
+            or current_font.italic() != requested_font.italic()):
         app.setFont(font)
     if changed:
         app.setStyleSheet(stylesheet)

@@ -11,6 +11,20 @@ pytest.importorskip("pyqtgraph")
 from tests.test_gui import TIMEOUT, window  # noqa: E402,F401
 
 
+def test_empty_ms_aware_result_does_not_fall_back_to_legacy_peaks(qtbot, window):
+    from pygcgc.core.components import ComponentSet
+    from pygcgc.gui.blob_state import MS_AWARE
+    w = window
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.was_run, timeout=TIMEOUT)
+    i = w.project.index_of("RUN_A")
+    assert len(w.blobs.blobs_for(i)) > 0
+    w.blobs.set_method(MS_AWARE)
+    assert w.istd._peaks_for(i) is None
+    w.blobs.component_sets_by_name[w.project.entries[i].name] = ComponentSet()
+    assert len(w.istd._peaks_for(i)) == 0
+
+
 def test_label_uses_the_selected_peak_method(qtbot, window):
     # Legacy blobs appear on an MS-aware project once 🫧 or ⛓️ has run. The click picks a
     # component id, so the label must be read from the components, not the legacy blobs

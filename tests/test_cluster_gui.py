@@ -62,7 +62,7 @@ def cwin(qtbot, cluster_folder):
 
 
 def _go(qtbot, w):
-    w.step_actions["cluster"].trigger()
+    w.assign_step.buttons["cluster"].click()
     w.workflow.goRequested.emit("cluster")
     qtbot.waitUntil(lambda: w.clusters.result is not None and not w.clusters.running, timeout=TIMEOUT)
 
@@ -75,7 +75,7 @@ def _go_again(qtbot, w):
 
 
 def _go_regions(qtbot, w):
-    w.step_actions["cluster"].trigger()
+    w.assign_step.buttons["cluster"].click()
     w.workflow.goRequested.emit("cluster")
     qtbot.waitUntil(lambda: w.clusters.regions is not None and not w.clusters.running, timeout=TIMEOUT)
 
@@ -205,9 +205,25 @@ def test_the_unit_and_region_count_are_saved(qtbot, cwin):
     assert w.clusters.unit == "regions" and w.clusters.n_regions == 5 and w.clusters.regions is None
 
 
-def test_cluster_is_the_last_step(qtbot, cwin):
-    assert cwin.workflow.keys()[-1] == "cluster"
-    assert cwin.step_actions["cluster"].text().lstrip("✓▸ ") == "9 🧩 Cluster"
+def test_cluster_is_an_optional_assignment_tool(qtbot, cwin):
+    assert cwin.workflow.step_info("cluster")["parent"] == "assign"
+    assert "cluster" not in cwin.step_actions
+    assert cwin.workflow.keys()[-1] == "export"
+
+
+def test_export_everything_keeps_peak_assignments_and_run_table(qtbot, cwin, tmp_path):
+    import json
+    from pygcgc.gui.export import export_project
+    _go(qtbot, cwin)
+    cwin.start_classify()
+    qtbot.waitUntil(lambda: cwin.classes.result_for(cwin.index) is not None and not cwin.classes.running,
+                    timeout=TIMEOUT)
+    export_project(cwin.project, tmp_path)
+    assert (tmp_path / "peak_clusters.csv").exists()
+    assert (tmp_path / "cluster_run_table.csv").exists()
+    assignment = json.loads((tmp_path / "assignments.json").read_text())["clusters"]
+    assert assignment["assignments"]["labels"] == cwin.clusters.result.labels.tolist()
+    assert (tmp_path / "classes_001.csv").exists()
 
 
 def test_go_clusters_this_run_and_outlines_the_peaks(qtbot, cwin):
