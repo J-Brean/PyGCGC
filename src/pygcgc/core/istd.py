@@ -321,6 +321,41 @@ def match_run(references: list[IstdReference], run_name: str, peaks,
     return out
 
 
+def review_candidates(reference: IstdReference, run_name: str, peaks,
+                      settings: IstdMatchSettings, expected=None, limit=8) -> list[IstdMatch]:
+    """Rank nearby candidates for review without altering the reference or thresholds.
+
+    If no peak lies in the expected box, show the nearest positions as explicit
+    misses. A reviewer can inspect them without mistaking them for automatic passes.
+    """
+    if peaks is None or not len(peaks):
+        return []
+    e1, e2 = expected or (reference.t1, reference.t2)
+    distance = np.hypot((peaks.t1-e1)/settings.max_dt1, (peaks.t2-e2)/settings.max_dt2)
+    inside = np.flatnonzero((np.abs(peaks.t1-e1) <= settings.max_dt1)
+                           & (np.abs(peaks.t2-e2) <= settings.max_dt2))
+    indices = inside if inside.size else np.argsort(distance)[:limit]
+    scores = _spectral_scores(reference, peaks, indices)
+    n_passing = sum(s >= settings.min_spectral for s, _, _ in scores) if inside.size else 0
+    result = []
+    for index, (score, forward, reverse) in zip(indices, scores):
+        i = int(index)
+        confidence = getattr(peaks, 'confidence', [])
+        unresolved = getattr(peaks, 'unresolved', [])
+        passed = bool(inside.size and score >= settings.min_spectral)
+        reason = "" if passed else ("Outside the expected position window" if not inside.size
+                                      else "Spectrum below the automatic match threshold")
+        result.append(IstdMatch(run_name, reference.name, FOUND if passed else NOT_FOUND,
+            peak_id=_peak_id(peaks, i), t1=float(peaks.t1[i]), t2=float(peaks.t2[i]),
+            dt1=float(peaks.t1[i]-reference.t1), dt2=float(peaks.t2[i]-reference.t2),
+            expected_t1=e1, expected_t2=e2, spectral_score=score, forward=forward, reverse=reverse,
+            n_passing=n_passing, reason=reason,
+            peak_confidence=str(confidence[i]) if len(confidence) > i else '',
+            peak_unresolved=bool(unresolved[i]) if len(unresolved) > i else False))
+    return sorted(result, key=lambda m: (-m.spectral_score,
+        abs(m.t1-e1)/settings.max_dt1 + abs(m.t2-e2)/settings.max_dt2))[:limit]
+
+
 # ------------------------------------------------------------------ to the target table
 def references_to_targets(references: list[IstdReference], n_quals: int = 2, min_mz: int = 50) -> list[Target]:
     """Target-table rows (role `istd`) for labelled internal standards, so the

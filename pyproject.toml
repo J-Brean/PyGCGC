@@ -40,4 +40,5 @@ packages = ["src/pygcgc"]
 testpaths = ["tests"]
 addopts = "-ra"
 qt_api = "pyside6"
-markers = ["dummy: needs the synthetic dummy data pack (skipped if not found)"]
+markers = ["dummy: needs the synthetic dummy data pack (skipped if not found)",
+           "real_data: opt-in checks against private local instrument data"]

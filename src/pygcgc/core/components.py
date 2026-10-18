@@ -872,7 +872,7 @@ def _merge_interacting_windows(run, fold, candidates, entries: list, run_name: s
 
 def detect_components(run, fold, run_name: str,
                       settings: ComponentDetectionSettings = ComponentDetectionSettings(),
-                      floor: float | None = None, progress=None, cancel=None) -> tuple:
+                      floor: float | None = None, progress=None, cancel=None, stage=None) -> tuple:
     """Find candidates and return automatically fitted overlapping components.
 
     Candidate rectangles are calculation windows: they bound each local fit but
@@ -880,7 +880,13 @@ def detect_components(run, fold, run_name: str,
     returned ``regions`` are the final windows after any merging, in the order
     that ``ComponentGroup.region_index`` refers to.
     """
+    if stage:
+        stage("Finding candidate peaks")
+    if cancel:
+        cancel()
     candidates = find_candidates(run, fold, settings.candidates, floor=floor)
+    if cancel:
+        cancel()
     frame = make_frame(fold, PeakSettings(wrap_below_s=settings.candidates.wrap_below_s))
     regions = candidate_regions(
         candidates, (frame.rows, len(frame.mid_t1)),
@@ -898,6 +904,8 @@ def detect_components(run, fold, run_name: str,
             if progress is not None:
                 progress(done, len(regions))
         return candidates, regions, component_set
+    if stage:
+        stage("Fitting overlapping components")
     groups = _fit_windows(run, fold, candidates, list(enumerate(regions)), run_name,
                           settings, cancel=cancel, progress=progress)
     groups.sort(key=lambda group: group.region_index)
@@ -905,6 +913,8 @@ def detect_components(run, fold, run_name: str,
     if (settings.merge_windows and settings.model_selection == "pursuit"
             and settings.model in ("gaussian", "tilt") and not settings.refine_selected):
         shape = (frame.rows, len(frame.mid_t1))
+        if stage:
+            stage("Merging neighbouring windows and removing duplicates")
         entries = _drop_duplicates(entries, shape, settings)
         entries = _merge_interacting_windows(run, fold, candidates, entries, run_name,
                                              settings, cancel=cancel)
