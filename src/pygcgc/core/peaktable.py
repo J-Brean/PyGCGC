@@ -106,8 +106,14 @@ def respectrum_components(run, fold, component_set: ComponentSet, wrap_below_s: 
             contours.append(group.contour(j, 0.10))
             r0, c0 = group.row0, group.col0
             model_tic[r0:r0 + n_rows, c0:c0 + n_cols] += profile * total
-            near = (((rr - component.row0) / max(component.sigma_row, 1e-6)) ** 2
-                    + ((cc - component.col0) / max(component.sigma_col, 1e-6)) ** 2) <= 9.0
+            if component.profile.size:
+                # Measured templates have no Gaussian width parameters. Use
+                # their actual shape at the same relative level as 3 sigma.
+                maximum = float(profile.max())
+                near = profile >= maximum * np.exp(-4.5) if maximum > 0 else np.zeros_like(profile, bool)
+            else:
+                near = (((rr - component.row0) / max(component.sigma_row, 1e-6)) ** 2
+                        + ((cc - component.col0) / max(component.sigma_col, 1e-6)) ** 2) <= 9.0
             footprint[r0:r0 + n_rows, c0:c0 + n_cols] |= near
         if progress is not None:
             progress(done, len(groups))

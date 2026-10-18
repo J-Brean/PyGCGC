@@ -113,3 +113,18 @@ def test_downstream_spectra_use_the_same_constrained_solve_as_the_fitter(scene):
             np.testing.assert_allclose(peaks.spectra[offset], component.spectrum, rtol=2e-6, atol=1e-5)
             assert peaks.volume[offset] == pytest.approx(component.volume, rel=2e-6)
             offset += 1
+
+
+def test_measured_templates_have_an_accounting_footprint_without_gaussian_widths(scene):
+    from pygcgc.core.components import ComponentSet, component_profiles_from_durable
+    run, folded, found, *_ = scene
+    templates = ComponentSet.from_dict(found.to_dict())
+    for group in templates.groups:
+        for component in group.components:
+            component.profile = component_profiles_from_durable(component, (group.n_rows, group.n_cols))
+            component.model = 'template'
+            component.sigma_row = component.sigma_col = np.nan
+        group.model = 'template'
+    peaks, model, footprint = respectrum_components(run, folded, templates)
+    assert np.isfinite(peaks.volume).all() and np.all(peaks.volume > 0)
+    assert model[footprint].sum() > .95*model.sum()
