@@ -154,10 +154,18 @@ class FadeTabWidget(QtWidgets.QTabWidget):
 def apply_theme(window, dark: bool) -> None:
     c = DARK if dark else LIGHT
     app = QtWidgets.QApplication.instance()
-    app.setStyle("Fusion")
-    app.setFont(QtGui.QFont("Helvetica Neue" if "Helvetica Neue" in QtGui.QFontDatabase.families()
-                            else "Arial", 9))
-    app.setStyleSheet(_QSS.format(font=FONT, **c))
+    stylesheet = _QSS.format(font=FONT, **c)
+    changed = app.styleSheet() != stylesheet
+    # New windows inherit the application theme. Resetting it for each dialog
+    # repolishes every existing widget, making repeated peak inspection slow.
+    if changed:
+        app.setStyle("Fusion")
+    font = QtGui.QFont("Helvetica Neue" if "Helvetica Neue" in QtGui.QFontDatabase.families()
+                        else "Arial", 9)
+    if app.font() != font:
+        app.setFont(font)
+    if changed:
+        app.setStyleSheet(stylesheet)
     # Qt's default layout spacing is cramped; give every panel room to breathe.
     for lay in window.findChildren(QtWidgets.QLayout):
         if isinstance(lay, (QtWidgets.QBoxLayout, QtWidgets.QGridLayout, QtWidgets.QFormLayout)):
@@ -193,7 +201,8 @@ def apply_theme(window, dark: bool) -> None:
     disabled = QtGui.QPalette.ColorGroup.Disabled
     for role in (R.WindowText, R.Text, R.ButtonText):
         pal.setColor(disabled, role, col(c["mid"]))
-    app.setPalette(pal)
+    if app.palette() != pal:
+        app.setPalette(pal)
     bg = QtGui.QColor(c["plot"])
     bg.setAlpha(c["plot_alpha"])
     for view in (window.view2d, window.view1d, window.spectrum,
