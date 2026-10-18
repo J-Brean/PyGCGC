@@ -33,6 +33,20 @@ The eight numbered buttons on the top toolbar follow the main workflow. The left
 3. Press the primary button at the bottom of the left panel. Its label says what will run or open.
 4. A banner reports the result and offers **Next: …**. It never switches step by itself, so you can look at the result first.
 
+The panel also explains what is missing before an action can run and offers a direct link
+to the relevant step or calibration setup. Alignment needs a reference and searchable anchors,
+or it can be skipped. Standards needs fresh Peaks and a labelled reference. Quantify needs
+named targets, internal standards and enough usable known amounts per target and calibration
+set for the active curve settings (three distinct levels by default). Zero levels and excluded
+points follow the curve's own policy. Native-data period confirmation and energy-channel checks
+still apply. Peak fitting on raw data remains available, with a visible background warning.
+
+Preparation and fitting changes clear completion for affected steps. Stale standard matches
+need a new search, and obsolete review choices need a fresh review. Quantitative results whose
+inputs change during a running job are not marked successful. Export explains partial or stale
+results and records their status in its manifest; it remains available for exporting peaks and
+inputs before quantification is complete.
+
 | Step | Settings shown | Go does |
 |---|---|---|
 | 1 Load | folder, individual files or saved project; modulation checks | opens a data folder and estimates period and phase |
@@ -151,6 +165,41 @@ The panel also lists the ions that lost most signal.
 Background layers are rebuilt automatically when a run's phase or the period changes. Applying and removing 🧹 are both undoable.
 
 ### 🧪 Quantification
+
+**Guided setup.** Open **Set up calibration and units…** in Quantify. It has four pages:
+
+1. Name compounds, choose target or internal-standard roles, set quantifier/qualifier ions
+   and retention times, and assign each target's internal standard. Import an existing target
+   CSV, add labelled standards, or add exactly one peak selected in Peaks. A blank IS name
+   uses the nearest standard. A detected peak still needs a compound name supplied by you.
+2. Mark calibration runs, give them level names and calibration sets, and enter sample air
+   volumes where concentrations per m³ are wanted. Check any filename-based level suggestions.
+3. Enter known amounts for every target at every used calibration level, plus the actual
+   constant amount of each internal standard in every calibration and sample run. There is
+   no assumed 1 ng spike. Filename suggestions only fill blank target cells when explicitly
+   copied; ambiguous tokens such as `025ng` stay unknown. Amounts are amounts on tube, not
+   stock concentrations. Choose one amount unit; switching between pg, ng, ug and mg converts
+   entered numbers. Custom units retain numbers and require checking on the review page.
+   Setup checks the actual curve minimum, zero-level policy and exclusions; it does not
+   lower the three-level default to make an incomplete calibration appear ready.
+4. Review the complete setup and confirm actual amounts, units and constant IS additions.
+   **Apply setup** changes the project atomically and marks old quantitative results stale.
+   Back and Cancel leave active inputs unchanged. Applying does not start quantification.
+
+The table-driven route uses area ratios and assumes each IS addition is constant across the
+sequence. Different standards may have different constant amounts. For varying IS additions,
+use the advanced calibration builder's amount-ratio workflow. Guided setup inputs are embedded
+in the project, including the declared output unit, so they survive reopening without writing
+over target/sequence CSVs or raw files. Results headers and export metadata declare the unit;
+concentration is amount unit/m³ when air volume is present. Legacy CSV workflows retain their
+existing behaviour and show “calibration units” until a unit is declared through setup.
+
+![Guided calibration setup: explicit known target and internal-standard amounts in a synthetic three-level example](images/screenshot_calibration_setup.png)
+
+The main Go action explains missing prerequisites and offers **Set up calibration and units…**
+when named targets, known amounts or sufficient calibration levels are absent. Existing CSV
+loading, quantitative settings and the separate curve builder are under **Advanced calibration
+tools**. Quantitative results still require reviewing fits, qualifiers and calibration coverage.
 
 ![Step 6 after Go: targets circled and internal standards squared on the urban sample](images/screenshot_quant.png)
 
@@ -319,6 +368,23 @@ Auto (the default) picks the simplest tier that already fits the anchors well; y
 **Not built:** clicks don't yet snap to a peak's intensity-weighted centre (click precisely, or zoom in first); the batch search matches anchors independently rather than with a full Hungarian-plus-RANSAC pass across every blob; and there's no small-multiples gallery of one target across every run yet. These are candidates for the milestone 11 batch upgrade once real data show whether they're worth it.
 
 ### 🔍 Peak detection and separation
+
+**Preview before processing a sequence.** Press **Preview fitting…** in Peaks. A visible
+region box supplies the preview bounds; otherwise the current view supplies the first-time
+interval. The preview retains all second-time rows plus one modulation on each side, so
+the rectangle does not cut through profiles across modulations. Choose **Current run** for
+a complete-run preview. It uses the existing background layer, or raw data if none is applied;
+it does not estimate a new background for the crop.
+
+**Preview settings…** edits a local draft. **Run preview** shows detection, fitting, merging
+and full-spectrum progress, followed by observed, fitted, residual and fitted-fraction maps.
+Inspect unexplained signal and unresolved groups. Cancel or close to discard the calculation;
+accepted peaks, project fitting settings and quantitative results remain unchanged. Input
+changes disable application of an old preview. **Use settings and fit all runs** applies the
+draft settings and starts the normal sequence job. Saved manual fit overrides follow their
+usual region-matching rules. Inspect/refit is available from **Peak tools…**.
+
+![Isolated fitting preview on synthetic data, showing observed signal, fitted contributions, residual and fitted fraction](images/screenshot_peak_preview.png)
 
 Step 4 offers two peer detection methods in a saved selector. **MS-aware separation** is the new route for crowded real data. **Legacy blob borders** keeps the old behaviour for comparison and for existing tools that still consume `BlobSet`. Both run across every loaded run from **Find peaks**.
 
@@ -502,6 +568,35 @@ Search every 🔍 blob on the current run against an MSP library (toolbar, or Pr
 ⚙️ edits `IdentifySettings` and **Browse library…** edits a loaded library (see below). **Not built:** genuine Schymanski level 1 (needs a co-injected reference standard) or level 4 (needs an exact-mass molecular formula) confidence -- only 2a/2b/3 are reachable from a unit-mass EI spectrum plus RI. See [Known limitations](../ROADMAP.md) for what else is provisional.
 
 ### 🏷️ Internal standards
+
+**Review exceptions instead of searching every cell.** Press **Review missing or uncertain
+matches…** in Standards or **Review exceptions…** above its results grid. The queue initially
+contains unsearched, stale, missing and uncertain standard/run pairs. Turn off the filter to
+revisit every pair. **Next exception** advances through the queue; recording a decision moves
+to the next remaining pair.
+
+For current results, the dialog ranks nearby candidates and compares the selected candidate
+with an alternative. Each spectrum overlays the reference; fitted MS-aware groups also show
+observed signal, all fitted component contributions, the selected contribution and a residual
+projection. The residual includes local background, because only component contributions are
+shown here. Use **Show selected peak** to jump to the chromatogram or **Inspect/refit this
+group** for the existing refit tool.
+
+- **Use selected candidate and next** records a per-run choice without changing the reference
+  spectrum. A candidate failing automatic thresholds needs the explicit override checkbox.
+- **Keep current match; mark reviewed** records an acknowledgement. Unresolved-fit warnings
+  remain; “reviewed” does not turn a poor model into a reliable amount.
+- **Confirm missing and next** keeps the standard missing. It cannot normalise targets, so
+  dependent quantitative amounts remain unavailable rather than using a convenient neighbour.
+
+Review decisions are saved with source, settings and peak-result signatures. A new background,
+phase, fitting result, reference or match threshold can require searching and reviewing again;
+outdated choices cannot silently reach quantification. Reviewed positions guide the independent
+quantifier-ion measurement; fitted component intensities are not substituted for calibrated
+target areas. Existing quantitative results become stale when a review decision changes.
+The export includes the review decisions and standard-match freshness alongside the usual table.
+
+![Two actual passing candidates in a synthetic exceptions-review example, with spectra and local fitted profiles side by side](images/screenshot_standard_review.png)
 
 ![Step 5: five internal standards labelled on CAL_L1_1ng and searched for in every run; the Standards tab gives the spectral match where each passed](images/screenshot_istd.png)
 

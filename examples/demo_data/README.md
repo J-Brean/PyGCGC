@@ -64,6 +64,8 @@ internal standards in `target_table.csv` as the runs load. Work along the number
    sample: overlapping peaks get overlapping contours and a row each in the table.
    Tilted Gaussians with independent widths are fitted by default. **▶ How it works** plays
    a short synthetic explanation in 1D and 2D; pause, scrub or replay it at any time.
+   **Preview fitting…** tries the current region or run without replacing accepted peaks.
+   Inspect its fitted sum and residual, then apply the settings to all runs when satisfied.
    - **🫧 Siloxane filterer…** (button under the table): the large D5 in the urban sample (10.5 min,
      0.7 s) and the D4 to D8 series light up in dashed magenta at the default 15% certainty.
    - **⛓️ Hydrocarbon identifier…**: select the diesel sample, Ion `57`, press ➕ Find alkane series
@@ -92,6 +94,18 @@ in parallel and gives a feature table, QC chart, PCA and volcano plot, and expor
 📤 Figure saves the 2D view as a 300 dpi figure with a caption file.
 
 ### The calibration table (📈 Calibrate)
+
+The main eight-step workflow also offers **Set up calibration and units…** under Assign and
+Quantify. It imports the existing target/level inputs into a draft, connects target-to-IS
+assignments, checks calibration runs and usable levels, and records actual constant IS amounts
+and an output unit. The demo's supplied truth is the source for its amounts; private runs still
+need their real spike amounts. Back and Cancel leave active inputs unchanged.
+
+After searching standards, **Review missing or uncertain matches…** walks through exceptions
+with candidate spectra and fitted profiles side by side. Reviewed positions feed quantification;
+confirmed misses retain missing-standard flags. The workflow explains prerequisites and which
+results need rerunning. The separate builder below remains an advanced route for curve editing
+and amount-ratio calibration when IS additions vary.
 
 1. In the Runs table select the four `CAL_` runs (Ctrl+click), then press **📈 Calibrate** on the
    toolbar and *Use the 4 runs selected in the main window*. The standards are cleaned, their peaks

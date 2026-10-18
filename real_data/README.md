@@ -14,6 +14,11 @@ The earlier `peak_fitting/methods/` comparison records the eight-method study an
 preceding adaptive-selector recovery results; see the tracked
 [fitting report](../docs/validation/peak-fitting-2026-10-18.md) for their scope.
 
+`peak_fitting/guided_*` contains generated route-test logs and screenshots for calibration
+setup, standard exceptions, prerequisites and isolated fitting previews. The screenshot
+fixture is synthetic. Any private-data preview check reads the external acquisitions and
+writes results only here; the original calibration project and raw files remain read only.
+
 The current calibration check accepts an explicit input folder:
 
 ```powershell

@@ -40,6 +40,22 @@ Manual refits also start with tilt; low-level fitting APIs keep their Gaussian d
 script compatibility. The local, scripted 1D/2D explanation is `gui/fitting_help.py`; it must
 not start fitting jobs or leave a timer running when hidden.
 
+The four workflow priorities are now implemented. `gui/calibration_setup.py` is a draft-only
+wizard until Apply; `core/calibration_inputs.py` validates amounts and treats ambiguous filename
+tokens as unknown. Constant IS additions are explicit; never fill the tentative private 1 ng
+as fact. Guided targets/levels/unit/confirmation live in `QuantState` and project JSON, without
+overwriting input CSVs. Legacy external-input loading remains supported.
+`gui/standard_review.py` uses per-run `IstdState.review_decisions`, with reproducible input/result
+signatures. Acknowledgement retains fit warnings. Reviewed choices guide quantitative positions;
+confirmed misses cannot normalise targets. `gui/workflow_assistant.py` derives prerequisites
+and freshness; `gui/peak_preview.py` runs cancellable production fitting without storing preview
+components. The preview can explicitly apply settings and start the normal all-run job.
+Setup and readiness use the actual calibration minimum (three by default), zero-level policy
+and curve exclusions. Do not lower scientific requirements to make the wizard pass.
+Fusion style is selected once per QApplication; colour switches must not recreate it or reset
+an equivalent resolved font. Candidate-plot redraws after palette changes are deferred until
+Qt repolishing finishes. Visual QA reproduced a native Windows crash without these guards.
+
 | | |
 |---|---|
 | `src/pygcgc/core/` | all the science, no Qt; one module per method, each opening with an explanation |

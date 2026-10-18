@@ -6,6 +6,36 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Guided calibration, exceptions review, prerequisites and fitting previews, 2026-10-18.**
+All four workflow priorities are implemented. A transactional four-page setup connects
+named compounds, quantifier/qualifier ions, internal standards, run types, calibration
+sets, levels, amounts and output units. Guided inputs are embedded in project snapshots;
+external CSVs and raw data are not overwritten. Common mass-unit changes convert entered
+amounts. Unknown IS amounts and ambiguous filename concentrations remain blank, and the
+operator confirms actual amounts and constant IS additions before applying.
+
+Standards now has an exceptions queue with side-by-side candidate spectra and local fitted
+profiles, missing confirmations and per-run selections. Review decisions persist with
+source/settings/result signatures; changed inputs require search and review again.
+Reviewed positions feed quantitative remeasurement, and confirmed missing standards cannot
+normalise targets. Fit warnings remain visible. Failed/cancelled standard searches settle
+their running state without reporting successful completion.
+
+Workflow guidance shows prerequisites, links to the step that resolves them and invalidates
+completion banners for stale results. Quantification rejects a run whose inputs changed
+during processing. Peak previews run production fitting on an interval or current run,
+report detection/fitting/merging stages, show observed/fitted/residual maps, support cancellation,
+and discard late or stale results. Applying preview settings is an explicit action that
+starts the normal full-sequence fit; preview components never replace accepted results.
+Exports include declared units, setup confirmation, standard review decisions and freshness.
+Setup honours the current curve minimum (three levels by default), zero-level policy and
+exclusions. Unit conversion occurs on a completed edit; selected-peak retention precision
+is retained. Visual QA fixed missing native wizard navigation and a Windows theme-switch
+crash after review graphs closed. The full suite passed 678 tests with 31 skips; final
+affected-module/input runs and a native-data preview bring combined coverage to 687 passes,
+30 skips and no failures over 717 unique cases. See
+[the guided-workflow validation](docs/validation/guided-workflow-2026-10-18.md).
+
 **Tilted Gaussian default and animated fitting help, 2026-10-18.**
 At the user's request, automatic MS-aware separation and manual GUI refits now start with
 tilted Gaussians, with independent widths. Automatic component-count pursuit, duplicate

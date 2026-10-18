@@ -72,6 +72,22 @@ for new automatic fits; accepted manual fits remain overrides where their region
 Explicit alternative models remain available. Component intensities
 are estimates; calibrated amounts still come from Quantify.
 
+**The workflow now guides the remaining decisions.** Quantify → **Set up calibration and
+units…** connects named targets, internal standards, run types, levels and known amounts in
+four pages. Filename concentrations are suggestions; ambiguous names such as `025ng` and
+unknown internal-standard amounts stay blank. Enter the actual amounts and confirm one
+unit before applying. Guided inputs travel inside the project and export.
+Setup and readiness respect the current curve requirements, including the three-level
+default, excluded points and zero-level policy. This route assumes constant IS additions;
+the advanced builder supports an amount-ratio workflow for varying additions.
+
+Use **Review missing or uncertain matches…** in Standards for an exceptions queue with
+candidate spectra and local fitted-profile comparisons. Choices are per sample and retain
+fit warnings. **Preview fitting…** in Peaks tries a selected region, visible interval or
+current run without replacing accepted peaks; inspect the fitted sum and residual before
+**Use settings and fit all runs**. The workflow explains blocked actions, offers a link to
+the prerequisite and clears completion when dependent results become stale.
+
 For native files, confirm the modulation period under Load → Check modulation period and phase (it is not stored in the file);
 folder opening picks untreated 70 eV, and **Open files…** loads 14 eV or DBC channels.
 

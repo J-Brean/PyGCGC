@@ -92,22 +92,12 @@ In rough order of value for the work these runs are for.
 
 ### Workflow priorities from the October walkthrough
 
-- **One next action with visible prerequisites.** Keep advanced parameters behind settings;
-  explain which runs or inputs prevent the next step and which results need rerunning after
-  preparation changes. The eight-step route, optional alignment skip and compact tool menus
-  are already in place.
-- **An exceptions queue for standards and peaks.** Extend the existing clickable IS grid
-  with a missing/ambiguous-only review route and side-by-side candidate spectra and fits.
-  Show the next unresolved decision without making users search every sample and table.
-- **Preview expensive peak fitting on a selected region or run.** Let users inspect the
-  fitted sum and residual before applying settings across a sequence; show separate progress
-  for detection, fitting and merging. Background removal already has a per-run preview.
-- **A guided calibration setup.** Connect standard assignment, target names, confirmed
-  calibration amounts, internal-standard amounts and output units in one setup route.
-  Filename amounts should remain suggestions until confirmed, including the tentative 1 ng IS.
-- **Clear language for detection versus identification.** Keep “Find peaks” for finding and
-  separating signals, and chemical identity under Assign. Estimated component intensity and
-  calibrated amount need distinct labels throughout review and export.
+Implemented on 18 October: guided calibration and units, standards exceptions review with
+candidate comparisons, actionable prerequisites and stale-result guidance, and isolated fitting
+previews with detection/fitting/merging progress. See the [user guide](docs/user-guide.md) and
+[validation](docs/validation/guided-workflow-2026-10-18.md). The eight-step route, optional
+alignment skip, contextual menus and separate detection/identification labels are retained.
+Chemical ground truth and quantitative validation remain the scientific gaps above.
 
 ### Analytical extensions
 

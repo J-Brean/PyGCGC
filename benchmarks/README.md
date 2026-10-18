@@ -1,5 +1,17 @@
 # Benchmarks and real-data checks
 
+The guided workflow has route-level regressions as well as numerical tests:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+python -m pytest tests/test_calibration_inputs.py tests/test_guided_features.py tests/test_workflow.py -q -p no:cacheprovider
+```
+
+They check known quantities after changing amount units, setup persistence and cancellation,
+candidate review, propagation of missing-standard decisions, stale-input rejection, and
+preview isolation. These checks exercise the GUI workflow rather than estimating chemical
+identification accuracy. See [the workflow validation](../docs/validation/guided-workflow-2026-10-18.md).
+
 Scripts that measure how well the methods work, as opposed to `tests/` (which check that the
 code does what it says) and `examples/tutorials/` (which show how to use it). None of them
 changes a default. Run them from the repository root with the project's Python environment;

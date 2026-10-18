@@ -34,6 +34,7 @@ src/pygcgc/
     synthetic.py        planted known-answer peaks for the benchmarks
     siloxane.py         🫧 blob scoring and blocking, and the per-pixel fit
     calibration.py      weighted calibration fits, Mandel's test, LOD/LOQ, inverse prediction
+    calibration_inputs.py  confirmed setup validation, filename suggestions and usable-level coverage
     calbuilder.py       📈 compounds, blob matching, hand matches, IS normalisation and curves for a set of standards
     quant.py            targets across a sequence, learned positions and qualifier ratios, bracketing, all signals, IS table
     targets.py          target table and calibration levels
@@ -61,6 +62,10 @@ src/pygcgc/
     class_state.py      🧬; cluster_state.py 🧩; istd_state.py 🏷️ internal standards
     overlap_dialog.py   ✂️ pick a group or blob, 3D surface, splits, fits, MCR-ALS
     fitting_help.py     local scripted 16-second explanation with matching 1D/2D contributions
+    calibration_setup.py  four-page transactional setup for named targets, runs, amounts and units
+    standard_review.py  exceptions queue with candidate spectra and fitted-profile comparisons
+    workflow_assistant.py  prerequisites, direct repair actions and freshness/completion guidance
+    peak_preview.py     cancellable interval/run previews, isolated from accepted component state
     identify_dialog.py  🏷️ load a library, search, promote to target, library browser
     batch_dialog.py     🗂️ folder pipeline dialog: run, feature table, QC, PCA, volcano, 📤 export
     calibrate_window.py 📈 calibration builder: its own project of standard runs, compound table, curves
@@ -79,6 +84,32 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
 ```
 
 ## 5. Architecture and rules
+
+- **Calibration input is transactional.** `core/calibration_inputs.py` validates named targets,
+  used levels and explicit constant IS additions. `gui/calibration_setup.py` owns a draft until
+  Apply. Guided targets are embedded under `quant.targets_data`; inline levels are under
+  `levels_data`, with `amount_unit` and `calibration_setup` confirmation metadata. Legacy paths
+  remain external unless edited through setup. Guided IS targets also restore phase anchors,
+  but applying setup does not rephase or rewrite input files. Common mass units convert
+  draft values; custom units require explicit numeric checking.
+  Coverage checks honour the actual curve minimum, zero-level policy, exclusions and overrides.
+- **Standard decisions are per run.** `IstdState` signs source/preparation, selected detector,
+  actual peak results, references and match settings. Runtime object identity only caches
+  signature computation and is excluded from persisted signatures. Uncacheable layers
+  conservatively need review on reopening. Decisions retain unresolved warnings; an explicit
+  missing decision produces a missing IS hit during quantitative remeasurement. Obsolete
+  choices cannot reach Quantify. Review and setup metadata travel with export.
+- **Previews are not accepted results.** The worker calls production detection and full-ion
+  extraction with one fitting worker, preserving fold origin and full second-time profiles.
+  Generation and input checks reject callbacks after cancellation, closure or input changes.
+  Applying preview settings launches ordinary sequence fitting. `detect_components(stage=...)`
+  exposes detection, fitting and merging phases without changing the numerical objective.
+- **Guidance follows state, not button history.** `WorkflowAssistant` observes inputs and
+  results, clears stale completion and offers one prerequisite action. QuantState revisions
+  prevent jobs started with obsolete inputs from reporting successful completion.
+- **Theme switches share Fusion.** Choosing Fusion again resets Qt's font and can trigger a
+  native traversal through closed graphics windows. Select it once per application, compare
+  effective fonts before updating them, and defer review-plot rebuilding after palette changes.
 
 - **Automatic component fitting defaults to `tilt`.** `ComponentDetectionSettings` selects
   correlated Gaussians with independent widths and pursuit of component count. Both `gaussian`
