@@ -19,6 +19,7 @@ from ..core.overlap import (MODELS, OverlapSettings, assess_components, blob_cub
                             choose_k, component_maps, fit_overlap, fit_template_overlap, mcr_als,
                             split_by_watershed, split_volumes, unique_ion_apexes)
 from .views.surface3d import Surface3DView
+from .fitting_help import fitting_help_button
 
 
 class ComponentMapView(QtWidgets.QWidget):
@@ -171,11 +172,12 @@ class OverlapDialog(QtWidgets.QDialog):
         controls = QtWidgets.QHBoxLayout()
         self.model_combo = QtWidgets.QComboBox()
         self.model_combo.addItems(list(MODELS) + ["measured alkane template"])
+        self.model_combo.setCurrentText(OverlapSettings().model)
+        self.fitting_help_btn = fitting_help_button(self)
         self.model_combo.setToolTip("gaussian: axis-aligned. emg: tail along t1. emg_t2: tail along t2. "
                                     "emg2: both. tilt: t2 apex drifts with t1. cell: t1 profile integrated "
-                                    "over each modulation (peaks narrower than a column). See "
-                                    "docs/validation/hydrocarbons-2026-09-20.md: on real alkane peaks the gain "
-                                    "over gaussian was at most a few per cent.")
+                                    "over each modulation (peaks narrower than a column). Tilt is the default: "
+                                    "it gave the lowest median held-out error in the October calibration comparison.")
         self.auto_k = QtWidgets.QCheckBox("Choose k automatically (BIC)")
         self.auto_k.setChecked(True)
         self.k_spin = QtWidgets.QSpinBox()
@@ -194,6 +196,7 @@ class OverlapDialog(QtWidgets.QDialog):
                  QtWidgets.QLabel("k:"), self.k_spin, fit_btn, self.accept_fit_btn):
             controls.addWidget(w)
         controls.addStretch(1)
+        controls.addWidget(self.fitting_help_btn)
         lay.addLayout(controls)
         self.fit_table = QtWidgets.QTableWidget(0, 7)
         self.fit_table.setHorizontalHeaderLabels(["component", "t1 (min)", "t2 (s)",

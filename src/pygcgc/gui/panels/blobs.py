@@ -6,6 +6,7 @@ import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..blob_state import LEGACY, MS_AWARE
+from ..fitting_help import fitting_help_button
 
 LEGACY_COLUMNS = ["#", "t1 (min)", "t2 (s)", "volume", "S/N", "width t1 (s)",
                   "width t2 (s)", "n mod", "pixels", "co-elution?", "🫧 siloxane?"]
@@ -57,6 +58,8 @@ class BlobsPanel(QtWidgets.QWidget):
         self.explanation.setWordWrap(True)
         self.find_btn = QtWidgets.QPushButton("Find peaks")
         self.find_btn.clicked.connect(self.findRequested)
+        self.fitting_help_btn = fitting_help_button(self)
+        method_row.addWidget(self.fitting_help_btn)
         self.resolve_btn = QtWidgets.QPushButton("Inspect/refit selected blob…")
         self.resolve_btn.clicked.connect(self._resolve_selected)
         self.add_btn = QtWidgets.QPushButton("➕ Add")
@@ -82,10 +85,22 @@ class BlobsPanel(QtWidgets.QWidget):
         self.hydrocarbon_btn = QtWidgets.QPushButton("⛓️ Hydrocarbon identifier…")
         self.hydrocarbon_btn.setToolTip("Anchor the n-alkane ladder and assign every peak to the hydrocarbon it is")
         self.hydrocarbon_btn.clicked.connect(self.hydrocarbonRequested)
-        tools = QtWidgets.QHBoxLayout()
-        tools.addWidget(self.siloxane_btn)
-        tools.addWidget(self.hydrocarbon_btn)
-        tools.addStretch(1)
+        more = QtWidgets.QToolButton()
+        more.setText("Peak tools…")
+        more.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QtWidgets.QMenu(more)
+        self.tools_menu = menu
+        menu_buttons = (self.add_btn, self.merge_btn, self.delete_btn, self.export_btn,
+                        self.account_btn, self.siloxane_btn, self.hydrocarbon_btn)
+        actions = []
+        for button in menu_buttons:
+            button.setParent(self)
+            button.hide()
+            action = menu.addAction(button.text(), button.click)
+            action.setToolTip(button.toolTip())
+            actions.append((action, button))
+        menu.aboutToShow.connect(lambda: [a.setEnabled(b.isEnabled()) for a, b in actions])
+        more.setMenu(menu)
 
         self.table = QtWidgets.QTableWidget(0, len(LEGACY_COLUMNS))
         self.table.setHorizontalHeaderLabels(LEGACY_COLUMNS)
@@ -100,8 +115,7 @@ class BlobsPanel(QtWidgets.QWidget):
         self.status.setWordWrap(True)
 
         buttons = QtWidgets.QHBoxLayout()
-        for widget in (self.find_btn, self.resolve_btn, self.add_btn, self.merge_btn,
-                       self.delete_btn, self.export_btn, self.account_btn):
+        for widget in (self.find_btn, self.resolve_btn, more):
             buttons.addWidget(widget)
         buttons.addStretch(1)
         layout = QtWidgets.QVBoxLayout(self)
@@ -109,7 +123,6 @@ class BlobsPanel(QtWidgets.QWidget):
         layout.addLayout(method_row)
         layout.addWidget(self.explanation)
         layout.addLayout(buttons)
-        layout.addLayout(tools)
         layout.addWidget(self.table, 1)
         layout.addWidget(self.accounting)
         layout.addWidget(self.status)
@@ -123,12 +136,13 @@ class BlobsPanel(QtWidgets.QWidget):
             self.method_box.setCurrentIndex(index)
         self.method_box.blockSignals(False)
         ms_aware = method == MS_AWARE
+        self.fitting_help_btn.setVisible(ms_aware)
         self.explanation.setText(
-            "Fits a list of overlapping peaks using both position and mass spectrum. Each row and "
+            "Fits overlapping tilted Gaussian peaks using both position and mass spectrum. Each row and "
             "colour is one proposed peak; unresolved estimates remain visible with a warning." if ms_aware else
             "Finds peaks on one combined intensity surface and assigns each pixel to one hard-edged blob. "
             "Kept for compatibility with existing siloxane, ladder and library-search tools.")
-        columns = REGION_COLUMNS if ms_aware else LEGACY_COLUMNS
+        columns = COMPONENT_COLUMNS if ms_aware else LEGACY_COLUMNS
         self.table.setColumnCount(len(columns))
         self.table.setHorizontalHeaderLabels(columns)
         self._refresh_buttons()
@@ -336,16 +350,16 @@ class BlobsPanel(QtWidgets.QWidget):
         self.resolve_btn.setEnabled(not legacy and selected == 1)
         self.resolve_btn.setVisible(not legacy)
         self.add_btn.setEnabled(legacy and self.current_run is not None)
-        self.add_btn.setVisible(legacy)
+        self.add_btn.hide()
         self.merge_btn.setEnabled(legacy and selected >= 2)
-        self.merge_btn.setVisible(legacy)
+        self.merge_btn.hide()
         self.delete_btn.setEnabled(legacy and selected >= 1)
-        self.delete_btn.setVisible(legacy)
+        self.delete_btn.hide()
         has_components = (self.component_set is not None
                           and bool(self.component_set.components))
-        self.export_btn.setVisible(not legacy)
+        self.export_btn.hide()
         self.export_btn.setEnabled(not legacy and has_components)
-        self.account_btn.setVisible(not legacy)
+        self.account_btn.hide()
         self.account_btn.setEnabled(not legacy and has_components)
         self.accounting.setVisible(not legacy)
 
