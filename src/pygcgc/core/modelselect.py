@@ -26,7 +26,8 @@ Model comparisons run on a handful of diagnostic ions (the screening cube). The
 spectra used to judge distinctness and reported to the user come from the wider
 ion set.
 
-With adaptive shapes enabled, each count is compared as independent Gaussians
+Tilted Gaussians with independent widths are the default. With optional adaptive
+shapes enabled for the Gaussian model, each count is compared as independent Gaussians
 and correlated Gaussians. Correlation must earn the additional BIC penalty;
 neighbouring compounds are never forced to have identical widths.
 """
@@ -113,7 +114,9 @@ class _Search:
     # ------------------------------------------------------------------ fitting
     def fit(self, cube: BlobCube, hints: list, slack=(1.0, 0.6)) -> OverlapFit:
         fits = []
-        models = ("gaussian", "tilt") if self.s.adaptive_shapes else ("gaussian",)
+        models = (("gaussian", "tilt")
+                  if self.s.model == "gaussian" and self.s.adaptive_shapes
+                  else (self.s.model,))
         for model in models:
             self.n_fits += 1
             shaped = fit_shapes_fast(

@@ -90,7 +90,7 @@ class OverlapSettings:
     ion_share_min: float = 0.03      # an ion needs at least this share of the blob's spectrum to be used
     min_ions: int = 3                # fall back to the top this-many ions if too few clear the share
     max_components: int = 4          # BIC search ceiling for peak-model fitting
-    model: str = "gaussian"          # or "emg"
+    model: str = "tilt"              # correlated Gaussian; other analytic models remain available
 
     def to_dict(self) -> dict:
         return dict(ion_share_min=self.ion_share_min, min_ions=self.min_ions,

@@ -46,7 +46,7 @@ class ComponentDetectionSettings:
     link_modulations: int = 1
     pad_t2_s: float = 0.4
     pad_modulations: int = 4
-    model: str = "gaussian"
+    model: str = "tilt"
     max_components: int = 4
     screen_component_counts: bool = True
     n_starts: int = 2
@@ -61,7 +61,7 @@ class ComponentDetectionSettings:
     fast_max_sigma_row: float = 3.0
     fast_max_sigma_col: float = 1.2
     fast_max_nfev: int = 60
-    adaptive_shapes: bool = True
+    adaptive_shapes: bool = False
     # Model-order selection. "pursuit" grows each window's model from one peak and
     # accepts extra peaks only when spectra and held-out data justify them (see
     # modelselect.py); "seeds" is the older behaviour in which the number of
@@ -95,17 +95,26 @@ class ComponentDetectionSettings:
 
     def to_dict(self) -> dict:
         result = asdict(self)
+        result["defaults_version"] = 2
         result["candidates"] = self.candidates.to_dict()
         return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "ComponentDetectionSettings":
         data = dict(data or {})
+        defaults_version = data.pop('defaults_version', 0)
         # Older projects saved the previous fast default. Upgrade that default
         # for the corrected solver, while retaining other explicit budgets and
         # all settings already saved with the adaptive fitter.
         if 'adaptive_shapes' not in data and data.get('fast_max_nfev') == 24:
             data['fast_max_nfev'] = cls().fast_max_nfev
+        # Upgrade the former automatic default, including pre-adaptive projects.
+        # An explicitly fixed Gaussian or another selected model stays selected.
+        if (defaults_version < 2
+                and data.get('model', 'gaussian') == 'gaussian'
+                and data.get('adaptive_shapes', True)):
+            data['model'] = 'tilt'
+            data['adaptive_shapes'] = False
         data["candidates"] = CandidateSettings.from_dict(data.get("candidates", {}))
         return cls(**{key: value for key, value in data.items()
                       if key in cls.__dataclass_fields__})
@@ -489,7 +498,7 @@ def _fit_candidate_cubes(screening_cube: BlobCube, cube: BlobCube, hints: list,
                          region_index: int, run_name: str,
                          settings: ComponentDetectionSettings) -> ComponentGroup:
     """CPU-heavy, process-safe part of one region fit."""
-    if (settings.model_selection == "pursuit" and settings.model == "gaussian"
+    if (settings.model_selection == "pursuit" and settings.model in ("gaussian", "tilt")
             and not settings.refine_selected):
         return _fit_selected(screening_cube, cube, hints, region_index, run_name, settings)
     max_k = max(1, min(int(settings.max_components), len(hints)))
@@ -531,7 +540,7 @@ def _fit_candidate_cubes(screening_cube: BlobCube, cube: BlobCube, hints: list,
             bic_gap=bic_gap, min_bic_gap=settings.min_bic_gap,
             min_explained_fraction=settings.min_explained_fraction,
             max_restart_position_spread=settings.max_restart_position_spread)
-        if settings.model == "gaussian" and any(
+        if settings.model in ("gaussian", "tilt") and any(
                 component.sigma_row >= settings.fast_max_sigma_row - 0.01 or
                 component.sigma_col >= settings.fast_max_sigma_col - 0.01
                 for component in fit.components):
@@ -894,7 +903,7 @@ def detect_components(run, fold, run_name: str,
     groups.sort(key=lambda group: group.region_index)
     entries = list(zip(regions, groups))
     if (settings.merge_windows and settings.model_selection == "pursuit"
-            and settings.model == "gaussian" and not settings.refine_selected):
+            and settings.model in ("gaussian", "tilt") and not settings.refine_selected):
         shape = (frame.rows, len(frame.mid_t1))
         entries = _drop_duplicates(entries, shape, settings)
         entries = _merge_interacting_windows(run, fold, candidates, entries, run_name,

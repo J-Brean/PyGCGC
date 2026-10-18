@@ -13,10 +13,42 @@ from pygcgc.core.overlap import (BlobCube, _emg_1d, _shape, fit_shapes_fast,
 
 def test_old_project_uses_corrected_fitting_defaults_without_losing_custom_budgets():
     upgraded = ComponentDetectionSettings.from_dict({'fast_max_nfev': 24})
-    assert upgraded.adaptive_shapes and upgraded.fast_max_nfev == 60
+    assert upgraded.model == 'tilt' and not upgraded.adaptive_shapes and upgraded.fast_max_nfev == 60
     assert ComponentDetectionSettings.from_dict({'fast_max_nfev': 120}).fast_max_nfev == 120
     explicit = ComponentDetectionSettings.from_dict({'adaptive_shapes': False, 'fast_max_nfev': 24})
     assert not explicit.adaptive_shapes and explicit.fast_max_nfev == 24
+
+
+def test_tilt_default_upgrades_previous_defaults_and_preserves_explicit_models():
+    from dataclasses import replace
+    default = ComponentDetectionSettings()
+    assert default.model == 'tilt' and not default.adaptive_shapes
+    assert ComponentDetectionSettings.from_dict(default.to_dict()) == default
+    previous = {'model': 'gaussian', 'adaptive_shapes': True, 'fast_max_nfev': 60}
+    assert ComponentDetectionSettings.from_dict(previous).model == 'tilt'
+    assert ComponentDetectionSettings.from_dict({'model': 'emg_t2'}).model == 'emg_t2'
+    fixed = {'model': 'gaussian', 'adaptive_shapes': False}
+    assert ComponentDetectionSettings.from_dict(fixed).model == 'gaussian'
+    # New deliberate adaptive settings must survive save/reload too.
+    adaptive = replace(default, model='gaussian', adaptive_shapes=True)
+    assert ComponentDetectionSettings.from_dict(adaptive.to_dict()) == adaptive
+
+
+@pytest.mark.parametrize('model', ['gaussian', 'tilt'])
+def test_automatic_search_honours_the_requested_shape_even_for_axis_aligned_data(model):
+    from dataclasses import replace
+    from pygcgc.core.components import _fit_candidate_cubes
+    rr, cc = np.indices((35, 9), dtype=float)
+    profile = _shape('gaussian', rr, cc, np.array([17., 4., 3., .8]))
+    cube = BlobCube(20 + profile[:, :, None]*np.array([5000., 800., 100.]),
+                    np.ones(rr.shape, bool), np.arange(50, 53), 0, 0, .02, 10., 0.)
+    # Excess seeds must still pass through automatic count selection with tilt.
+    seeds = [SimpleNamespace(row=17., col=4.), SimpleNamespace(row=21., col=4.5)]
+    settings = replace(ComponentDetectionSettings(), model=model, adaptive_shapes=False)
+    group = _fit_candidate_cubes(cube, cube, seeds, 0, 'run', settings)
+    assert group.model == model
+    assert len(group.components) == 1
+    assert group.converged
 
 
 def test_emg_rendering_is_independent_of_which_pixels_are_requested():
