@@ -349,6 +349,8 @@ def test_guided_units_produce_known_quantities_and_exported_unit_metadata(qtbot,
         export_project(w.project, destination)
         assert json.loads((destination/'manifest.json').read_text())['amount_unit'] == 'ug'
         assert 'ug' in w.results.model.headerData(w.results.model.keys.index('amount'), QtCore.Qt.Orientation.Horizontal)
+        assert 'ug' in w.calibration_panel.plot.getAxis('bottom').labelText
+        assert 'ug' in w.calibration_panel.resid.getAxis('bottom').labelText
     finally:
         w.jobs.cancel_all()
         w.jobs.wait(5000)

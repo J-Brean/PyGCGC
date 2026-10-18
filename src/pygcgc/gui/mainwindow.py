@@ -1702,6 +1702,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def _quant_changed(self):
         q = self.quant
         self.results.set_amount_unit(q.amount_unit)
+        self.calibration_panel.plot.setLabel('bottom', f'Amount ({q.amount_unit})')
+        self.calibration_panel.resid.setLabel('bottom', f'Amount ({q.amount_unit})')
         if q.stale or q.running:
             for key in ("quant", "export"):
                 if self.workflow.is_done(key):
