@@ -6,6 +6,59 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Tilted Gaussian default and animated fitting help, 2026-10-18.**
+At the user's request, automatic MS-aware separation and manual GUI refits now start with
+tilted Gaussians, with independent widths. Automatic component-count pursuit, duplicate
+removal and neighbouring-window merging remain active for tilt. The search honours an
+explicit model rather than silently fitting Gaussians. Older automatic defaults upgrade on
+reload; versioned settings preserve deliberate alternative choices and reviewed fits stay
+stored until recomputation. A contextual **▶ How it works** button plays a local 16-second
+synthetic illustration with matching 1D projections and 2D contours, pause, replay and seek.
+The animation explains spectra, tilt and evidence for additional components, distinguishes
+fitting from compound identification, and stops its timer when hidden or closed.
+All 32 analytic recovery cases on measured backgrounds selected the right counts and
+converged; median matched-peak area error was 0.41%. The full suite passed 652 tests
+with 30 skipped; the private-data regression passed all four calibration levels.
+Final affected-module checks passed 45 tests after the layout and settings refinements.
+
+**Peak fitting corrections and method comparison, 2026-10-18** (same branch).
+Automatic fitting now compares independent Gaussian widths with correlated
+Gaussian shapes, allowing modulation-to-modulation apex drift when BIC supports
+it. Shape fitting and final full-ion spectra use the same constrained, count
+weighted solve. The projected Jacobian includes the response of the solved
+spectra and background, and agrees with finite differences. EMG rendering now
+uses a parameter-dependent scale which stays consistent on held-out pixels.
+The evaluation budget is 60, and serial fits also limit BLAS threads. Saved
+measured-template shapes now survive downstream spectrum extraction. Eight
+techniques are compared on 32 calibration windows, with analytic and copied
+observed-profile recovery in four measured backgrounds. Tilt has the lowest
+median held-out error; the experimental free-modulation EMG has the lowest
+copied-profile total-area error. See [the fitting report](docs/validation/peak-fitting-2026-10-18.md).
+Opening another dialog no longer resets the application-wide theme when it is
+unchanged, avoiding repeated repolishing of every existing widget.
+
+**Simpler workflow and calibration peak check, 2026-10-18** (branch `workflow-real-data-2026-10-18`).
+Eight main steps now follow Load, optional Align, Background, Peaks, Standards, Assign, Quantify,
+Export. Modulation checks live under Load, specialist assignment tools under Assign, and the
+peak edit and display controls sit in menus. Alignment can be skipped explicitly. Loading a
+target table no longer re-estimates phase after data preparation. Export writes the available
+peak, standard and quantitative tables, assignments, input tables, project snapshot and provenance
+without changing the active project's save paths. Missing and stale results are recorded in a manifest.
+Failed or cancelled peak detection and quantification no longer report a successfully finished
+sequence or leave their running flags set. Opening library search no longer marks identification done.
+An empty MS-aware result no longer silently falls back to previously detected legacy peaks when
+searching for internal standards.
+The full-suite run also exposed a PySide deadlock during background removal: automatic cyclic
+collection in a worker raced GUI-object deletion on the main thread. A shared Qt timer now
+collects cycles on the GUI thread; reference-counted objects still release normally.
+
+The default detector recovered a saved acenaphthene-d10 label across four real calibration levels,
+but with multiple passing candidates and unresolved, non-converged fits explaining only 34–58%
+of local variation. These warnings now reach internal-standard matches, the review grid and CSVs.
+No detection defaults changed. New tests exercise the default GUI route, interruption recovery,
+exported values and inputs, and opt-in real-data recovery. Evidence and limitations are in
+[the validation report](docs/validation/workflow-and-peaks-2026-10-18.md).
+
 **Demonstration data, new screenshots, 2026-10-07** (same branch). `examples/demo_data/generate_demo_data.py`
 writes seven synthetic ANDI runs (four standards at 1 to 50 ng, urban air, diesel exhaust, wood smoke;
 8 s modulation, 50 Hz, m/z 38 to 400, 48 min) with about 150 named compounds, five deuterated internal

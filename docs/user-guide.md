@@ -14,11 +14,11 @@ that README walks through every step on it. `docs/images/make_screenshots.py` re
 ### Layout
 
 - **Left:** one panel, "Workspace", with tabs. **Runs** is the run list, **Tool** shows the open step's settings and its Go button (its tab is named after the step), **Layers** shows which runs are cleaned or aligned, **Results** holds the 🧪 tables, **Standards** the internal-standard grid, **History** the undo list and **Log** every message in full. Opening a step from the toolbar switches to the Tool tab. Running jobs, with their progress and cancel buttons, appear at the foot of this panel and hide themselves when idle.
-- **Top toolbar:** 📂 Open, the nine numbered steps, then ✂️ Resolve overlap, 📈 Calibrate, 🗂️ Batch, 📤 Figure and the panel buttons. Below it, the view bar: ion box, colour scale, S/N, overlays, raw/cleaned, levels, extend t₂, region, zoom and previous/next run.
+- **Top toolbar:** Load, Align, Background, Peaks, Standards, Assign, Quantify, Export. **Tools** contains specialist tools and separate analysis windows. Below it, the view bar holds the ion box, colour scale, raw/cleaned, zoom and previous/next run; **Display options** holds S/N, overlays, levels, extend t₂ and region selection.
 - **Centre:** the 2D and 1D views, the 🧪 Review gallery, the Calibration curves and Compare.
 - **Right:** the spectrum.
 
-Every panel can be moved, floated onto a second screen or hidden. To bring one back, use the **Workspace** and **Spectrum** buttons at the right of the top toolbar, or **Panels ▾** (also View → Panels). **Reset layout** in the same menu restores the default arrangement.
+Every panel can be moved, floated onto a second screen or hidden. To bring one back, use **Panels ▾** (also View → Panels). **Reset layout** in the same menu restores the default arrangement.
 
 **Colours.** The light theme is white panels on a pale grey window with an indigo accent; View → Dark theme switches to near-black with a green accent. The top of the window takes a faint tint of the step that is open. The chromatogram colour map (turbo) is the same in both.
 
@@ -26,42 +26,35 @@ Every panel can be moved, floated onto a second screen or hidden. To bring one b
 
 ### Workflow panel
 
-The nine numbered buttons on the top toolbar are the steps, in working order. The left-hand panel shows only the open step: its settings, then one Go button. The 🫧 siloxane filterer and ⛓️ hydrocarbon identifier have no toolbar button: they are sub-menus of 4 🔍 Peaks, opened by the two buttons under the peak table. Each has a **Back to Peaks** link and its own Go button.
+The eight numbered buttons on the top toolbar follow the main workflow. The left panel shows one step's settings and its primary action. Modulation checks open under Load, the siloxane filter opens from Peak tools, and the specialist assignment tools open under Assign. Each specialist step has a Back link to its parent.
 
 1. Press a step on the toolbar. Its settings appear on the left; nothing runs yet.
 2. Set what you want.
-3. Press **▶ Go** at the bottom of the left panel. It runs that step on every run.
+3. Press the primary button at the bottom of the left panel. Its label says what will run or open.
 4. A banner reports the result and offers **Next: …**. It never switches step by itself, so you can look at the result first.
 
 | Step | Settings shown | Go does |
 |---|---|---|
-| 1 🔄 Fold | period, phase | estimates the phase of every run |
-| 2 📍 Align | reference run, anchors | finds the anchors on every other run |
+| 1 Load | folder, individual files or saved project; modulation checks | opens a data folder and estimates period and phase |
+| 2 Align (optional) | reference run, anchors | finds the anchors on every other run; **Skip alignment** continues without fitting a transform |
 | 3 🧹 Background | 🧹 settings, aligned blank, preview, split view, diagnostics | removes background on every run |
 | 4 🔍 Peaks | MS-aware regions or legacy blob table | runs the selected detection method on every run |
-| 4a 🫧 Siloxane filterer (from Peaks) | reference spectrum, certainty slider | blocks out (or fits) siloxane blobs on every run |
-| 4b ⛓️ Hydrocarbon identifier (from Peaks) | ladder shape, qualifier ratios, assignment table, stencils, series | starts the two-click alkane flow; **Assign peaks to hydrocarbons** labels every peak |
 | 5 🏷️ IS | IS library, labelled peaks, thresholds on Δt₁, Δt₂ and spectral match | finds every labelled standard in every run; results grid in the Standards tab |
-| 6 🧪 Quantify | what is loaded, load buttons, settings | quantifies (disabled, with the reason, until a target table is loaded) |
-| 7 🧬 Classify | 14 eV switch, rule file, class list, results | assigns a compound class to every blob of the open 70 eV run |
-| 8 🏷️ Identify | notes | opens the identifier window |
-| 9 🧩 Cluster | scope, method, thresholds | groups peaks by spectrum, within or across runs |
+| 6 Assign | target table, library search, hydrocarbon assignment, classes and clusters | confirms that assignments have been reviewed and continues to Quantify |
+| 7 Quantify | calibration builder, input tables, settings | measures targets, fits calibration curves and quantifies samples |
+| 8 Export | all-results export or current figure | writes all available results, inputs and processing settings into one folder |
 
-**Why this order.** Each step's panel says why it sits where it does, the toolbar tooltips repeat it, and Help → Workflow guide lists every step. In short:
+**Why this order.** Data preparation comes before peak detection, and assignments come before quantification. Each panel and Help → Workflow guide explain its role.
 
-1. **Fold first.** Every later step works on the folded image, and a wrong phase splits peaks across its top and bottom edges.
-2. **Align second.** Retention drifts between runs. Aligning early puts every run on the reference run's coordinates, so a blank can be subtracted through the alignment in step 3. With a single run, skip it.
-3. **Background third.** It removes bleed, the repeating t₂ stripes and spikes, and builds the noise map that peak detection uses for signal-to-noise.
-4. **Peaks fourth.** Detection needs the flat baseline from step 3. Every later step starts from these peaks. The siloxane filterer blocks out whole blobs and runs before the internal standards, classification and identification so contaminants do not enter them. The hydrocarbon identifier anchors the n-alkane ladder, which gives the retention index that identification uses.
-5. **IS fifth.** It needs the peaks from step 4. Label each standard once, find it on every run, then **Use as target table** so the same peaks anchor the phase and normalise step 6.
-6. **Quantify sixth.** It needs the phase, the cleaned data and the internal standards. The steps after it describe peaks and do not feed it.
-7. **Classify seventh.** It reads each blob's class from its spectrum and uses the alkane ladder for retention evidence. It comes before Identify because a class says what a peak is without a library.
-8. **Identify eighth.** It searches the blobs from step 4 and uses the retention index from the ladder when there is one.
-9. **Cluster ninth.** It groups peaks by spectral shape and can compare them with the classes from step 7.
+Check the modulation period and phase under Load before preparing the data. Alignment helps compare runs and subtract an aligned blank. Background removal supplies the cleaned signal and noise map. Label internal standards once, search every sample, and use **Use as target table** to make those references available to quantification. A strong spectral match on an unresolved or low-confidence peak fit is marked **Review**, as is a match with several passing candidates.
+
+Under Assign, load known targets or review library and hydrocarbon suggestions. Opening a library window does not mean identification is finished. Loading assignments preserves the prepared phase. Quantitative amounts use the unit of the supplied calibration levels: enter nanograms for results in nanograms, or another consistent mass unit. An internal-standard amount is not inferred from a filename.
+
+Export includes quantitative tables when available, one peak table per run, internal-standard matches, assignments, input tables, a project snapshot and provenance. The manifest records missing quantification and stale results. Raw instrument files stay at their original locations. Internal-standard search matches and the quantitative internal-standard table are separate CSVs.
 
 The order is a recommendation. Nothing stops you running a step early or again after changing something upstream, but results from later steps are not rerun for you: rerun them.
 
-On the toolbar a ✓ marks a finished step, ▸ marks the suggested next one and the open step is highlighted. Removing 🧹 or 🫧 clears its tick. The old menu items (Process menu) and the extra buttons inside each step (Apply to this run, Remove, Propagate, Reset) still work. ✂️ Resolve overlap, 🗂️ Batch and 📤 Figure are separate windows on the toolbar.
+On the toolbar a ✓ marks a finished step, ▸ marks the suggested next one and the open step is highlighted. Skipped alignment is labelled separately from completed alignment. Removing 🧹 or 🫧 clears its tick. Specialist tools remain available in **Tools** and the Process menu. **Peak tools** contains peak edits, fit diagnostics, CSV export and the siloxane filter. Figures can be exported from step 8. Older screenshots below show the earlier toolbar arrangement.
 
 ### 2D view
 
@@ -329,6 +322,25 @@ Auto (the default) picks the simplest tier that already fits the anchors well; y
 
 Step 4 offers two peer detection methods in a saved selector. **MS-aware separation** is the new route for crowded real data. **Legacy blob borders** keeps the old behaviour for comparison and for existing tools that still consume `BlobSet`. Both run across every loaded run from **Find peaks**.
 
+**Tilted Gaussian is the default peak shape**, in both automatic separation and manual
+refits. Every component has its own widths and tilt: its second retention time may drift
+across modulation slices. The algorithm still chooses how many components the evidence
+supports; selecting tilt does not force an extra peak. Other shapes remain available in
+the manual refit dialog and advanced detection settings.
+
+Click **▶ How it works** beside the fitting controls for a 16-second animation. The left
+plot shows a 1D projection and the right plot shows the same two synthetic peaks in 2D.
+Coloured curves and contours become separate contributions while the dashed sum approaches
+the observed signal. Pause, scrub the timeline or replay it. This is a scripted explanation,
+not a fit of your sample; opening it does not start or change an analysis.
+
+![Animated fitting explanation, paused at its final frame: the same synthetic mixture in 1D and 2D](images/screenshot_fitting_help.png)
+
+On reopening an older project, the previous automatic Gaussian/adaptive default upgrades
+to tilt. Explicitly fixed alternative models are retained. Reviewed component fits stay
+stored until you rerun **Find peaks**; restart the application before recomputing with an
+updated version. The previous 24-evaluation default upgrades to 60, retaining custom budgets.
+
 ![Step 4, MS-aware separation: overlapping contours and one table row per component in the urban sample](images/screenshot_peaks.png)
 
 **MS-aware separation** finds local peaks on individual mass channels, groups channels that independently agree on position, and fits their shapes and mass spectra together. Its normal result is one table row and a pair of contours per proposed component. The contours may overlap because several compounds can contribute to the same measured pixel. The table reports estimated intensity, diagnostic ions and confidence. Weak or poorly modelled groups remain visible and are labelled unresolved. Select a row and press **Resolve selected region…** to inspect or refit its calculation window. **Export peaks CSV…** writes every component together with its quality warning.
@@ -366,7 +378,7 @@ Open a selected MS-aware component group directly from step 4, or inspect a lega
 - **Region/blob picker.** MS-aware regions are listed when that method is active; otherwise every legacy blob is available, with co-elution flags first.
 - **3D surface.** The picked blob's own footprint, as a rotatable height surface (pyqtgraph OpenGL, coloured with the same magma map as the 2D view) -- two peaks close in position and height are often easier to tell apart from an angle than looking straight down.
 - **Unique ions / split.** Where each of the blob's own significant ions actually peaks, and which cluster they fall into (more than one means the ions don't agree on where the compound peaks -- probably more than one compound). "Split at each cluster's own apex" runs a fresh watershed seeded there and reports each region's volume.
-- **Peak-shape fit.** A joint fit of k two-dimensional peak shapes (Gaussian, or an EMG along t1 for a tailing peak) times mass spectra, "Choose k automatically" picking whichever fit minimises BIC. Reports each component's position (with a standard error, from the fit's own Jacobian) and volume.
+- **Peak-shape fit.** A joint fit of k two-dimensional peak shapes times mass spectra, starting with tilted Gaussian and offering alternative tailing and measured-template shapes. "Choose k automatically" picks whichever manual fit minimises BIC. Reports each component's position (with a standard error, from the fit's own Jacobian) and volume. The main automatic detector additionally checks held-out reconstruction and spectral/spatial evidence when adding a component.
 - **MCR-ALS.** A free-form alternating-least-squares decomposition into k non-negative concentration profiles and spectra, no peak shape assumed; reports each component's dominant ion and volume.
 
 **Not built:** a way to draw a straight-line or valley-path split by hand in the 2D view (`core/overlap.split_by_line`/`split_by_valley` exist and are tested, just not wired to a drawing tool); PARAFAC across several runs at once (`core/overlap.parafac`, `core_consistency`, `split_half_stability`, `build_run_tensor` are all built and tested, but there's no button anywhere yet -- call them from Python); PARAFAC2 itself was never built (see [Known limitations](../ROADMAP.md)).
@@ -573,7 +585,7 @@ Every format also records **provenance**: the PyGCGC version, the modulation per
 
 ### Working order, settings and figures
 
-**Toolbar order** follows the workflow: 📂 Open | the nine numbered steps (1 🔄 Fold, 2 📍 Align, 3 🧹 Background, 4 🔍 Peaks, with 🫧 Siloxane and ⛓️ Hydrocarbons opened from it, 5 🏷️ IS, 6 🧪 Quantify, 7 🧬 Classify, 8 🏷️ Identify, 9 🧩 Cluster) | ✂️ Resolve overlap, 📈 Calibrate, 🗂️ Batch, 📤 Figure. The step buttons only open that step's settings on the left; see [Workflow panel](#workflow-panel). 🧹 with a blank reads the blank through both runs' alignment to the reference, which is why 📍 comes first (an applied blank subtraction is not redone when an alignment changes; the status bar says so). Give the blank and every non-reference run anchors; a run with no transform counts as the reference.
+**Toolbar order** follows eight steps: Load, Align (optional), Background, Peaks, Standards, Assign, Quantify and Export. Modulation checks are under Load; Classify, Identify and Cluster are under Assign. Peak editing and display options live in contextual menus. The step buttons open settings on the left; see [Workflow panel](#workflow-panel). Blank subtraction reads the blank through both runs' alignment to the reference, so alignment comes before background removal. A run without a transform counts as the reference.
 
 **Settings.** Every settings object has a form: Process → 🔍 Peak detection settings… edits whichever method is selected, ⛓️ Hydrocarbon settings… (or ⚙️ in the ⛓️ panel), ⚙️ in the 🏷️ dialog, ⚙️ Settings… in 🗂️ Batch (every step, plus the feature-table reference run), the 🫧 tab, and 🧪 Quantification settings. Restore defaults is in each. Changing legacy settings clears hand edits to the blob list.
 
@@ -591,7 +603,7 @@ Every format also records **provenance**: the PyGCGC version, the modulation per
 
 **🏷️ Library browser.** Browse library… in the 🏷️ dialog: filter, edit name, RI, formula and CAS in place, delete entries, view a spectrum, save as MSP.
 
-**✂️ Peak models.** The ✂️ dialog offers gaussian, emg (t1 tail), emg_t2 (t2 tail), emg2, tilt, emg_t2_tilt, cell and emg_t2_cell. On real alkane peaks none beat gaussian by more than about 3% (see ROADMAP.md section 5).
+**✂️ Peak models.** The dialog starts with **tilt** (correlated Gaussian), and also offers gaussian, emg (t1 tail), emg_t2 (t2 tail), emg2, emg_t2_tilt, cell and emg_t2_cell. Tilt gave the lowest median held-out error in 32 October calibration windows; individual windows favour different models. The [fitting comparison](validation/peak-fitting-2026-10-18.md) records the evidence and limitations. **▶ How it works** opens the same animated explanation as the Peaks panel.
 
 ### Projects and the results cache
 
@@ -661,7 +673,7 @@ Before this, single-scan spikes are removed. Afterwards, an optional cleaned bla
 
 **Peaks** (`core/peaks.py`). Blobs are found on the pixel-wise maximum of the smoothed total-ion S/N and the sum of every ion's own S/N image (which catches a compound spread thinly but consistently across many ions that the total-ion signal alone wouldn't flag), and local maxima well above the noise become seeds. A watershed grows each seed downhill until it meets a neighbour or the noise, and each footprint is trimmed to 1% of its own total-ion apex; a long run is split into overlapping stretches of t1 for this step, run across a thread pool, one peak processed by whichever stretch owns its seed. Every stored point is assigned to the footprint it falls in, which gives each peak a spectrum, a volume, a width in each dimension and a co-elution flag (its ions' own local apexes clustered into more than one group). Targets are measured the same way on their own quantifier ion, with a local baseline taken from the footprint's rim. Wrapped peaks are handled by working on an image extended by half a second. Blobs can also be deleted, merged (an exact combination: volume and spectrum sum, position and width via the parallel-axis theorem) or added by hand from a clicked pixel.
 
-**Candidates, components and overlap** (`core/candidates.py`, `core/components.py`, `core/overlap.py`). The MS-aware path finds local maxima ion by ion, groups agreeing ions and requires local TIC prominence. Padded rectangles only bound each calculation. `detect_components` screens component count and fits peak positions and shapes on a small ion set, then solves spectra and estimated intensities on a wider ion set. It stores overlapping shapes and quality warnings in a serialisable `ComponentSet`; workflow step 4 displays them and can accept a slower manual refit. Single-candidate regions use their observed local widths and solve their spectrum and background directly. Overlapping Gaussian fits share widths to keep weak peaks from spreading into the background; any fit that reaches a width limit is marked unresolved. `blob_cube` retains the legacy route. `fit_overlap` jointly fits k analytic shapes times spectra by weighted variable projection; `fit_template_overlap` shifts copies of a measured peak. Both fit signed local background while keeping compound spectra non-negative. Weak estimates are retained and marked low confidence. The fast Gaussian fit recovers both software-injected peak areas within 10% in 5 of 9 real-background cases; the measured n-C16 template passes 6 of 9. Every 10%-minor case fails, so components are not yet used for production quantification.
+**Candidates, components and overlap** (`core/candidates.py`, `core/components.py`, `core/modelselect.py`, `core/overlap.py`). The MS-aware path finds local maxima ion by ion, groups agreeing ions and requires local TIC prominence. Padded rectangles bound calculations. The default pursuit starts with one tilted Gaussian, fits independent positions, widths and correlations on diagnostic ions, and adds components only with BIC, spectral/spatial and held-out support. Spectra and estimated intensities are then solved on a wider ion set using the same count weights, non-negative spectra and signed local background. Interacting windows are merged and duplicates removed. Results and warnings live in a serialisable `ComponentSet`; reaching width limits or failing quality checks marks a group unresolved. Manual `fit_overlap` uses weighted variable projection; `fit_template_overlap` shifts a measured profile. The projected Gaussian/tilt Jacobian accounts for the solved spectra. Low-level fitting functions retain their Gaussian API defaults; pass `model="tilt"` explicitly in scripts. The [October comparison](validation/peak-fitting-2026-10-18.md) supersedes earlier injection figures: tilt improved median held-out reconstruction, while experimental free-modulation models recovered copied-profile total areas better. Component intensities remain estimates and do not directly replace calibrated quantification.
 
 The planned end state is one durable result per overlapping component—shape, spectrum,
 intensity and confidence—with analysis rectangles hidden as an implementation detail. The

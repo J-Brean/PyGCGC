@@ -13,8 +13,11 @@ University of Birmingham). Code conventions are in [docs/architecture.md](docs/a
 - **Tests.** `python -m pytest tests -q -p no:cacheprovider` with `QT_QPA_PLATFORM=offscreen`
   (about 4 minutes; run it in the background). Without offscreen, GUI tests can hang on a dialog.
   28 tests skip without the dummy data pack. Every bug fixed gets a test that failed before.
-- **Real data** lives in `real_data/` and is never committed. Benchmarks read it; tests skip
-  without it. Ask before changing a scientific default; report the evidence first.
+- **Real data** lives in `C:\REAL_DATA_FOR_PYGCGC`; `Cal files for James` is the main calibration
+  resource. Treat its raw files and existing project as read only. Generated audit results go in
+  the repository's ignored `real_data/`. Opt-in calibration tests use `PYGCGC_CALIBRATION_DATA`;
+  older scripts may still refer to the previous data location. Ask before changing a scientific
+  default; report the evidence first.
 - **Results cache.** 🧹 layers and 🔍 detections are cached in `%LOCALAPPDATA%\PyGCGC\results`
   (tests use a temporary folder via `PYGCGC_CACHE`), keyed by `core.batch.CODE_FINGERPRINT`, a hash
   of the modules whose results are cached. A new module that feeds a cached result must be added
@@ -25,6 +28,15 @@ University of Birmingham). Code conventions are in [docs/architecture.md](docs/a
   scripts that read top to bottom. Figures follow the user's global figure rules.
 
 ## Where things are
+
+The user authorised **tilted Gaussian as the default** on 18 October 2026, after the
+eight-method comparison. `ComponentDetectionSettings` uses `model="tilt"`, independent widths
+and automatic component-count pursuit. Both Gaussian models must retain pursuit and window
+merging. `defaults_version=2` distinguishes new deliberate model choices from the former
+automatic default on project reload. Reviewed fits remain stored until recomputation.
+Manual refits also start with tilt; low-level fitting APIs keep their Gaussian defaults for
+script compatibility. The local, scripted 1D/2D explanation is `gui/fitting_help.py`; it must
+not start fitting jobs or leave a timer running when hidden.
 
 | | |
 |---|---|

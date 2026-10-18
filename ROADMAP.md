@@ -9,7 +9,9 @@ is done, and record it in CHANGELOG.md.
 These block validation, not development.
 
 1. **The composition of the August 2026 standards** (four levels, 0.25 to 25 ng, 10 s method):
-   compound names and amounts, IS amount per tube, and whether "025ng" means 0.25 ng. The 📈
+   exact amounts per compound, IS amount per tube, and whether "025ng" means 0.25 ng. A compound
+   inventory is now available in `AEROSOLS/Standards.xlsx`; its RI column contains catalogue
+   codes, not retention indices. The user tentatively recalled 1 ng of IS per tube. The 📈
    builder found 59 calibrants and four internal standards in them without a list
    ([report](docs/validation/calibration-standards-2026-10-06.md)), but nothing can be checked
    against a known answer yet. A fifth level between 5 and 25 ng would show where the response
@@ -39,6 +41,14 @@ These block validation, not development.
   (`benchmarks/real_data_audit/alkane_ratios.py`).
 
 ## 3. Known gaps
+
+- **Chemical validation of MS-aware amounts remains incomplete.** The fitter now uses
+  independent widths, tilted Gaussians by default and a consistent constrained spectrum solve.
+  Both the preceding adaptive selector and current tilt default chose every component count
+  correctly in 32 known-answer cases on measured backgrounds. Median matched-peak area error
+  fell from 7.0% to 0.41% with tilt (0.35% with adaptive selection). Tilt gave the lowest median
+  held-out error in 32 real windows, but some real mixtures remain unresolved and no
+  independent chemical truth is available. See the [fitting comparison](docs/validation/peak-fitting-2026-10-18.md).
 
 - **MS-aware peaks do not reach every tool.** 🫧 blocking, ⛓️ stencil totals and series, 🗂️ batch
   and the 14 eV path of 🧬 still run the legacy detector. Legacy footprints cover most of the
@@ -79,6 +89,27 @@ These block validation, not development.
 ## 4. Suggested features
 
 In rough order of value for the work these runs are for.
+
+### Workflow priorities from the October walkthrough
+
+- **One next action with visible prerequisites.** Keep advanced parameters behind settings;
+  explain which runs or inputs prevent the next step and which results need rerunning after
+  preparation changes. The eight-step route, optional alignment skip and compact tool menus
+  are already in place.
+- **An exceptions queue for standards and peaks.** Extend the existing clickable IS grid
+  with a missing/ambiguous-only review route and side-by-side candidate spectra and fits.
+  Show the next unresolved decision without making users search every sample and table.
+- **Preview expensive peak fitting on a selected region or run.** Let users inspect the
+  fitted sum and residual before applying settings across a sequence; show separate progress
+  for detection, fitting and merging. Background removal already has a per-run preview.
+- **A guided calibration setup.** Connect standard assignment, target names, confirmed
+  calibration amounts, internal-standard amounts and output units in one setup route.
+  Filename amounts should remain suggestions until confirmed, including the tentative 1 ng IS.
+- **Clear language for detection versus identification.** Keep “Find peaks” for finding and
+  separating signals, and chemical identity under Assign. Estimated component intensity and
+  calibrated amount need distinct labels throughout review and export.
+
+### Analytical extensions
 
 1. **Quantifier-ion advisor.** For each target, rank its ions by how much of the local signal on
    that ion belongs to the target across the calibration runs, and suggest the most selective one.

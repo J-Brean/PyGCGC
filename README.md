@@ -17,7 +17,7 @@ described in the [user guide](docs/user-guide.md).
 
 ## Status
 
-Every step below is built and tested on synthetic data with a known answer (547 tests). The
+The methods below have synthetic tests with known answers. The
 right-hand column says what has been checked on real runs; the details are in
 [docs/validation/audit-2026-09-24.md](docs/validation/audit-2026-09-24.md) and what is left is in
 [ROADMAP.md](ROADMAP.md).
@@ -25,17 +25,16 @@ right-hand column says what has been checked on real runs; the details are in
 | Step | What | On real data |
 |---|---|---|
 | Read | native `.lsc` (70 eV, 14 eV, vendor DBC) and ANDI | Decodes every scan of the supplied files in 1 to 3 s each; vendor comparison of spectra and times still pending |
-| 1 🔄 Fold | period and phase, from the run or from anchors | Period found unaided on four runs (8.0000 s, as set in the method); anchor-free phase within 0.2 s of the hand-set value |
+| 1 Load | native or ANDI data; automatic period and phase, with manual checks under Load | Period found unaided on four runs (8.0000 s, as set in the method); anchor-free phase within 0.2 s of the hand-set value |
 | 2 📍 Align | anchors, shift/affine/smooth transforms, compare modes | Not yet checked on real drift |
 | 3 🧹 Background | bleed, stripes, spikes, noise map, blank subtraction | Used on every real run; blank subtraction unchecked |
-| 4 🔍 Peaks | MS-aware overlapping components (default) or legacy blobs | Benchmarked with planted peaks in real background; no labelled real standard yet |
+| 4 🔍 Peaks | MS-aware overlapping tilted Gaussian components (default) or legacy blobs | Independent widths and tilt; eight methods compared on 32 real windows, plus known-area recovery in measured backgrounds. See the [fitting check](docs/validation/peak-fitting-2026-10-18.md) |
 | 4a 🫧 Siloxane filterer (in Peaks) | score blobs against bleed and cyclic references; block their siloxane ions, or fit per pixel | Defaults chosen on two runs: every siloxane-like blob caught, none of the hydrocarbon signal removed |
-| 4b ⛓️ Hydrocarbon identifier (in Peaks) | n-alkane ladder (straight, smooth or polynomial), peak assignment, stencils, homologous series | Ladder from two clicks reaches C9–C30 on four runs; one or two carbons wrong per run. Assignment and ladder shapes not yet checked on real data |
+| ⛓️ Hydrocarbon assignment (under Assign) | n-alkane ladder (straight, smooth or polynomial), peak assignment, stencils, homologous series | Ladder from two clicks reaches C9–C30 on four runs; one or two carbons wrong per run. Assignment and ladder shapes not yet checked on real data |
 | 5 🏷️ IS | label internal standards, find them on every run, write them to the target table | Five deuterated standards found with high confidence on all four runs |
-| 6 🧪 Quantify | targets, internal standards, weighted calibration, bracketing | Planted standards in real matrix: within a few % on selective ions, 15–60% off on busy ones |
-| 7 🧬 Classify | compound classes from readable rules | Checked on one earlier run |
-| 8 🏷️ Identify | MSP library search with target-decoy confidence | No real library yet |
-| 9 🧩 Cluster | peaks or pixels grouped by spectrum, within and across runs | Checked on one earlier run; not on a sample set |
+| 6 Assign | target tables, hydrocarbon assignment, compound classes, spectral library search and clustering | Class and cluster methods checked on one earlier run; no independent spectral library check yet |
+| 7 🧪 Quantify | targets, internal standards, weighted calibration, bracketing | Planted standards in real matrix: within a few % on selective ions, 15–60% off on busy ones |
+| 8 Export | all available tables, assignments, project snapshot and provenance in one folder | Freshness flags and fit warnings are preserved; raw files remain at their source paths |
 | 📈 Calibrate | separate window: standard runs, compounds from a table or clicks, IS-normalised blobs, curves edited point by point | Four real levels without a compound list: 59 calibrants and four internal standards suggested; phases lined up; responses bend at 25 ng |
 | 🗂️ Batch, 📤 Reports | cached parallel pipeline, feature table, QC, PCA, volcano, Excel/HTML/PDF | Ran end to end on nine real-matrix runs |
 
@@ -58,13 +57,21 @@ pygcgc-gui "C:\path\to\folder\of\runs"
 ```
 
 Work along the numbered toolbar: open a step, set it on the left, press **▶ Go**, then follow the
-banner to the next step. A first look needs only 1 🔄 Fold and 3 🧹 Background. Set each run's
+banner to the next step: **Load → Align (optional) → Background → Peaks → Standards → Assign → Quantify → Export**.
+Period and phase are estimated on import; check them under Load. Set each run's
 type and calibration level in the Runs table (or with a `sequence.csv`). The project saves itself
 beside the runs (`project.pygcgc.json`) and offers to resume next time; background layers and
 peak detections are cached on local disk, so reopening does not recompute them. The
 [user guide](docs/user-guide.md) covers every step.
 
-For native files, confirm the modulation period in the Fold step (it is not stored in the file);
+**Peaks uses tilted Gaussian fitting by default**, including automatic selection of the number
+of overlapping components. Click **▶ How it works** in the Peaks panel or the manual refit
+dialog for a 16-second animation showing the same mixture in 1D and 2D, with pause and replay.
+The previous automatic default upgrades when old projects are loaded; reviewed fits are retained
+until you rerun **Find peaks**. Explicit alternative models remain available. Component intensities
+are estimates; calibrated amounts still come from Quantify.
+
+For native files, confirm the modulation period under Load → Check modulation period and phase (it is not stored in the file);
 folder opening picks untreated 70 eV, and **Open files…** loads 14 eV or DBC channels.
 
 ## Demonstration data

@@ -54,10 +54,13 @@ src/pygcgc/
     project.py          runs, sequence, targets, phases, layers, autosave, save/open
     render.py           background image building, cache, preloading
     jobs.py             thread-pool jobs with progress and cancel; Jobs panel
+    garbage_collection.py  collects Python widget cycles on the GUI thread to avoid PySide deletion deadlocks
+    export.py           all available analysis tables, assignments, inputs and provenance in one folder
     commands.py         undoable edits
     quantstate.py       🧪 state; align_state.py 📍; blob_state.py 🔍; hydrocarbon_state.py ⛓️;
     class_state.py      🧬; cluster_state.py 🧩; istd_state.py 🏷️ internal standards
     overlap_dialog.py   ✂️ pick a group or blob, 3D surface, splits, fits, MCR-ALS
+    fitting_help.py     local scripted 16-second explanation with matching 1D/2D contributions
     identify_dialog.py  🏷️ load a library, search, promote to target, library browser
     batch_dialog.py     🗂️ folder pipeline dialog: run, feature table, QC, PCA, volcano, 📤 export
     calibrate_window.py 📈 calibration builder: its own project of standard runs, compound table, curves
@@ -76,6 +79,18 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
 ```
 
 ## 5. Architecture and rules
+
+- **Automatic component fitting defaults to `tilt`.** `ComponentDetectionSettings` selects
+  correlated Gaussians with independent widths and pursuit of component count. Both `gaussian`
+  and `tilt` must use pursuit, deduplication and interacting-window merging. The search honours
+  the requested model; optional adaptive comparison applies only to `gaussian` with
+  `adaptive_shapes=True`. `defaults_version=2` upgrades the previous automatic default on
+  settings reload while preserving newly saved explicit choices and existing reviewed fits.
+  Manual GUI refits start with `OverlapSettings.model="tilt"`; low-level fit function defaults
+  stay Gaussian for API compatibility. Changed core modules already invalidate result caches.
+- **Fitting help is illustrative.** Its Qt timer animates synthetic profiles and matching
+  projections/contours without running an optimiser or reading user data. It stops when hidden
+  or closed, follows the current palette, and reuses one modeless dialog per host.
 
 - **`pygcgc.core` never imports Qt.** All science goes there, is tested there, and is callable from scripts and the command line. The GUI only calls into it.
 - **The GUI thread only draws and handles input.** Anything slow is a job: `gui/jobs.JobManager.submit(name, fn(token, progress), on_done, on_error, latest_key=None, quiet=False)`.

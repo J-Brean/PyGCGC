@@ -62,6 +62,8 @@ internal standards in `target_table.csv` as the runs load. Work along the number
    bleed once it is removed. Space toggles raw and cleaned; S/N shows signal-to-noise.
 4. **🔍 Peaks.** ▶ Find peaks (MS-aware separation). Zoom into the crowded middle of the urban
    sample: overlapping peaks get overlapping contours and a row each in the table.
+   Tilted Gaussians with independent widths are fitted by default. **▶ How it works** plays
+   a short synthetic explanation in 1D and 2D; pause, scrub or replay it at any time.
    - **🫧 Siloxane filterer…** (button under the table): the large D5 in the urban sample (10.5 min,
      0.7 s) and the D4 to D8 series light up in dashed magenta at the default 15% certainty.
    - **⛓️ Hydrocarbon identifier…**: select the diesel sample, Ion `57`, press ➕ Find alkane series

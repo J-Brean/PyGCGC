@@ -1,12 +1,69 @@
 # Peak fitting corrections and comparison, 18 October 2026
 
-The production change is an adaptive Gaussian fit: overlapping peaks have
-independent widths, and an extra correlation parameter allows a peak to tilt
-across modulations when the improvement earns its BIC penalty. The ordinary
-Gaussian remains available for peaks which do not need that flexibility.
+The production default is now **tilted Gaussian**, at the user's request after
+the comparison below. Overlapping peaks have independent widths and correlations;
+zero correlation still represents an axis-aligned peak. Automatic component-count
+selection and interacting-window merging remain active. Manual GUI refits also
+start with tilt. Ordinary Gaussian and other models remain available explicitly.
+
+The original correction and automatic-recovery measurements below used the
+preceding adaptive Gaussian/tilt selector. Those figures describe that measured
+version; they are not silently relabelled as results of the new fixed-tilt default.
 
 This is a change to the fit, spectrum extraction and recovered amounts. The
 confidence thresholds have not been relaxed.
+
+## Follow-up: tilted Gaussian as the default
+
+After the user selected tilt, the same 32 analytic known-area cases were rerun
+on the four cached measured backgrounds, with the same noise seeds and misleading
+candidate seeds. The fixed-tilt default chose **32/32 component counts correctly**,
+converged in **32/32**, and matched **48/48 injected peaks**. Median absolute
+matched-peak area error was **0.41%**, with a 90th percentile of **7.65%**.
+This is numerical recovery of analytic injections, not a measured accuracy for
+real compound amounts. The preceding adaptive result remains reported separately below.
+
+The full default detector was also rerun in all four 120-second calibration crops,
+including candidate detection, component-count pursuit, merging, deduplication,
+full-ion spectrum extraction and internal-standard matching:
+
+| Filename level | Components in crop | Matched group components | Match spectrum score | Group converged | Explained fraction | Passing candidates |
+|---|---:|---:|---:|---|---:|---:|
+| L4, `1ng` | 43 | 2 | 0.9867 | yes | 57.05% | 2 |
+| L8, `25ng` | 43 | 2 | 0.9946 | yes | 62.45% | 2 |
+| L2, `025ng` | 49 | 1 | 0.9867 | yes | 33.72% | 2 |
+| L6, `5ng` | 41 | 1 | 0.9882 | yes | 38.64% | 1 |
+
+All four saved-reference matches were recovered. Their groups still require review:
+convergence and high spectral similarity do not remove the unresolved-mixture
+limitations. More detected components than the adaptive run do not establish more
+correct compounds. Source hashes matched the recorded acquisitions and the saved
+private project hash was unchanged. The opt-in four-level regression passed in
+248 seconds, with one fitting worker and other tests running concurrently.
+
+Previous automatic defaults upgrade to tilt on settings reload. A serialised
+`defaults_version=2` marker preserves deliberately selected alternatives in new
+projects without exposing an implementation setting in the GUI. Saved reviewed
+fits remain stored until recomputation. Low-level fitting API defaults stay
+Gaussian for existing scripts; the automatic detector and manual GUI use tilt.
+
+The Peaks panel and manual fit dialog now offer **▶ How it works**, a local
+16-second synthetic explanation with the same profiles in 1D and 2D. It animates
+initial guesses, independent widths and tilt, and explains why extra components
+need evidence. Pause, replay and scrubbing are available; hiding or closing the
+dialog stops its timer. Screenshots were inspected in light and dark themes.
+This explanation neither runs an optimiser nor changes sample results.
+
+Follow-up results and logs are under `real_data/peak_fitting/tilt_default_*`,
+separate from the original comparison artifacts.
+
+Verification of the follow-up: the complete suite passed **652 tests, with 30
+skipped and no failures**, in one run (351 seconds). The optional real-calibration
+test passed separately across all four levels. After the final settings-marker
+and animation layout/theme refinements, the affected fitting, model-selection,
+animation and end-to-end workflow modules passed **45 tests**. The animation tests
+cover matching 1D/2D profiles, playback, pause, seek, replay, end-of-clip behaviour,
+timer shutdown, window reuse, current themes and theme changes while open.
 
 ## What was wrong
 
@@ -93,8 +150,9 @@ production Gaussian solver additionally uses the projected analytic Jacobian.
 The table reports the median of paired error ratios, rather than a ratio of
 unpaired medians. Different techniques win individual windows. More flexible
 tailing and free-amplitude models do not consistently beat the simpler tilted
-Gaussian. The production choice therefore compares ordinary and tilted
-Gaussians, rather than imposing a tilted or tailing profile on every peak.
+Gaussian. The first corrected production choice compared ordinary and tilted
+Gaussians. The user subsequently selected tilt as the default; this fits the
+correlation parameter for every component, including values near zero.
 
 ## Known-answer recovery in measured backgrounds
 
