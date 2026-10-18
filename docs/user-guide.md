@@ -337,9 +337,11 @@ not a fit of your sample; opening it does not start or change an analysis.
 ![Animated fitting explanation, paused at its final frame: the same synthetic mixture in 1D and 2D](images/screenshot_fitting_help.png)
 
 On reopening an older project, the previous automatic Gaussian/adaptive default upgrades
-to tilt. Explicitly fixed alternative models are retained. Reviewed component fits stay
-stored until you rerun **Find peaks**; restart the application before recomputing with an
-updated version. The previous 24-evaluation default upgrades to 60, retaining custom budgets.
+to tilt. Explicitly fixed alternative models are retained. Existing results are not rewritten
+on load; restart the application and rerun **Find peaks** to recompute automatic fits. Accepted
+manual fits remain overrides when their saved region geometry still matches, so inspect/refit
+those groups explicitly if you want tilt applied to them too. The previous 24-evaluation
+default upgrades to 60, retaining custom budgets.
 
 ![Step 4, MS-aware separation: overlapping contours and one table row per component in the urban sample](images/screenshot_peaks.png)
 

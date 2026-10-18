@@ -43,8 +43,10 @@ private project hash was unchanged. The opt-in four-level regression passed in
 
 Previous automatic defaults upgrade to tilt on settings reload. A serialised
 `defaults_version=2` marker preserves deliberately selected alternatives in new
-projects without exposing an implementation setting in the GUI. Saved reviewed
-fits remain stored until recomputation. Low-level fitting API defaults stay
+projects without exposing an implementation setting in the GUI. Existing results
+are not rewritten on load. Accepted manual fits remain overrides after detection
+when their saved calculation regions still match; applying tilt to those groups
+requires an explicit manual refit. Low-level fitting API defaults stay
 Gaussian for existing scripts; the automatic detector and manual GUI use tilt.
 
 The Peaks panel and manual fit dialog now offer **▶ How it works**, a local
@@ -291,4 +293,5 @@ code fingerprint. Old projects which saved the former 24-evaluation default
 upgrade to 60; other custom budgets, and budgets explicitly saved with adaptive
 fitting, remain unchanged. Restart the application and run Peaks again to apply
 the corrected fitter to an existing project. Saved reviewed fits are preserved
-until recomputation is requested.
+on load. Re-running detection recomputes automatic fits; accepted manual fits are
+reapplied where their saved calculation regions still match.

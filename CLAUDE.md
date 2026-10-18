@@ -33,7 +33,9 @@ The user authorised **tilted Gaussian as the default** on 18 October 2026, after
 eight-method comparison. `ComponentDetectionSettings` uses `model="tilt"`, independent widths
 and automatic component-count pursuit. Both Gaussian models must retain pursuit and window
 merging. `defaults_version=2` distinguishes new deliberate model choices from the former
-automatic default on project reload. Reviewed fits remain stored until recomputation.
+automatic default on project reload. Existing results are not rewritten on load. Accepted
+manual fits are reapplied after detection when their saved region geometry still matches;
+they need an explicit manual refit to adopt tilt.
 Manual refits also start with tilt; low-level fitting APIs keep their Gaussian defaults for
 script compatibility. The local, scripted 1D/2D explanation is `gui/fitting_help.py`; it must
 not start fitting jobs or leave a timer running when hidden.

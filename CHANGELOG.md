@@ -11,8 +11,9 @@ At the user's request, automatic MS-aware separation and manual GUI refits now s
 tilted Gaussians, with independent widths. Automatic component-count pursuit, duplicate
 removal and neighbouring-window merging remain active for tilt. The search honours an
 explicit model rather than silently fitting Gaussians. Older automatic defaults upgrade on
-reload; versioned settings preserve deliberate alternative choices and reviewed fits stay
-stored until recomputation. A contextual **▶ How it works** button plays a local 16-second
+reload; versioned settings preserve deliberate alternative choices. Accepted manual fits
+remain overrides when their calculation regions still match after detection. A contextual
+**▶ How it works** button plays a local 16-second
 synthetic illustration with matching 1D projections and 2D contours, pause, replay and seek.
 The animation explains spectra, tilt and evidence for additional components, distinguishes
 fitting from compound identification, and stops its timer when hidden or closed.

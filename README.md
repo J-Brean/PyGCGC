@@ -67,8 +67,9 @@ peak detections are cached on local disk, so reopening does not recompute them. 
 **Peaks uses tilted Gaussian fitting by default**, including automatic selection of the number
 of overlapping components. Click **▶ How it works** in the Peaks panel or the manual refit
 dialog for a 16-second animation showing the same mixture in 1D and 2D, with pause and replay.
-The previous automatic default upgrades when old projects are loaded; reviewed fits are retained
-until you rerun **Find peaks**. Explicit alternative models remain available. Component intensities
+The previous automatic default upgrades when old projects are loaded. Rerun **Find peaks**
+for new automatic fits; accepted manual fits remain overrides where their regions still match.
+Explicit alternative models remain available. Component intensities
 are estimates; calibrated amounts still come from Quantify.
 
 For native files, confirm the modulation period under Load → Check modulation period and phase (it is not stored in the file);
