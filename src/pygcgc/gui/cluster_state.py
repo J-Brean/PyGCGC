@@ -48,6 +48,7 @@ class ClusterState(QtCore.QObject):
         self.skip_siloxane = False            # leave the siloxane ions out of the distance
         self.scope = "run"                    # "run": the selected run; "all": every 70 eV run, pooled
         self.running = False
+        self._input_revision = 0
         self.unit = "peaks"                   # "peaks": cluster detected peaks; "regions": segment the pixels themselves
         self.n_regions = 12
         self.normalise = "percent"            # run table: "percent" of the run's own total, or "pqn" (see apply_pqn)
@@ -224,8 +225,7 @@ class ClusterState(QtCore.QObject):
         return self.project.classes.soft_partner(index)
 
     def mark_stale(self, *_) -> None:
-        if self.running:
-            return
+        self._input_revision += 1
         have = {"peaks": self.result is not None, "regions": self.regions is not None}
         newly = [u for u in UNITS if have[u] and not self._stale[u]]
         for u in newly:
@@ -234,6 +234,17 @@ class ClusterState(QtCore.QObject):
             self.changed.emit()
 
     # ---------------------------------------------------------- clustering
+    def _cancelled(self) -> None:
+        self.running = False
+        self.runningChanged.emit(False)
+        self.changed.emit()
+
+    def _job_inputs(self):
+        return (self.project.analysis_inputs(), self._input_revision, self.settings, self.skip_siloxane,
+                self.scope, self.use_soft, self.unit, self.n_regions,
+                self.project.blobs.settings, self.project.blobs.component_settings,
+                self.project.blobs.method)
+
     def cluster(self, index: int, on_done=None) -> bool:
         p = self.project
         reason = self.why_not(index)
@@ -255,6 +266,7 @@ class ClusterState(QtCore.QObject):
                    p.blobs.components_for(i) if ms_aware else None, soft_input(i)) for i in targets]
         blob_settings, settings = p.blobs.settings, self.effective_settings()
         n = len(inputs)
+        captured = self._job_inputs()
         self.running = True
         self.runningChanged.emit(True)
 
@@ -288,6 +300,10 @@ class ClusterState(QtCore.QObject):
             return table, result, blobs_by_run, [e.name for e, *_ in inputs], found_here, with_soft
 
         def done(out):
+            if captured != self._job_inputs():
+                self._cancelled()
+                p.message.emit("Clustering discarded: inputs changed; cluster again")
+                return
             table, result, blobs_by_run, names, found_here, with_soft = out
             self.table, self.result, self.blobs_by_run, self.run_names = table, result, blobs_by_run, names
             self.summary = result.summary(table)
@@ -315,12 +331,13 @@ class ClusterState(QtCore.QObject):
             p.message.emit(f"🧩 {msg}")
             self.changed.emit()
 
-        p.jobs.submit("🧩 Clustering peaks", work, done, failed)
+        p.jobs.submit("🧩 Clustering peaks", work, done, failed, on_cancel=self._cancelled)
         return True
 
     def _segment(self, index: int, on_done=None) -> bool:
         """Pixel regions: fit on the selected run, or on every 70 eV run at once, and label each."""
         p = self.project
+        captured = self._job_inputs()
         targets = self.eligible() if self.scope == "all" else [index]
         pairs = [(p.entries[i].name, p.base_run(i), p.fold(i)) for i in targets]
         settings = SegmentSettings(n_regions=self.n_regions,
@@ -343,6 +360,10 @@ class ClusterState(QtCore.QObject):
             return model, labels, shares, summaries, [name for name, _, _ in pairs]
 
         def done(out):
+            if captured != self._job_inputs():
+                self._cancelled()
+                p.message.emit("Pixel regions discarded: inputs changed; fit regions again")
+                return
             model, labels, shares, summaries, names = out
             self.regions, self.region_labels, self.region_shares, self.region_summaries = model, labels, shares, summaries
             self.region_runs = names
@@ -362,7 +383,7 @@ class ClusterState(QtCore.QObject):
             p.message.emit(f"🧩 {msg}")
             self.changed.emit()
 
-        p.jobs.submit("🧩 Finding pixel regions", work, done, failed)
+        p.jobs.submit("🧩 Finding pixel regions", work, done, failed, on_cancel=self._cancelled)
         return True
 
     # ------------------------------------------------------- reading a result

@@ -348,7 +348,7 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
         self._updating = False
         if running:
             self.series_status.setText(f"⛓️ Working on {name}…" if name else "⛓️ Working…")
-        elif series is None:
+        elif series is None or not len(series):
             self.series_status.setText("No alkane series on this run yet." if name else "")
         else:
             self.series_status.setText(f"{len(series)} confirmed, C{min(series.hits)} to C{max(series.hits)}.")

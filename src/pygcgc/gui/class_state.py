@@ -47,6 +47,7 @@ class ClassState(QtCore.QObject):
         self.own_blobs: dict = {}                    # RunEntry -> BlobSet found here (MS-aware users)
         self.stale: set = set()
         self.running = False
+        self._input_revision = 0
 
     # ------------------------------------------------------------ queries
     def forget_runs(self, entries) -> None:
@@ -134,11 +135,13 @@ class ClassState(QtCore.QObject):
         self._rules_changed()
 
     def _rules_changed(self) -> None:
+        self._input_revision += 1
         self.stale = set(self.results)
         self.changed.emit()
 
     def mark_stale(self, *_) -> None:
-        if self.results and not self.running:
+        self._input_revision += 1
+        if self.results:
             self.stale = set(self.results)
             self.changed.emit()
 
@@ -164,6 +167,9 @@ class ClassState(QtCore.QObject):
         soft_cleaned = soft_entry is not None and soft_entry.background is not None
         blob_settings = p.blobs.settings
         raw = e.run
+        inputs = p.analysis_inputs()
+        configuration = (self._input_revision, self.settings, self.rules_in_use(), dict(self.enabled), self.use_soft,
+                         p.blobs.settings, p.blobs.component_settings, p.blobs.method)
         self._set_running(True)
 
         def work(token, progress):
@@ -192,6 +198,12 @@ class ClassState(QtCore.QObject):
             return b, result, (found_here, from_components)
 
         def done(out):
+            if (inputs != p.analysis_inputs() or configuration != (
+                    self._input_revision, self.settings, self.rules_in_use(), self.enabled, self.use_soft,
+                    p.blobs.settings, p.blobs.component_settings, p.blobs.method)):
+                self._set_running(False)
+                p.message.emit("Classification discarded: inputs changed; classify again")
+                return
             b, result, (found_here, from_components) = out
             self.results[e], self.blobs_used[e] = result, b
             if found_here:
@@ -217,7 +229,8 @@ class ClassState(QtCore.QObject):
             self._set_running(False)
             p.message.emit(f"🧬 {e.name}: {msg}")
 
-        p.jobs.submit(f"🧬 Classifying blobs: {e.name}", work, done, failed)
+        p.jobs.submit(f"🧬 Classifying blobs: {e.name}", work, done, failed,
+                      on_cancel=lambda: self._set_running(False))
         return True
 
     # -------------------------------------------------------------- files

@@ -102,7 +102,7 @@ class BlobState(QtCore.QObject):
         self.changed.emit()
 
     def mark_stale(self, *_):
-        if (self.by_run or self.candidates_by_run or self.component_sets_by_name) and not self.running:
+        if self.by_run or self.candidates_by_run or self.component_sets_by_name:
             self.stale = set(self.by_run)
             self.candidate_stale = set(self.candidates_by_run)
             self.component_stale_names.update(self.component_sets_by_name)
@@ -160,6 +160,8 @@ class BlobState(QtCore.QObject):
         unsuccessful = set()
         settings = self.settings
         component_settings = self.component_settings
+        inputs = self.project.analysis_inputs()
+        selected_method = self.method
 
         def finished(entry, success: bool) -> None:
             if not success:
@@ -204,6 +206,11 @@ class BlobState(QtCore.QObject):
                 return _replay(blobs, run, fold, edits)
 
             def done(result, e=e):
+                if (inputs != self.project.analysis_inputs() or settings != self.settings
+                        or component_settings != self.component_settings or selected_method != self.method):
+                    self.project.message.emit(f"Peaks for {e.name} discarded: inputs changed; run detection again")
+                    finished(e, False)
+                    return
                 if method == MS_AWARE:
                     candidates, regions, automatic = result
                     self.candidates_by_run[e], self.regions_by_run[e] = candidates, regions

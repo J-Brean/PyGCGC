@@ -266,6 +266,32 @@ class AlignState(QtCore.QObject):
             return
         remaining = set(entries)
         failed: list[str] = []
+        before = self.snapshot()
+        inputs = self.project.analysis_inputs()
+        found_by_run = {}
+        unsuccessful = set()
+
+        def settled(entry, success):
+            if not success:
+                unsuccessful.add(entry)
+            remaining.discard(entry)
+            if remaining:
+                return
+            if unsuccessful:
+                return
+            if inputs != self.project.analysis_inputs() or self.snapshot() != before:
+                self.project.message.emit("Anchor search discarded: inputs changed; search again")
+                return
+            points = {run: list(pts) for run, pts in before["points"].items()}
+            for run, found in found_by_run.items():
+                for name, point in found.items():
+                    if point is not None:
+                        points[run] = [p for p in points.get(run, []) if p.name != name] + [point]
+            self.restore(dict(before, points=points))
+            if failed:
+                self.project.message.emit("Couldn't find every anchor in: " + "; ".join(failed))
+            if on_done:
+                on_done()
 
         def start(entry) -> None:
             idx = self.project.entries.index(entry)
@@ -276,22 +302,17 @@ class AlignState(QtCore.QObject):
 
             def done(found) -> None:
                 missing = [n for n, v in found.items() if v is None]
-                for name, pt in found.items():
-                    if pt is not None:
-                        pts = self.points.setdefault(entry.name, [])
-                        pts[:] = [p for p in pts if p.name != name] + [pt]
+                found_by_run[entry.name] = found
                 if missing:
                     failed.append(f"{entry.name} ({', '.join(missing)})")
-                self._recompute(entry.name)
-                remaining.discard(entry)
-                if not remaining:
-                    self.changed.emit()
-                    if failed:
-                        self.project.message.emit("Couldn't find every anchor in: " + "; ".join(failed))
-                    if on_done:
-                        on_done()
+                settled(entry, True)
 
-            self.project.jobs.submit(f"📍 Finding anchors: {entry.name}", work, done)
+            def error(message):
+                self.project.message.emit(f"Anchor search failed for {entry.name}: {message}")
+                settled(entry, False)
+
+            self.project.jobs.submit(f"📍 Finding anchors: {entry.name}", work, done, error,
+                                     on_cancel=lambda: settled(entry, False))
 
         for e in entries:
             start(e)

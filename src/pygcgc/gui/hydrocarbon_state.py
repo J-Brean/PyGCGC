@@ -87,16 +87,23 @@ class HydrocarbonState(QtCore.QObject):
 
     # ------------------------------------------------------------ finding
     def find_series(self, index: int, seeds, on_done=None) -> None:
+        if self.running:
+            return
         p = self.project
         e = p.entries[index]
         run, fold = p.display_run(index), p.fold(index)
         settings = self.settings
+        inputs = p.analysis_inputs()
         self._set_running(True)
 
         def work(token, progress):
             return find_alkane_series(run, fold, seeds, settings)
 
         def done(series):
+            if inputs != p.analysis_inputs() or settings != self.settings:
+                self._set_running(False)
+                p.message.emit("Alkane search discarded: inputs changed; search again")
+                return
             series.shape, series.degree = settings.ladder_shape, settings.ladder_degree
             self.series[e.name] = series
             self._set_running(False)
@@ -109,9 +116,12 @@ class HydrocarbonState(QtCore.QObject):
             self._set_running(False)
             p.message.emit(f"⛓️ {e.name}: {msg}")
 
-        p.jobs.submit(f"⛓️ Finding alkanes: {e.name}", work, done, failed)
+        p.jobs.submit(f"⛓️ Finding alkanes: {e.name}", work, done, failed,
+                      on_cancel=lambda: self._set_running(False))
 
     def propagate_series(self, from_index: int, to_indices, on_done=None) -> None:
+        if self.running:
+            return
         p = self.project
         ref_series = self.series_for(from_index)
         if ref_series is None:
@@ -125,8 +135,23 @@ class HydrocarbonState(QtCore.QObject):
             return
         remaining = set(entries)
         settings = self.settings
+        inputs = p.analysis_inputs()
         missing = []
+        unsuccessful = set()
         self._set_running(True)
+
+        def settled(entry, success):
+            if not success:
+                unsuccessful.add(entry)
+            remaining.discard(entry)
+            if not remaining:
+                self._set_running(False)
+                self.changed.emit()
+                p.request_autosave()
+                if missing:
+                    p.message.emit("No alkanes found in: " + ", ".join(missing))
+                if not unsuccessful and on_done:
+                    on_done()
         for e in entries:
             idx = p.entries.index(e)
             run, fold = p.display_run(idx), p.fold(idx)
@@ -135,22 +160,24 @@ class HydrocarbonState(QtCore.QObject):
                 return propagate_alkane_series(ref_series, run, fold, settings)
 
             def done(series, e=e):
+                if (inputs != p.analysis_inputs() or settings != self.settings
+                        or self.series_for(from_index) is not ref_series):
+                    p.message.emit(f"Alkane propagation for {e.name} discarded: inputs changed")
+                    settled(e, False)
+                    return
                 if len(series):
                     series.shape, series.degree = settings.ladder_shape, settings.ladder_degree
                     self.series[e.name] = series
                 else:
                     missing.append(e.name)
-                remaining.discard(e)
-                if not remaining:
-                    self._set_running(False)
-                    self.changed.emit()
-                    p.request_autosave()
-                    if missing:
-                        p.message.emit("No alkanes found in: " + ", ".join(missing))
-                    if on_done:
-                        on_done()
+                settled(e, True)
 
-            p.jobs.submit(f"⛓️ Propagating alkanes: {e.name}", work, done)
+            def failed(message, e=e):
+                p.message.emit(f"Alkane propagation for {e.name} failed: {message}")
+                settled(e, False)
+
+            p.jobs.submit(f"⛓️ Propagating alkanes: {e.name}", work, done, failed,
+                          on_cancel=lambda e=e: settled(e, False))
 
     # ------------------------------------------------------------ stencils
     def snapshot_stencils(self) -> StencilSet:
