@@ -109,8 +109,14 @@ def _wls(x, y, w, degree, zero) -> _Fit:
     X = _design(x, degree, zero)
     sw = np.sqrt(w)
     Xw, yw = X * sw[:, None], y * sw
-    XtX_inv = np.linalg.pinv(Xw.T @ Xw)
-    beta = XtX_inv @ Xw.T @ yw
+    # Solve the weighted design directly. Normal equations square its condition
+    # number and used to lose the intercept when users changed ng to pg or fg.
+    # Column scaling also keeps polynomial terms comparable in different units.
+    scale = np.linalg.norm(Xw, axis=0)
+    scale = np.where(scale > 0, scale, 1.)
+    inverse = np.linalg.pinv(Xw / scale) / scale[:, None]
+    beta = inverse @ yw
+    XtX_inv = inverse @ inverse.T
     resid = y - X @ beta
     dof = max(len(x) - X.shape[1], 1)
     s2 = float(np.sum(w * resid ** 2) / dof)
@@ -130,14 +136,15 @@ def _coefs(f: _Fit) -> tuple[float, float, float]:
 def _invert(a0, a1, a2, y):
     """Amount for response y (the root on the rising branch nearest the data)."""
     y = np.asarray(y, dtype=float)
-    if abs(a2) < 1e-15:
+    if a2 == 0:
         return (y - a0) / a1 if a1 != 0 else np.full_like(y, np.nan)
     disc = a1 ** 2 - 4 * a2 * (a0 - y)
     root = np.sqrt(np.where(disc >= 0, disc, np.nan))
-    x1 = (-a1 + root) / (2 * a2)
-    x2 = (-a1 - root) / (2 * a2)
-    # The branch where the curve rises with x (derivative > 0).
-    return np.where(a1 + 2 * a2 * x1 > 0, x1, x2)
+    # The +sqrt root is the rising branch. Rationalise it for positive
+    # slopes to avoid subtracting nearly equal numbers near the intercept.
+    if a1 > 0:
+        return 2 * (y-a0) / (a1+root)
+    return (-a1+root) / (2*a2)
 
 
 @dataclass
