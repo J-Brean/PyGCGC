@@ -11,8 +11,10 @@ University of Birmingham). Code conventions are in [docs/architecture.md](docs/a
 - **Environment.** Windows, one shared uv environment at `C:\Users\BreanJ\venvs\main`. Run Python,
   pytest and git from PowerShell; Git Bash here lacks git and most tools.
 - **Tests.** `python -m pytest tests -q -p no:cacheprovider` with `QT_QPA_PLATFORM=offscreen`
-  (about 4 minutes; run it in the background). Without offscreen, GUI tests can hang on a dialog.
-  28 tests skip without the dummy data pack. Every bug fixed gets a test that failed before.
+  (several minutes; run it in the background). Without offscreen, GUI tests can hang on a dialog.
+  Optional dummy/native/reference tests skip without configured inputs. Every bug fixed gets
+  a test that failed before. Native GUI tests can autosave: use isolated project paths and
+  preserve existing private projects when adding real-data coverage.
 - **Real data** lives in `C:\REAL_DATA_FOR_PYGCGC`; `Cal files for James` is the main calibration
   resource. Treat its raw files and existing project as read only. Generated audit results go in
   the repository's ignored `real_data/`. Opt-in calibration tests use `PYGCGC_CALIBRATION_DATA`;
@@ -28,6 +30,13 @@ University of Birmingham). Code conventions are in [docs/architecture.md](docs/a
   scripts that read top to bottom. Figures follow the user's global figure rules.
 
 ## Where things are
+
+The [19 October code audit](docs/validation/code-audit-2026-10-19.md) adds deterministic
+queued-cancellation, obsolete-result, transactional-import and calibration-unit tests.
+Workers must reject changed source/settings before publishing and settle running flags
+on cancellation. Calibration must solve the scaled weighted design directly, retaining
+unit invariance; do not form normal equations. Target-table appends preserve arbitrary
+valid header order and extra columns, reject duplicates, and replace files atomically.
 
 The user authorised **tilted Gaussian as the default** on 18 October 2026, after the
 eight-method comparison. `ComponentDetectionSettings` uses `model="tilt"`, independent widths

@@ -9,6 +9,21 @@ questions answered by James), "section 9" to [the milestone specs](history/miles
 
 ## Code layout
 
+The [19 October code audit](validation/code-audit-2026-10-19.md) records job-state,
+CSV, ANDI and calibration regressions. JobManager checks cancellation when queued
+signals are delivered, not just inside the worker. Superseded jobs call their
+cancellation callback and terminal jobs ignore later progress. State owners must
+settle failure/cancellation and guard callbacks against changed inputs. The runtime
+`Project.analysis_inputs()` snapshot tracks run identities, fold settings and layers;
+it is not a persistent cache key. Method-specific settings and revisions are checked
+separately. Alignment propagation buffers a batch before applying it.
+
+Calibration solves the weighted design with column scaling and an SVD pseudoinverse,
+using the same inverse for coefficient covariance. Do not restore normal equations:
+they lose accuracy when the amount units change. The rising quadratic inverse uses
+a rationalised root where direct subtraction would lose precision. Unit-invariance
+tests cover coefficients, recovered amounts and uncertainty.
+
 ```
 src/pygcgc/
   core/                 all the science; never imports Qt

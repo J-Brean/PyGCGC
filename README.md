@@ -123,6 +123,12 @@ a tour of every step, including the 📈 calibration builder. The tutorials in
 All optional for viewing and cleaning; picked up when they sit in the folder you open.
 Quantification needs a target table, a sequence and calibration levels.
 
+Target-only tables can be imported before adding internal standards; quantification
+requires those standards before it can run. Invalid imports leave working inputs
+unchanged. Ion masses must be positive whole numbers, with finite retention times
+and positive search windows. Promoting a library hit preserves the existing CSV's
+column order and extra columns, and rejects duplicate compound names.
+
 **`method.json`**: `{"modulation_period_s": 8.0}`.
 
 **`sequence.csv`**: what each run is, in running order (or set it in the Runs table and save it from there).
@@ -202,11 +208,14 @@ folding, background, quantification, alignment, peaks, siloxanes and the calibra
 ## Tests
 
 ```powershell
-$env:QT_QPA_PLATFORM = "offscreen"; python -m pytest tests -q
+$env:QT_QPA_PLATFORM = "offscreen"; python -m pytest tests -q -p no:cacheprovider
 ```
 
-About four minutes. 28 tests need the synthetic dummy data pack (`dummy_gcxgc/` beside the
-repository, or `PYGCGC_DUMMY_DATA`) and skip without it; one needs a native run in `real_data/`.
+Allow several minutes, longer during concurrent fitting or with cold caches. Optional
+tests need the synthetic dummy pack (`dummy_gcxgc/` beside the repository, or
+`PYGCGC_DUMMY_DATA`), native acquisitions/audit files (`PYGCGC_REAL_DATA`) or a saved
+manually labelled calibration reference (`PYGCGC_CALIBRATION_DATA`). They skip when
+those inputs are not configured. The latest audit records the actual pass/skip totals.
 
 ## Documentation
 
@@ -217,7 +226,7 @@ repository, or `PYGCGC_DUMMY_DATA`) and skip without it; one needs a native run 
 | [ROADMAP.md](ROADMAP.md) | known limits, recommended changes and suggested features, in priority order |
 | [CHANGELOG.md](CHANGELOG.md) | dated record of what changed and what real-data checks found |
 | [docs/architecture.md](docs/architecture.md) | code layout, rules, design decisions, gotchas |
-| [docs/validation/](docs/validation/) | real-data reports, newest first: [audit-2026-09-24](docs/validation/audit-2026-09-24.md) |
+| [docs/validation/](docs/validation/) | method reports and audits, including the [19 October code audit](docs/validation/code-audit-2026-10-19.md) |
 | [benchmarks/](benchmarks/README.md) | scripts that reproduce every benchmark and real-data number |
 | [CLAUDE.md](CLAUDE.md) | notes for coding agents working on the repository |
 | [docs/history/](docs/history/) | superseded plans, specs and handovers, kept for reference |

@@ -201,6 +201,16 @@ when named targets, known amounts or sufficient calibration levels are absent. E
 loading, quantitative settings and the separate curve builder are under **Advanced calibration
 tools**. Quantitative results still require reviewing fits, qualifiers and calibration coverage.
 
+Target CSV imports validate the complete table before changing working inputs. A table
+with targets but no internal standards can be loaded and saved; add the standards before
+quantification. Ion masses must be positive whole numbers, retention values finite and
+search windows positive. Each named internal-standard reference must point to an `istd`
+row. Calibration level names must be unique and amounts finite and non-negative.
+
+Calibration fitting is numerically scaled so changing between equivalent amount units
+preserves the curve and recovered amounts. Re-run Quantify after updating from a version
+before the 19 October numerical fix, especially for quadratic curves in very small units.
+
 ![Step 6 after Go: targets circled and internal standards squared on the urban sample](images/screenshot_quant.png)
 
 Step **6 🧪 Quantify** (Go) runs the whole thing in the background:
@@ -738,6 +748,11 @@ The project saves itself beside the runs (`project.pygcgc.json`) and offers to r
 - Reading, phase estimation, background removal and image building all run in a thread pool, so the window never freezes.
 - The Jobs tab shows progress, with cancel buttons.
 - Failures are written in full to the Log tab.
+- Cancel also suppresses a result that has finished computing but is still waiting
+  to reach the window. Cancelled or failed analyses release their running controls.
+- If source runs, fold settings or relevant analysis inputs change while a job is
+  running, obsolete results are discarded. The Log explains when another run is
+  needed; a discarded result does not mark the workflow step complete.
 
 ### Keyboard
 

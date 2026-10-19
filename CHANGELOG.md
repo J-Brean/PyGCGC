@@ -6,6 +6,35 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Codebase audit and regression fixes, 2026-10-19.**
+The previous full suite passed 722 tests, yet deterministic checks reproduced queued
+cancellation races, stale-result publication, stuck analysis controls, inconsistent
+failed imports and a zero-signal ANDI round-trip failure. Job delivery now honours
+cancellation and supersession. Analysis states guard source/settings snapshots;
+alignment propagation buffers a batch before applying it. Failed/cancelled class,
+cluster and alkane jobs settle, empty alkane series display safely, and run removal
+rebuilds quantitative results after removing the entry without refitting an active job.
+
+Target imports are transactional and accept target-only tables, including project
+reload. CSV validation rejects invalid masses, roles, references and numeric values,
+and duplicate calibration levels. Library-hit promotion respects arbitrary valid CSV
+column order, preserves extra columns, rejects duplicate names and writes atomically.
+ANDI loading respects scan offsets and zero-count padding, retains an empty export's
+mass axis and rejects invalid counts/ranges. Backwards scan filtering and Run/FoldSpec
+validation now prevent invalid axes from reaching downstream calculations.
+
+Weighted polynomial calibration now solves the column-scaled design directly rather
+than forming normal equations. A known quadratic formerly had 213% maximum relative
+back-calculation error after a 1,000-fold amount-unit conversion; the corrected example
+stays below `9e-14` across scale factors through a billion. Stable quadratic inversion
+also preserves small curvature and near-intercept precision. Scientific model-selection,
+acceptance and minimum-level rules are unchanged. Re-run Quantify to refresh results.
+See [the audit report](docs/validation/code-audit-2026-10-19.md) for scope, tests and limits.
+The final suite passed **850 tests**, with 31 optional-data skips and the two existing
+SciPy precision-loss warnings. Added 128 regression cases. Read-only checks on four
+native calibration acquisitions, all three generated target CSVs, 88 module imports
+and a built wheel also passed. Raw data and existing private projects were unchanged.
+
 **Visible alignment point controls, 2026-10-19.**
 Added visible Add points, Delete selected points and Start alignment over buttons.
 Deletion supports multiple table rows in one undoable edit. Restart keeps the chosen
