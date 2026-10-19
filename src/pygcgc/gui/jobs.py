@@ -169,7 +169,7 @@ class JobManager(QtCore.QObject):
 
     def _on_progress(self, job_id, done, total, message) -> None:
         job = self.jobs.get(job_id)
-        if job is None:
+        if job is None or job.state not in ("queued", "running") or job.token.cancelled or self._is_stale(job):
             return
         job.state, job.done, job.total, job.message = "running", done, total, message
         if not job.quiet:
@@ -193,10 +193,10 @@ class JobManager(QtCore.QObject):
 
     def _on_finished(self, job_id, result) -> None:
         job = self.jobs.get(job_id)
-        if job is None:
+        if job is None or job.state not in ("queued", "running"):
             return
-        if self._is_stale(job):
-            self._finish(job, "cancelled")
+        if job.token.cancelled or self._is_stale(job):
+            self._on_cancelled(job_id)
             return
         # Callback before state change so callers can chain jobs.
         try:
@@ -207,20 +207,26 @@ class JobManager(QtCore.QObject):
 
     def _on_failed(self, job_id, text) -> None:
         job = self.jobs.get(job_id)
-        if job is None:
+        if job is None or job.state not in ("queued", "running"):
+            return
+        if job.token.cancelled or self._is_stale(job):
+            self._on_cancelled(job_id)
             return
         job.message = text
-        stale = self._is_stale(job)
-        if job.on_error and not stale:
-            job.on_error(text)
-        self._finish(job, "cancelled" if stale else "failed")
+        try:
+            if job.on_error:
+                job.on_error(text)
+        finally:
+            self._finish(job, "failed")
 
     def _on_cancelled(self, job_id) -> None:
         job = self.jobs.get(job_id)
-        if job is not None:
-            if job.on_cancel:
-                job.on_cancel()
-            self._finish(job, "cancelled")
+        if job is not None and job.state in ("queued", "running"):
+            try:
+                if job.on_cancel:
+                    job.on_cancel()
+            finally:
+                self._finish(job, "cancelled")
 
     def forget(self, job_id: int) -> None:
         if self.jobs.pop(job_id, None) is not None:
