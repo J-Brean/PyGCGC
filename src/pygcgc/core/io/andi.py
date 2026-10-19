@@ -52,6 +52,8 @@ def read_andi(path: str | Path) -> Run:
         time_units = getattr(ds.variables["scan_acquisition_time"], "units", "seconds")
 
     n_scans = times.size
+    if times.ndim != 1 or masses.ndim != 1 or inten.shape != masses.shape:
+        raise ValueError("ANDI scan times, masses and intensities must be matching one-dimensional arrays")
 
     # Work out which scan each stored point belongs to.
     if counts is None and starts is None:
@@ -59,11 +61,29 @@ def read_andi(path: str | Path) -> Run:
     if counts is None:
         ends = np.append(starts[1:], masses.size)
         counts = ends - starts
+    if counts.shape != (n_scans,) or not np.isfinite(counts).all() or np.any(counts < 0) or np.any(counts != np.floor(counts)):
+        raise ValueError("ANDI point_count must contain one non-negative integer per scan")
     counts = counts.astype(np.int64)
-    if counts.sum() != masses.size:
+    total = int(counts.sum())
+    if starts is not None:
+        if (starts.shape != (n_scans,) or not np.isfinite(starts).all()
+                or np.any(starts < 0) or np.any(starts != np.floor(starts))):
+            raise ValueError("ANDI scan_index must contain one non-negative integer per scan")
+        starts = starts.astype(np.int64)
+        if np.any(starts + counts > masses.size) or np.any(starts[1:] < (starts+counts)[:-1]):
+            raise ValueError("ANDI scan_index and point_count overlap or exceed the stored points")
+    elif total != masses.size and not (total == 0 and masses.size == 1):
         raise ValueError(
-            f"point counts add up to {counts.sum():,} but the file holds {masses.size:,} points")
+            f"point counts add up to {total:,} but the file holds {masses.size:,} points")
     scan_of_point = np.repeat(np.arange(n_scans), counts)
+    if starts is not None:
+        # Respect offsets: some valid files include unused padding between scans.
+        offsets = np.arange(total) - np.repeat(np.cumsum(counts)-counts, counts)
+        selected = starts[scan_of_point] + offsets
+        masses, inten = masses[selected], inten[selected]
+    elif total == 0:
+        # Classic netCDF needs one padding point for an otherwise empty run.
+        masses, inten = masses[:0], inten[:0]
 
     # Some exports write minutes despite the spec asking for seconds.
     if str(time_units).strip().lower().startswith("min"):
@@ -87,7 +107,8 @@ def read_andi(path: str | Path) -> Run:
         mz_min = min(mz_min, int(np.floor(attrs.get("global_mass_min", mz_min))))
         mz_max = max(mz_max, int(np.ceil(attrs.get("global_mass_max", mz_max))))
     else:
-        mz_min, mz_max = 0, 0
+        mz_min = int(np.floor(attrs.get("global_mass_min", 0)))
+        mz_max = int(np.ceil(attrs.get("global_mass_max", mz_min)))
     mz_axis = np.arange(mz_min, mz_max + 1)
 
     # COO -> CSR sums duplicates, which merges two centroids that round to the
@@ -97,8 +118,10 @@ def read_andi(path: str | Path) -> Run:
     data.sum_duplicates()
 
     # Scan times must increase. Drop exact repeats (seen in some exports).
-    if n_scans > 1 and np.any(np.diff(times) <= 0):
-        keep = np.concatenate([[True], np.diff(times) > 0])
+    finite = np.isfinite(times)
+    previous = np.concatenate([[-np.inf], np.maximum.accumulate(np.where(finite, times, -np.inf))[:-1]])
+    keep = finite & (times > previous) if n_scans else finite
+    if not keep.all():
         warnings.warn(f"{path.name}: dropped {np.sum(~keep)} scans with non-increasing times",
                       stacklevel=2)
         times, data = times[keep], data[keep]

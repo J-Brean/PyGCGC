@@ -12,6 +12,9 @@ phase anchors and the reference peaks every signal is normalised to.
 from __future__ import annotations
 
 import csv
+import math
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,15 +75,34 @@ def _split(text, cast):
     return tuple(cast(x) for x in text.replace(",", ";").split(";") if x.strip()) if text else ()
 
 
+def _mass(value) -> int:
+    mass = float(value)
+    if not math.isfinite(mass) or mass <= 0 or not mass.is_integer():
+        raise ValueError(f"Ion masses must be positive whole numbers, got {value!r}")
+    return int(mass)
+
+
+def _reader(fh, required):
+    reader = csv.DictReader(fh)
+    fields = [name.strip() for name in (reader.fieldnames or [])]
+    if len(fields) != len(set(fields)):
+        raise ValueError("CSV contains duplicate column names")
+    missing = set(required) - set(fields)
+    if missing:
+        raise ValueError("CSV is missing required columns: " + ", ".join(sorted(missing)))
+    reader.fieldnames = fields
+    return reader
+
+
 def load_targets(path: str | Path) -> list[Target]:
     """Read a target table CSV (see README for the columns)."""
     out = []
     with open(path, newline="", encoding="utf-8-sig") as fh:
-        for row in csv.DictReader(fh):
+        for row in _reader(fh, ("compound", "quant_ion", "t1_expected_s", "t2_expected_s")):
             name = (row.get("compound") or "").strip()
             if not name:
                 continue
-            quals = _split(row.get("qual_ions"), lambda x: int(float(x)))
+            quals = _split(row.get("qual_ions"), _mass)
             ratios = _split(row.get("qual_ratios"), float)
             if ratios and len(ratios) != len(quals):
                 raise ValueError(f"{name}: {len(quals)} qualifier ions but {len(ratios)} ratios")
@@ -89,7 +111,7 @@ def load_targets(path: str | Path) -> list[Target]:
                 compound=name,
                 role=(row.get("role") or "target").strip().lower(),
                 cls=(row.get("cls") or "").strip(),
-                quant_ion=int(float(row["quant_ion"])),
+                quant_ion=_mass(row["quant_ion"]),
                 qual_ions=quals,
                 qual_ratios=ratios,
                 t1=float(row["t1_expected_s"]),
@@ -105,8 +127,18 @@ def load_targets(path: str | Path) -> list[Target]:
     if dupes:
         raise ValueError(f"duplicate compounds in target table: {', '.join(sorted(dupes))}")
     for t in out:
-        if t.istd and t.istd not in names:
+        if t.role not in ("target", "istd"):
+            raise ValueError(f"{t.compound}: role must be target or istd")
+        if not all(math.isfinite(v) for v in (t.t1, t.t2, t.t1_window, t.t2_window, t.stock_factor, *t.qual_ratios)):
+            raise ValueError(f"{t.compound}: retention positions, windows, factors and ratios must be finite")
+        if t.t1_window <= 0 or t.t2_window <= 0 or t.stock_factor <= 0 or any(v < 0 for v in t.qual_ratios):
+            raise ValueError(f"{t.compound}: windows and stock factors must be positive; ratios cannot be negative")
+        if t.ri is not None and (not math.isfinite(t.ri) or t.ri <= 0):
+            raise ValueError(f"{t.compound}: RI must be finite and positive")
+        if t.istd and not any(ref.compound == t.istd and ref.is_istd for ref in out):
             raise ValueError(f"{t.compound}: internal standard '{t.istd}' is not in the table")
+    if not out:
+        raise ValueError("Target table contains no named targets")
     return out
 
 
@@ -119,16 +151,36 @@ def write_targets_csv(targets: list[Target], path: str | Path, append: bool = Fa
     reads -- how a 🏷️ search hit promoted to a target actually reaches the
     rest of the app: written here, then the target table is reloaded."""
     path = Path(path)
-    write_header = not (append and path.exists())
-    mode = "a" if append and path.exists() else "w"
-    with open(path, mode, newline="", encoding="utf-8") as fh:
-        w = csv.writer(fh)
-        if write_header:
-            w.writerow(_TARGET_COLUMNS)
-        for t in targets:
-            w.writerow([t.compound, t.role, t.cls, t.quant_ion, ";".join(map(str, t.qual_ions)),
-                       ";".join(f"{r:g}" for r in t.qual_ratios), t.t1, t.t1_window, t.t2, t.t2_window,
-                       t.istd, t.stock_factor, "" if t.ri is None else t.ri])
+    rows, columns = [], list(_TARGET_COLUMNS)
+    if append and path.exists():
+        existing = load_targets(path)
+        names = [t.compound for t in existing] + [t.compound for t in targets]
+        if len(names) != len(set(names)):
+            raise ValueError("Cannot append duplicate compound names to a target table")
+        with path.open(newline="", encoding="utf-8-sig") as fh:
+            reader = _reader(fh, _TARGET_COLUMNS[:1])
+            columns = list(reader.fieldnames)
+            columns.extend(c for c in _TARGET_COLUMNS if c not in columns)
+            rows = list(reader)
+    for t in targets:
+        values = [t.compound, t.role, t.cls, t.quant_ion, ";".join(map(str, t.qual_ions)),
+                  ";".join(f"{r:g}" for r in t.qual_ratios), t.t1, t.t1_window, t.t2, t.t2_window,
+                  t.istd, t.stock_factor, "" if t.ri is None else t.ri]
+        rows.append(dict(zip(_TARGET_COLUMNS, values)))
+    # A minimal or reordered input table needs its own header respected. Replace
+    # only after the complete new table has been written successfully.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", newline="", encoding="utf-8",
+                                         dir=path.parent, suffix=".csv", delete=False) as fh:
+            temporary = Path(fh.name)
+            writer = csv.DictWriter(fh, fieldnames=columns)
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return path
 
 
@@ -140,8 +192,13 @@ def load_levels(path: str | Path) -> dict[str, dict[str, float]]:
     """
     out: dict[str, dict[str, float]] = {}
     with open(path, newline="", encoding="utf-8-sig") as fh:
-        for row in csv.DictReader(fh):
+        for row in _reader(fh, ("level",)):
             level = (row.pop("level", "") or "").strip()
             if level:
-                out[level] = {k.strip(): float(v) for k, v in row.items() if k and v not in ("", None)}
+                if level in out:
+                    raise ValueError(f"Duplicate calibration level: {level}")
+                amounts = {k.strip(): float(v) for k, v in row.items() if k and v not in ("", None) and v.strip()}
+                if any(not math.isfinite(v) or v < 0 for v in amounts.values()):
+                    raise ValueError(f"{level}: calibration amounts must be finite and non-negative")
+                out[level] = amounts
     return out

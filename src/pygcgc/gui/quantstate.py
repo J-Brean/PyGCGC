@@ -54,11 +54,11 @@ class QuantState(QtCore.QObject):
         self._input_revision = 0
 
     # ------------------------------------------------------------ inputs
-    def set_targets(self, path) -> None:
+    def set_targets(self, path, *, parsed_targets=None) -> None:
         self._inline_targets = False
         self.calibration_setup = {}
         try:
-            self.targets = load_targets(path)
+            self.targets = list(parsed_targets) if parsed_targets is not None else load_targets(path)
             self.targets_error = ""
         except (ValueError, KeyError) as exc:
             self.targets, self.targets_error = None, str(exc)
@@ -141,6 +141,12 @@ class QuantState(QtCore.QObject):
         self.running = on
         self.runningChanged.emit(on)
 
+    def _measurement_inputs(self):
+        p = self.project
+        return (self._input_revision, self.settings, p.period,
+                tuple((e, e.name, id(e.run), e.phase, id(e.background),
+                       e.kind, e.level, e.cal_set, e.volume) for e in p.entries))
+
     def _measure(self, entries, targets, label, on_done) -> None:
         """Measure some runs in parallel; call on_done() when all have finished."""
         p = self.project
@@ -150,6 +156,7 @@ class QuantState(QtCore.QObject):
             on_done()
             return
         settings = self.settings
+        inputs = self._measurement_inputs()
 
         def settled(entry, success):
             if not success:
@@ -186,6 +193,10 @@ class QuantState(QtCore.QObject):
                 return result
 
             def done(rq, e=e):
+                if inputs != self._measurement_inputs():
+                    p.message.emit(f"Measurement for {e.name} discarded: inputs changed; rerun Quantify")
+                    settled(e, False)
+                    return
                 self.runquants[e] = rq
                 settled(e, True)
 
@@ -252,10 +263,16 @@ class QuantState(QtCore.QObject):
         self.changed.emit()
 
     def refit(self) -> None:
+        if self.running:
+            self._invalidate()
+            return
         if self.runquants:
             self.finish()
 
     def requantify(self, entries, on_done=None) -> None:
+        if self.running:
+            self._invalidate()
+            return
         targets = self.used_targets()
         if targets is None:
             return
@@ -271,6 +288,10 @@ class QuantState(QtCore.QObject):
 
     def set_decisions(self, decisions: QuantDecisions, requantify_runs=()) -> None:
         self.decisions = decisions
+        if self.running:
+            self._invalidate()
+            self.project.message.emit("Review choices changed during processing. Rerun Quantify when it finishes.")
+            return
         runs = [e for e in self.project.entries if e.name in set(requantify_runs) and e.run is not None]
         if runs:
             self.requantify(runs)
@@ -281,7 +302,10 @@ class QuantState(QtCore.QObject):
     def forget_runs(self, entries) -> None:
         for e in entries:
             self.runquants.pop(e, None)
-        if self.runquants:
+        if self.running:
+            self.report = None
+            self._invalidate()
+        elif self.runquants:
             self.finish()
         else:
             self.report = None

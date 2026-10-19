@@ -20,12 +20,13 @@ from PySide6 import QtCore
 
 
 from ..core import (BackgroundResult, BackgroundSettings, Fold, FoldSpec, SiloxaneResult,
-                    SiloxaneSettings, check_timing, estimate_period_for_runs, load_anchors,
+                    SiloxaneSettings, check_timing, estimate_period_for_runs,
                     phase_for_sequence, read_run, remove_background, remove_siloxane_blobs,
                     remove_siloxanes)
 from ..core.align import blank_mapping
 from ..core.batch import StepCache, _hash_key, _run_cache_base
 from ..core.phase import Anchor, PhaseEstimate
+from ..core.targets import load_targets
 from ..core.run import Run
 from ..core.io import discover_runs
 from .jobs import JobManager, Cancelled
@@ -153,6 +154,18 @@ class Project(QtCore.QObject):
     def __len__(self) -> int:
         return len(self.entries)
 
+    def analysis_inputs(self) -> tuple:
+        """Runtime identity of source runs, fold settings and processing layers.
+
+        Workers capture this before starting and compare before publishing.
+        Unlike a result-cache key it is local to this open project, and also
+        detects removal, reloading, previews and undo while a job is running.
+        """
+        return (self.period, self.show_processed, id(self.preview),
+                tuple((e, e.name, id(e.run), e.phase, id(e.background),
+                       id(e.background.run) if e.background is not None else None, id(e.siloxane))
+                      for e in self.entries))
+
     def loaded(self) -> list[int]:
         return [i for i, e in enumerate(self.entries) if e.run is not None]
 
@@ -270,6 +283,7 @@ class Project(QtCore.QObject):
         entries = [self.entries[i] for i in indices if self.entries[i].run is not None]
         if not entries:
             return
+        inputs = self.analysis_inputs()
         blank_i = self.index_of(blank) if (settings.subtract_blank and blank) else None
         blank_entry = self.entries[blank_i] if blank_i is not None else None
         if blank_entry is not None and blank_entry.run is None:
@@ -306,6 +320,9 @@ class Project(QtCore.QObject):
                 return self.cached(key, make)
 
             def done(res):
+                if inputs != self.analysis_inputs():
+                    self.message.emit("Background result discarded: inputs changed; apply background again")
+                    return
                 results[entry] = res
                 remaining.discard(entry)
                 if not remaining and on_done:
@@ -328,6 +345,9 @@ class Project(QtCore.QObject):
             return remove_background(b_run, b_fold, b_settings, progress=progress)
 
         def blank_done(bres):
+            if inputs != self.analysis_inputs():
+                self.message.emit("Blank cleaning discarded: inputs changed; apply background again")
+                return
             if blank_entry in remaining:
                 results[blank_entry] = bres
                 remaining.discard(blank_entry)
@@ -376,6 +396,8 @@ class Project(QtCore.QObject):
             return
         results: dict = {}
         remaining = set(entries)
+        inputs = self.analysis_inputs()
+        blob_inputs = tuple((e, id(self.blobs.by_run.get(e))) for e in entries) if by_blobs else None
         for e in entries:
             idx = self.entries.index(e)
             run, fold = self.base_run(idx), self.fold(idx)
@@ -387,6 +409,10 @@ class Project(QtCore.QObject):
                 return remove_siloxanes(run, fold, settings)
 
             def done(res, e=e):
+                if (inputs != self.analysis_inputs() or (by_blobs and blob_inputs !=
+                        tuple((entry, id(self.blobs.by_run.get(entry))) for entry in entries))):
+                    self.message.emit("Siloxane result discarded: inputs changed; apply removal again")
+                    return
                 results[e] = res
                 remaining.discard(e)
                 if not remaining and on_done:
@@ -691,12 +717,16 @@ class Project(QtCore.QObject):
         return path
 
     def load_targets(self, path, estimate: bool = True) -> None:
+        # Parse and validate everything before replacing any working inputs.
+        targets = load_targets(path)
+        anchors = [Anchor(t.compound, t.quant_ion, t.t1, t.t2, t.t1_window)
+                   for t in targets if t.is_istd]
         self.targets_path = Path(path)
-        self.anchors = load_anchors(path)
-        self.quant.set_targets(path)
+        self.anchors = anchors
+        self.quant.set_targets(path, parsed_targets=targets)
         self.anchorsChanged.emit()
         self.message.emit(f"{len(self.anchors)} anchors from {self.targets_path.name}")
-        if estimate and self.loaded():
+        if estimate and self.loaded() and anchors:
             self.estimate_phases()
 
     def estimate_phases(self, on_done=None, apply_to: list[int] | None = None) -> None:
@@ -709,12 +739,17 @@ class Project(QtCore.QObject):
         chosen = ents if apply_to is None else [self.entries[i] for i in apply_to]
         runs = [e.run for e in ents]
         period, anchors = self.period, self.anchors
+        starting_fold = self.fold_snapshot()
 
         def work(token, progress):
             progress(0, 1, "Estimating phase")
             return phase_for_sequence(runs, period, anchors)
 
         def done(estimates: list[PhaseEstimate]):
+            if (starting_fold != self.fold_snapshot() or anchors != self.anchors
+                    or any(e.run is not run for e, run in zip(ents, runs))):
+                self.message.emit("Phase estimate discarded: inputs changed while estimating")
+                return
             before = self.phase_snapshot()
             # Runs may have been removed meanwhile, so match by identity.
             self.set_phases({self.entries.index(e): (est.phase, est.method, est.summary())
@@ -741,6 +776,7 @@ class Project(QtCore.QObject):
         runs = [e.run for e in ents]
         period, anchors = self.period, self.anchors
         keep = self.period_confirmed and not force_period
+        starting_fold = self.fold_snapshot()
 
         def work(token, progress):
             progress(0, 2, "Estimating the modulation period")
@@ -752,7 +788,8 @@ class Project(QtCore.QObject):
 
         def done(result):
             best, found, use, estimates = result
-            if self.period != period or any(e not in self.entries for e in ents):
+            if (starting_fold != self.fold_snapshot() or anchors != self.anchors
+                    or any(e not in self.entries or e.run is not run for e, run in zip(ents, runs))):
                 self.message.emit("Runs or period changed while estimating; estimate discarded")
                 return
             before = self.fold_snapshot()
@@ -784,7 +821,6 @@ class Project(QtCore.QObject):
 
     def remove(self, indices) -> None:
         removed = [self.entries[i] for i in set(indices)]
-        self.quant.forget_runs(removed)
         self.blobs.forget_runs(removed)
         self.hydrocarbons.forget_runs(removed)
         self.classes.forget_runs(removed)
@@ -795,6 +831,7 @@ class Project(QtCore.QObject):
             if self.bg_blank == self.entries[i].name:
                 self.bg_blank = None
             del self.entries[i]
+        self.quant.forget_runs(removed)
         self._folds.clear()
         self.runsChanged.emit()
         self.foldChanged.emit(-1)
@@ -924,10 +961,7 @@ class Project(QtCore.QObject):
         self.sequence_path = resolve(data.get("sequence"))
         self.anchors, self.targets_path = None, None
         if data.get("targets") and resolve(data["targets"]).exists():
-            self.targets_path = resolve(data["targets"])
-            self.anchors = load_anchors(self.targets_path)
-            self.quant.set_targets(self.targets_path)
-            self.anchorsChanged.emit()
+            self.load_targets(resolve(data["targets"]), estimate=False)
         self.quant.from_dict(data.get("quant", {}), resolve)
         if self.quant._inline_targets:
             self.anchors = [Anchor(t.compound, t.quant_ion, t.t1, t.t2, t.t1_window)

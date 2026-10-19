@@ -50,12 +50,23 @@ class FoldSpec:
     n_rows: int | None = None
 
     def resolved(self, times: np.ndarray) -> "FoldSpec":
+        times = np.asarray(times, dtype=float)
+        if times.ndim != 1 or not times.size or not np.isfinite(times).all():
+            raise ValueError("folding needs finite scan times in a non-empty one-dimensional array")
+        if not np.isfinite(self.period) or self.period <= 0:
+            raise ValueError("modulation period must be finite and positive")
+        if not np.isfinite(self.phase):
+            raise ValueError("modulation phase must be finite")
         t0 = float(times[0]) if self.t0 is None else float(self.t0)
+        if not np.isfinite(t0):
+            raise ValueError("fold time origin must be finite")
         n_rows = self.n_rows
         if n_rows is None:
+            if times.size < 2 or np.any(np.diff(times) <= 0):
+                raise ValueError("estimating fold rows needs at least two increasing scan times")
             n_rows = int(round(self.period / float(np.median(np.diff(times)))))
-        if self.period <= 0:
-            raise ValueError("modulation period must be positive")
+        if not np.isfinite(n_rows) or n_rows < 1 or int(n_rows) != n_rows:
+            raise ValueError("fold rows must be a positive whole number; check period and scan spacing")
         return replace(self, t0=t0, n_rows=int(n_rows))
 
 

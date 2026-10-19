@@ -380,7 +380,11 @@ class IdentifyDialog(QtWidgets.QDialog):
         feature = self._feature_list()[ident.blob_index]
         target = promote_to_target(entry, ident.best, feature["t1"], feature["t2"])
         append = Path(path).exists()
-        write_targets_csv([target], path, append=append)
+        try:
+            write_targets_csv([target], path, append=append)
+        except (OSError, ValueError) as exc:
+            self.status.setText(f"Could not write target table: {exc}")
+            return
         self.status.setText(f"{'Appended' if append else 'Wrote'} {target.compound} to {path}. "
                             "Reload the target table to use it.")
 

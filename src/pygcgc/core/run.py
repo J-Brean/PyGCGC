@@ -48,7 +48,12 @@ class Run:
 
     def __post_init__(self) -> None:
         self.times = np.asarray(self.times, dtype=np.float64)
-        self.mz = np.asarray(self.mz, dtype=np.int64)
+        masses = np.asarray(self.mz, dtype=np.float64)
+        if self.times.ndim != 1 or not np.isfinite(self.times).all():
+            raise ValueError("scan times must be a finite one-dimensional array")
+        if masses.ndim != 1 or not np.isfinite(masses).all() or np.any(masses != np.floor(masses)):
+            raise ValueError("m/z axis must be a finite one-dimensional array of whole masses")
+        self.mz = masses.astype(np.int64)
         if not (sp.issparse(self.data) and self.data.format == "csr"):
             self.data = sp.csr_matrix(self.data)
         if self.data.dtype != np.float32:

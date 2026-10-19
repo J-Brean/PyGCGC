@@ -1762,6 +1762,10 @@ def test_identify_dialog_promote_and_inhouse_write_files(qtbot, window, tmp_path
     from pygcgc.core.targets import load_targets
     loaded = load_targets(target_csv)
     assert loaded[0].compound == "Compound50" and loaded[0].quant_ion == 50
+    before = target_csv.read_bytes()
+    dlg.promote_to_file(ident, target_csv)
+    assert "Could not write target table" in dlg.status.text()
+    assert target_csv.read_bytes() == before
 
     inhouse_path = tmp_path / "inhouse.msp"
     dlg.add_to_inhouse_file(ident, "MyStandard", inhouse_path)
