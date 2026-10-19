@@ -673,13 +673,22 @@ def test_align_reference_and_anchor_click_flow(qtbot, window):
     w.start_add_anchor()
     assert w._anchor_stage == "ref"
     assert w.index == i_a
+    _wait_render(qtbot, w, "RUN_A")
     col_ref, t2_ref = _peak_pixel(w, i_a, 50)
+    qtbot.waitUntil(lambda: w.view2d.result.expr == w.renderer.expr, timeout=TIMEOUT)
     w._point_clicked(col_ref, t2_ref)
     assert w._anchor_stage == "run"
     assert w.index == i_b
+    _wait_render(qtbot, w, "RUN_B")
     col_run, t2_run = _peak_pixel(w, i_b, 50)
     w._point_clicked(col_run, t2_run)
-    assert w._anchor_stage is None
+    assert w._anchor_stage == "run" and w.project.entries[w.index].name == "RUN_C_BLANK"
+    w.align_panel.skip_btn.click()
+    assert w._anchor_stage == "ref" and w.index == i_a
+    assert w._anchor_pending["name"] == "P2"
+    assert "Choose a new peak" in w.align_panel.pick_status.text()
+    assert w.align_panel.table.rowCount() == 2
+    assert w.align.points["RUN_A"][0].name == "P1"
     assert [p.name for p in w.align.points["RUN_B"]] == ["P1"]
     assert w.align.points["RUN_B"][0].ion == 50
     tf = w.align.transforms["RUN_B"]
@@ -690,6 +699,7 @@ def test_align_reference_and_anchor_click_flow(qtbot, window):
     p = w.align.points["RUN_B"][0]
     t1f, t2f = tf.forward(p.run_t1, p.run_t2)
     assert (t1f, t2f) == pytest.approx((p.ref_t1, p.ref_t2), abs=1e-6)
+    w.cancel_pick()
 
 
 def test_align_add_anchor_undo(qtbot, window):

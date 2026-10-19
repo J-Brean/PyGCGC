@@ -5,9 +5,58 @@ import pytest
 
 from pygcgc import fold
 from pygcgc.core.align import (AlignmentError, AnchorPoint, cross_validate, fit_alignment,
-                               propagate_anchors, resample_to_reference)
+                               propagate_anchors, refine_anchor_position, resample_to_reference)
 from pygcgc.core.phase import Anchor
 from tests.conftest import make_run
+
+
+def test_refinement_finds_only_the_bounded_local_maximum():
+    f = fold(make_run([], rate=100), 4.)
+    image = np.zeros(f.shape)
+    image[151, 24] = 40
+    image[180, 25] = 1000  # brighter, outside the vertical limit
+    image[150, 28] = 2000  # outside the modulation limit
+    assert refine_anchor_position(image, f, 102., 1.45) == pytest.approx((98., 1.51))
+    assert refine_anchor_position(image, f, 102., 1.45, columns=0) is None
+
+
+@pytest.mark.parametrize("height", [0., -3., np.nan, np.inf, 2.])
+def test_refinement_leaves_unsupported_neighbourhoods_unchanged(height):
+    f = fold(make_run([]), 4.)
+    assert refine_anchor_position(np.full(f.shape, height), f, 102., 1.5) is None
+
+
+def test_refinement_ties_favour_nearest_pixel_and_do_not_drift_on_repeat():
+    f = fold(make_run([], rate=100), 4.)
+    image = np.zeros(f.shape)
+    image[150, 24:27] = 40
+    point = refine_anchor_position(image, f, 102., 1.49)
+    assert point == pytest.approx((102., 1.50))
+    assert refine_anchor_position(image, f, *point) == point
+
+
+@pytest.mark.parametrize("clicked_t2,row,column,expected_t2", [
+    (3.98, 2, 26, 4.02), (.02, 398, 24, -.02), (4.05, 8, 26, 4.08)])
+def test_refinement_tracks_wrapped_pulses_without_a_large_coordinate_jump(clicked_t2, row, column, expected_t2):
+    f = fold(make_run([], rate=100), 4.)
+    image = np.zeros(f.shape)
+    image[row, column] = 10
+    assert refine_anchor_position(image, f, 102., clicked_t2, columns=0) == pytest.approx((102., expected_t2))
+
+
+def test_refinement_at_acquisition_edges_does_not_wrap_columns():
+    f = fold(make_run([], rate=100), 4.)
+    image = np.zeros(f.shape)
+    image[-2, -1] = 1000
+    image[3, 0] = 10
+    assert refine_anchor_position(image, f, 2., .01, columns=0) == pytest.approx((2., .03))
+
+
+@pytest.mark.parametrize("columns,radius", [(-1, .1), (1.5, .1), (1, 0.), (1, np.inf)])
+def test_refinement_rejects_invalid_search_limits(columns, radius):
+    f = fold(make_run([]), 4.)
+    with pytest.raises(ValueError):
+        refine_anchor_position(np.zeros(f.shape), f, 102., 1.5, columns, radius)
 
 
 def _affine_points(n, a1=5.0, b1=1.02, a2=0.01, b2=0.0002, seed=0, t2_noise=0.0):

@@ -83,6 +83,41 @@ class AnchorPoint:
     ion: int = 0
 
 
+def refine_anchor_position(image: np.ndarray, fold: Fold, t1: float, t2: float,
+                           columns: int = 1, t2_radius: float = .15) -> tuple[float, float] | None:
+    """Find the brightest nearby pixel, staying inside a small search box.
+
+    Search at most ``columns`` modulations either side and ``t2_radius``
+    seconds vertically. At a modulation boundary, use the neighbouring
+    column's rows, just as an extended chromatogram does. Return coordinates
+    in the clicked peak's unwrapped frame, so a boundary crossing stays a
+    small adjustment. Ties favour the nearest pixel. Empty, flat or entirely
+    non-positive neighbourhoods have no supported maximum and return None.
+    This is an intensity maximum, not a centroid or chemical identification.
+    """
+    if columns < 0 or int(columns) != columns or not np.isfinite(t2_radius) or t2_radius <= 0:
+        raise ValueError("Search limits must be non-negative whole columns and positive seconds")
+    if image.shape != fold.shape or not np.isfinite([t1, t2]).all():
+        raise ValueError("An anchor needs finite coordinates and an unextended folded image")
+    centre = int(np.floor((t1-fold.t1[0])/fold.spec.period))
+    cols = np.arange(max(0, centre-columns), min(fold.n_cols, centre+columns+1), dtype=int)
+    rows = np.arange(int(np.ceil((t2-t2_radius)/fold.row_pitch-1e-9)),
+                     int(np.floor((t2+t2_radius)/fold.row_pitch+1e-9))+1)
+    rr, cc = np.meshgrid(rows, cols, indexing="ij")
+    actual_col = cc + rr // fold.n_rows
+    valid = (actual_col >= 0) & (actual_col < fold.n_cols)
+    rr, cc, actual_col = rr[valid], cc[valid], actual_col[valid]
+    values = image[rr % fold.n_rows, actual_col]
+    good = np.isfinite(values)
+    if not good.any() or values[good].max() <= 0 or np.ptp(values[good]) == 0:
+        return None
+    best = np.flatnonzero(good & (values == values[good].max()))
+    distance = ((fold.t1[cc[best]]+fold.spec.period/2-t1)/fold.spec.period)**2
+    distance += ((rr[best]*fold.row_pitch-t2)/t2_radius)**2
+    chosen = best[np.argmin(distance)]
+    return float(fold.t1[cc[chosen]]+fold.spec.period/2), float(rr[chosen]*fold.row_pitch)
+
+
 @dataclass
 class AlignmentTransform:
     """A fitted map between a run's true coordinates and a reference

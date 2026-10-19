@@ -65,7 +65,7 @@ SHORTCUTS = [
     ("Space", "Show raw or 🧹 cleaned data"),
     ("O", "Show or hide 🧪 peak outlines and labels"),
     ("3 / 4 / 5", "🧪 Review gallery / calibration curves / 📍 Compare"),
-    ("A", "📍 Add anchor: click the reference, then the same peak here"),
+    ("A", "📍 Pick anchors across runs; press again or Esc to finish"),
     ("B", "Jump to Compare in blink mode"),
     ("G", "🔍 Merge the selected peaks (Ctrl+click on the image adds a peak to the selection)"),
     ("Ctrl+L", "Auto colour levels"),
@@ -112,6 +112,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.renderer.set_align(self.align)
         self._anchor_stage: str | None = None      # None, "ref", "run"
         self._anchor_pending: dict = {}
+        self._anchor_switching = False
         self.blobs = self.project.blobs
         self._blob_add_pending = False
         self.hydrocarbons = self.project.hydrocarbons
@@ -191,7 +192,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # replace the last, with a single Go button underneath (see gui/workflow.py).
         # The old panels keep their own primary buttons but hide them; Go does that job.
         for w in (self.bg_panel.apply_all_btn, self.sil_panel.apply_btn, self.blobs_panel.find_btn,
-                  self.hydro_panel.find_btn, self.align_panel.propagate_btn, self.fold_panel.fix_btn,
+                  self.hydro_panel.find_btn, self.align_panel.add_btn, self.fold_panel.fix_btn,
                   self.istd_panel.find_btn):
             w.setVisible(False)
         self.quant_step = QuantStepPanel()
@@ -214,11 +215,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.fold_panel, "Fix phase on all runs", parent="load")
         add("align", "📍 Align", "Alignment",
             "Retention times drift by a few seconds between runs. Pick a reference run, mark the same "
-            "peaks (anchors) on it and on one other run, then find them on every run. Skip this if "
+            "peak (anchor) on each run as the view advances, then repeat for the next peak. Skip this if "
             "the runs already overlap or you have a single run.",
             "Aligning now puts every run on the reference run's coordinates, so the background step "
             "can subtract a blank through the alignment and later steps compare like with like.",
-            self.align_panel, "Auto-find anchors on all runs", scrolled=False, optional=True)
+            self.align_panel, "Pick anchors across runs", optional=True)
         add("background", "🧹 Background", "Background removal",
             "Removes column bleed, the stripe pattern that repeats every modulation, and single-scan "
             "spikes, and can subtract a blank. Preview on this run before applying to every run.",
@@ -419,8 +420,8 @@ class MainWindow(QtWidgets.QMainWindow):
                               "on top of 🧹 where that's been applied")
         self.act_align_panel = A("📍 Align", self.show_align_panel, None,
                                  "Reference run, anchors, and batch alignment")
-        self.act_add_anchor = A("➕ Add anchor", self.start_add_anchor, "A",
-                                "Click the peak on the reference, then the same peak here")
+        self.act_add_anchor = A("Pick anchors across runs", self.start_add_anchor, "A",
+                                "Click the same peak on each run, then choose the next reference peak; Esc finishes")
         self.act_compare = A("Compare", lambda: self.tabs.setCurrentWidget(self.compare), "5")
         self.act_blink = A("Blink compare", self._go_blink, "B", "Jump to Compare in blink mode")
         self.act_quant = A("🧪 Quantify", self.run_quant, None,
@@ -801,7 +802,7 @@ class MainWindow(QtWidgets.QMainWindow):
          "load": self.open_folder_dialog,
          "background": self.apply_background,
          "siloxane": self.apply_siloxane,
-         "align": self.propagate_anchors,
+         "align": self.start_add_anchor,
          "blobs": self.run_blobs,
          "hydro": self.start_find_alkanes,
          "classify": self.start_classify,
@@ -826,6 +827,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _step_opened(self, key: str):
         """Opening a step brings the Tool tab forward and names it after the step."""
+        if self._anchor_stage is not None and key != "align":
+            self.cancel_pick()
         info = self.workflow.step_info(key)
         self.step_actions[info["parent"] or key].setChecked(True)     # a sub-menu keeps its parent lit
         name = plain(info["label"]) if info["parent"] else plain(self._step_names[key].split(" ", 1)[1])
@@ -835,6 +838,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.left_tabs.setCurrentIndex(self.tool_tab)
         self.workspace_dock.show()
         self.workspace_dock.raise_()
+        self._update_anchor_overlay()
 
     def _step_progress(self):
         """Toolbar step buttons carry the progress: ✓ when done, ▸ on the suggested next step."""
@@ -933,11 +937,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.project.runsChanged.connect(lambda: self.align_panel.refresh_runs(self.project.entries))
         self.align_panel.referenceChanged.connect(self.set_reference)
         self.align_panel.addAnchorRequested.connect(self.start_add_anchor)
+        self.align_panel.skipAnchorRequested.connect(self.skip_anchor_run)
+        self.align_panel.refineRequested.connect(self.refine_anchors)
+        self.align.refinementRunning.connect(lambda _on: self.align_panel.refresh())
         self.align_panel.removeAnchorRequested.connect(self.remove_anchor)
         self.align_panel.clearRunRequested.connect(self.clear_run_anchors)
         self.align_panel.kindChanged.connect(self.set_align_kind)
         self.align_panel.propagateRequested.connect(self.propagate_anchors)
         self.align_panel.showAlignedToggled.connect(self.act_aligned.setChecked)
+        self.project.foldChanged.connect(self._anchor_inputs_changed)
+        self.project.layersChanged.connect(self._anchor_inputs_changed)
         # 🔍
         self.blobs.changed.connect(self._blobs_changed)
         self.blobs.changed.connect(self._hydrocarbons_changed)   # stencil totals depend on 🔍 blobs
@@ -1247,6 +1256,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.set_run(min(self.index, len(self.project) - 1))
 
     def _runs_changed(self):
+        if self._anchor_stage is not None:
+            self.cancel_pick()
         n = len(self.project)
         if n and self.index < 0:
             first_loaded = self.project.loaded()
@@ -1255,6 +1266,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_run_label()
 
     def set_run(self, index: int):
+        if self._anchor_stage is not None and not self._anchor_switching and index != self.index:
+            self.cancel_pick()
         if not (0 <= index < len(self.project)):
             self.index = -1
             self._update_run_label()
@@ -1341,6 +1354,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # =============================================================== views
     def _rendered(self, result):
         self.view2d.show_result(result)
+        self._update_anchor_overlay()
         self.view1d.show_result(result)
         band = self.view1d.band_range()
         if band:
@@ -1906,7 +1920,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._anchor_stage is not None:
             self._anchor_stage = None
             self._anchor_pending = {}
-            self.say("Anchor picking cancelled")
+            self.align_panel.set_picking()
+            self.workflow.set_go_label("align", "Pick anchors across runs")
+            self._align_changed()
+            self.say("Anchor picking finished; collected points have been kept")
         elif self._blob_add_pending:
             self._blob_add_pending = False
             self.say("Adding a blob cancelled")
@@ -1933,7 +1950,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _point_clicked(self, col: int, t2: float):
         if self._anchor_stage is not None and self.index >= 0:
+            result = self.view2d.result
+            if result is None or result.index != self.index or result.aligned or result.expr != self.renderer.expr:
+                self.say("Wait for this chromatogram to finish drawing before picking its anchor")
+                return
             fold = self.project.fold(self.index)
+            if not (0 <= col < fold.n_cols) or not np.isfinite(t2):
+                return
             t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
             if self._anchor_stage == "ref":
                 self._finish_anchor_ref_click(t1, t2)
@@ -2072,6 +2095,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def show_align_panel(self):
         self.workflow.show_step("align")
 
+    def _anchor_inputs_changed(self, *_args):
+        if self._anchor_stage is not None:
+            self.cancel_pick()
+
     def _go_blink(self):
         self.tabs.setCurrentWidget(self.compare)
         i = self.compare.mode.findData("blink")
@@ -2088,53 +2115,133 @@ class MainWindow(QtWidgets.QMainWindow):
         name = name or None
         if name == self.align.reference:
             return
+        if self._anchor_stage is not None:
+            self.cancel_pick()
         before = self.align.snapshot()
         self.align.set_reference(name)
         label = f"📍 Reference: {name}" if name else "📍 Clear reference"
         self.undo.push(SetReference(self.align, before, name, label))
 
     def start_add_anchor(self):
-        if self.index < 0:
+        if self._anchor_stage is not None:
+            self.cancel_pick()
+            return
+        loaded = self.project.loaded()
+        if not loaded:
             self.say("Open and select a run first")
             return
+        if self.align.refining:
+            self.say("Wait for anchor refinement to finish")
+            return
+        if len(loaded) < 2:
+            self.say("Load at least two chromatograms to collect matching anchors")
+            return
         if not self.align.reference:
-            self.say("Pick a reference run first (📍 Align)")
+            self.set_reference(self.project.entries[loaded[0]].name)
+        if self.project.index_of(self.align.reference) not in loaded:
+            self.say("The reference chromatogram is not loaded")
             return
-        target = self.project.entries[self.index].name
-        if target == self.align.reference:
-            self.say("Select a run other than the reference to align it")
+        if not self.renderer.expr.is_tic and not self._current_single_ion():
+            self.say("Choose TIC or a single ion before picking anchors, so refinement uses the same signal")
             return
-        self._anchor_pending = {"target": target, "name": self.align.next_anchor_name(),
-                                "prev_index": self.index, "ion": self._current_single_ion()}
+        self.cancel_pick()
+        self.show_align_panel()
+        self.tabs.setCurrentWidget(self.view2d)
+        self.act_aligned.setChecked(False)
+        order = [self.align.reference] + [self.project.entries[i].name for i in loaded
+                                         if self.project.entries[i].name != self.align.reference]
+        self._anchor_pending = {"order": order, "cursor": 0,
+                                "reference": self.align.reference,
+                                "name": self.align.next_anchor_name(), "ion": self._current_single_ion()}
         self._anchor_stage = "ref"
-        self.set_run(self.project.index_of(self.align.reference))
-        self.say(f"Click the peak for {self._anchor_pending['name']} on the reference run "
-                f"{self.align.reference} (Esc cancels)")
+        self._show_anchor_run()
+
+    def _show_anchor_run(self):
+        p = self._anchor_pending
+        run = p["order"][p["cursor"]]
+        index = self.project.index_of(run)
+        if index is None or self.project.entries[index].run is None:
+            self.cancel_pick()
+            return
+        self._anchor_switching = True
+        try:
+            self.set_run(index)
+        finally:
+            self._anchor_switching = False
+        signal = f"m/z {p['ion']}" if p["ion"] else "TIC"
+        message = (f"{p['name']} · {p['cursor']+1}/{len(p['order'])} · {signal}: "
+                   + (f"Choose a new peak on reference {run}." if self._anchor_stage == "ref"
+                      else f"Click the same peak on {run}, or skip if it is missing.")
+                   + " Esc finishes picking.")
+        self.align_panel.set_picking(message, can_skip=self._anchor_stage == "run")
+        self.workflow.set_go_label("align", "Finish picking (Esc)")
+        self.say(message)
 
     def _finish_anchor_ref_click(self, t1: float, t2: float):
         p = self._anchor_pending
+        if not self.renderer.expr.is_tic and not self._current_single_ion():
+            self.say("Choose TIC or a single ion before picking the next reference anchor")
+            return
+        p["ion"] = self._current_single_ion()
         p["ref_t1"], p["ref_t2"] = t1, t2
+        before = self.align.snapshot()
+        self.align.add_anchor(self.align.reference, p["name"], t1, t2, t1, t2, p["ion"])
+        self.undo.push(EditAlignment(self.align, before, self.align.snapshot(),
+                                     f"Record reference anchor {p['name']}"))
         self._anchor_stage = "run"
-        self.set_run(self.project.index_of(p["target"]))
-        self.say(f"Now click the same peak on {p['target']} (Esc cancels)")
+        p["cursor"] = 1
+        self._show_anchor_run()
 
     def _finish_anchor_run_click(self, t1: float, t2: float):
         p = self._anchor_pending
+        if (p["ion"] and self._current_single_ion() != p["ion"]) or (not p["ion"] and not self.renderer.expr.is_tic):
+            self.say(f"Switch back to {'m/z '+str(p['ion']) if p['ion'] else 'TIC'} to pick this matching anchor")
+            return
+        run = p["order"][p["cursor"]]
         before = self.align.snapshot()
-        self.align.add_anchor(p["target"], p["name"], p["ref_t1"], p["ref_t2"], t1, t2, p["ion"])
+        self.align.add_anchor(run, p["name"], p["ref_t1"], p["ref_t2"], t1, t2, p["ion"])
         after = self.align.snapshot()
         self.undo.push(EditAlignment(self.align, before, after,
-                                     f"📍 Add anchor {p['name']} on {p['target']}"))
-        self.say(f"Anchor {p['name']} added on {p['target']}")
-        self._anchor_stage = None
-        self._anchor_pending = {}
+                                     f"📍 Add anchor {p['name']} on {run}"))
+        self._advance_anchor_run()
 
-    def remove_anchor(self, name: str):
-        if self.index < 0:
+    def skip_anchor_run(self):
+        if self._anchor_stage == "run":
+            self._advance_anchor_run()
+
+    def _advance_anchor_run(self):
+        p = self._anchor_pending
+        p["cursor"] += 1
+        if p["cursor"] == len(p["order"]):
+            if set(p["order"]).issubset(self.align.aligned_runs()):
+                self.workflow.mark_done("align", "Matching anchors recorded across all runs. Add more points or inspect Compare.")
+            p["cursor"] = 0
+            p["name"] = self.align.next_anchor_name()
+            p["ion"] = self._current_single_ion()
+            self._anchor_stage = "ref"
+        self._show_anchor_run()
+
+    def refine_anchors(self):
+        if self._anchor_stage is not None:
+            self.cancel_pick()
+
+        def done(before, after):
+            if before != after:
+                self.undo.push(EditAlignment(self.align, before, after, "Refine all anchors to local maxima"))
+
+        self.align.refine_all(self.align_panel.refine_columns.value(),
+                              self.align_panel.refine_t2.value(), on_done=done)
+
+    def remove_anchor(self, name: str, run: str | None = None):
+        if self.index < 0 and run is None:
             return
-        run = self.project.entries[self.index].name
+        run = run or self.project.entries[self.index].name
+        if self._anchor_stage is not None:
+            self.cancel_pick()
         before = self.align.snapshot()
-        self.align.remove_anchor(run, name)
+        # A reference point defines the coordinate shared by all matching rows.
+        for target in list(self.align.points) if run == self.align.reference else [run]:
+            self.align.remove_anchor(target, name)
         self.undo.push(EditAlignment(self.align, before, self.align.snapshot(),
                                      f"📍 Remove anchor {name} from {run}"))
 
@@ -2142,6 +2249,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.index < 0:
             return
         run = self.project.entries[self.index].name
+        if self._anchor_stage is not None:
+            self.cancel_pick()
         pts = list(self.align.points.get(run, []))
         if not pts:
             return
@@ -2184,14 +2293,37 @@ class MainWindow(QtWidgets.QMainWindow):
         return img, ref_fold.t1, ref_fold.row_pitch, ref_fold.spec.period, self.project.entries[index].name
 
     def _align_changed(self):
+        if self._anchor_stage is not None:
+            p = self._anchor_pending
+            if (p.get("reference") != self.align.reference
+                    or (self._anchor_stage == "run" and not any(
+                        point.name == p["name"] for point in self.align.points.get(self.align.reference, [])))):
+                self.cancel_pick()
         self.align_panel.refresh_runs(self.project.entries)
         self.align_panel.set_current_run(self.project.entries[self.index].name if self.index >= 0 else None)
         ref_i = self.project.index_of(self.align.reference) if self.align.reference else -1
         self.compare.set_runs(self.index, ref_i if ref_i is not None else -1)
         has = self.index >= 0 and self.renderer.aligned_available(self.index)
-        self.act_aligned.setEnabled(has)
+        self.act_aligned.setEnabled(has and self._anchor_stage is None)
         if not has and self.act_aligned.isChecked():
             self.act_aligned.setChecked(False)
+        self._update_anchor_overlay()
+
+    def _update_anchor_overlay(self):
+        markers = []
+        result = self.view2d.result
+        if self.workflow.current() == "align" and self.index >= 0 and result is not None:
+            run = self.project.entries[self.index].name
+            if result.name == run:
+                for point in self.align.points.get(run, []):
+                    t1, t2 = point.run_t1, point.run_t2
+                    if result.aligned and run != self.align.reference:
+                        transform = self.align.transforms.get(run)
+                        if transform is None:
+                            continue
+                        t1, t2 = transform.forward(t1, t2)
+                    markers.append(dict(t1=t1, t2=t2, label=point.name))
+        self.view2d.set_anchor_overlay(markers)
 
     # ================================================================ 🔍
     def show_blobs_panel(self):

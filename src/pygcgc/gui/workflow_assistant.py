@@ -54,6 +54,7 @@ class WorkflowAssistant(QtCore.QObject):
                        p.blobs.runningChanged, p.istd.changed, p.quant.changed, p.quant.runningChanged,
                        p.align.changed, window.workflow.progressChanged):
             signal.connect(self.schedule)
+        p.align.refinementRunning.connect(self.schedule)
         p.foldChanged.connect(self._fold_changed)
         # Labelling a standard must enable Go before the emitting action returns.
         # Coalesced refreshes still handle the noisier rendering/preparation signals.
@@ -86,10 +87,13 @@ class WorkflowAssistant(QtCore.QObject):
         for key in ('fold', 'align', 'background', 'blobs', 'assign', 'export'):
             wf.set_go_enabled(key, True)
             wf.set_guidance(key, '')
-        if not p.align.reference or not p.align.reference_anchors():
+        if len(loaded) < 2 or p.align.refining:
             wf.set_go_enabled('align', False)
-            wf.set_guidance('align', 'Choose a reference run and label matching anchors, or use Skip alignment '
-                            'when the runs already overlap.')
+            wf.set_guidance('align', 'Wait for anchor refinement to finish.' if p.align.refining else
+                             'Alignment needs at least two loaded chromatograms. Use Skip alignment for a single run.')
+        elif not p.align.reference:
+            wf.set_guidance('align', 'Start picking to use the first run as the reference, or choose one above. '
+                             'Each click advances to the next chromatogram.')
         missing = []
         stale = []
         for i in loaded:

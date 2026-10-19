@@ -130,6 +130,13 @@ class WorkflowPanel(QtWidgets.QWidget):
     def next_key(self) -> str | None:
         return self._next_key
 
+    def set_go_label(self, key: str, label: str) -> None:
+        """Keep the primary action clear when a step starts or finishes picking."""
+        step = self._by_key[key]
+        step["go_label"] = label
+        if self.current() == key:
+            self._refresh_go(step)
+
     def set_order(self, keys: list[str]) -> None:
         """Order the workflow independently of the settings widgets' stack indices."""
         if len(keys) != len(self._steps) or set(keys) != set(self._by_key):

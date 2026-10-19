@@ -384,6 +384,10 @@ class ChromatogramView(QtWidgets.QWidget):
 
         # 🏷️ overlay: internal standards labelled or matched on this run, coloured by confidence tier
         self._istd_overlay: list[dict] = []
+        self.anchor_markers = pg.ScatterPlotItem(size=15, pxMode=True)
+        self.anchor_labels: list[pg.TextItem] = []
+        self.anchor_markers.setZValue(20)
+        self.plot.addItem(self.anchor_markers, ignoreBounds=True)
         self.istd_markers = pg.ScatterPlotItem(size=12, pxMode=True)
         self.istd_labels: list[pg.TextItem] = []
         self.istd_markers.setZValue(17)
@@ -642,6 +646,30 @@ class ChromatogramView(QtWidgets.QWidget):
         """markers: dicts with t1, t2 (s), label and tier ("high"/"medium"/"low"/"not found")."""
         self._istd_overlay = markers
         self._draw_istd_overlay()
+
+    def set_anchor_overlay(self, markers: list[dict]) -> None:
+        """Label saved alignment clicks without replacing other result overlays."""
+        for label in self.anchor_labels:
+            self.plot.removeItem(label)
+        self.anchor_labels = []
+        spots = []
+        if self.result is not None:
+            for marker in markers:
+                t1, t2 = marker["t1"], marker["t2"]
+                if t2 < 0:
+                    cycles = int(np.floor(t2/self.result.period))
+                    t1 += cycles*self.result.period
+                    t2 -= cycles*self.result.period
+                x, y = self._to_display([t1], [t2])
+                spots.append(dict(pos=(float(x[0]), float(y[0])), symbol="+",
+                                  pen=pg.mkPen("#f7b32b", width=2), brush=None))
+                label = pg.TextItem(marker["label"], anchor=(0, 1), color="white",
+                                    fill=pg.mkBrush(0, 0, 0, 160))
+                label.setZValue(21)
+                label.setPos(float(x[0]), float(y[0]))
+                self.plot.addItem(label, ignoreBounds=True)
+                self.anchor_labels.append(label)
+        self.anchor_markers.setData(spots)
 
     def _draw_istd_overlay(self) -> None:
         for t in self.istd_labels:
