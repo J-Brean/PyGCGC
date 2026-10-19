@@ -1,7 +1,7 @@
-> **Historical document.** Kept for reference; superseded by the README, ROADMAP.md and
-> docs/architecture.md. File paths and numbers describe the project when it was written
-> (scripts have since moved from examples/ to benchmarks/, and the 10 s acquisition it refers
-> to has left real_data/).
+> **Archived design record.** Statements, paths and numbers describe the revision
+> when this was written. See the [documentation index](../README.md) for current
+> behaviour, implemented features and later validation. Private raw data now lives
+> under `C:\REAL_DATA_FOR_PYGCGC`; old repository paths are historical.
 
 # MS-aware overlapping peak detection: full implementation plan
 

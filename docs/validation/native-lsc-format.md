@@ -1,11 +1,16 @@
-> Describes the earlier acquisition (10 s modulation, 2025-10-09) that is no longer in
-> real_data/. The current runs are covered by [audit-2026-09-24.md](audit-2026-09-24.md).
+> **Dated validation record.** Results, timings and test totals describe the version
+> and dataset checked here. See the [documentation index](../README.md) for current
+> guidance and superseding evidence. Historical measurements are retained.
+
+> Dataset: the original 10 s acquisition dated 2025-10-09. Later 8 s tandem
+> runs are covered by [the September audit](audit-2026-09-24.md), and August
+> calibration acquisitions by the October reports linked in the documentation index.
 
 # Native Markes LSC investigation and PyGCGC integration proposal
 
 > Implementation update: native import is now registered in `core/io/markes_lsc.py`
-> and connected to GUI/CLI/batch loading. See README.md for usage and docs/history/handover-2026-09-21.md
-> for the current state. This report retains the original investigation/proposal
+> and connected to GUI/CLI/batch loading. See the [README](../../README.md) for usage and the
+> [documentation index](../README.md) for current state. This report retains the original investigation/proposal
 > below; its statements that the app was not yet changed describe that earlier stage.
 > Production times use the whole acquisition-clock second as a shared channel
 > origin; audit CSVs remain relative to each channel's first scan. Vendor validation
@@ -55,7 +60,7 @@ The scripts read the original binaries without modifying them. Outputs include:
 - `*.PD01.txt`, `*.SM01.txt`, `*.MD01.txt`: extracted embedded metadata.
 - `probe_lsc.py`: the small initial byte-dump experiment, retained for transparency.
 
-![Directly decoded total-ion chromatograms](LSC_decoded_TIC.png)
+Local figure: `LSC_decoded_TIC.png` (generated during the investigation; not shipped).
 
 ## What was checked across the complete files
 

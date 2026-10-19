@@ -92,15 +92,23 @@ and resumes P1. Undo must stop that new picker before restored P1 can be overwri
 | `examples/tutorials/` | walkthroughs on the dummy data pack |
 | `docs/` | user guide, architecture, validation reports, history (superseded plans and handovers) |
 
-## State on 24 September 2026
+## Current data and documentation
 
-- Branch `audit-2026-09-24` holds a full audit: a snapshot commit of the previously uncommitted
-  tree, bug fixes, and this reorganisation. Its findings are in
-  [docs/validation/audit-2026-09-24.md](docs/validation/audit-2026-09-24.md) and ROADMAP.md.
-- `real_data/` now holds four tandem (70 and 14 eV) acquisitions at an 8 s modulation (two
-  Repsol exhaust samples, ATWC and BTWC, and two diesel samples, D50T191 and D50T60). The
-  earlier 10 s acquisition that most older reports describe has gone; only its cached crop
-  (`real_data/blob_diagnosis/segment.npz`) remains.
-- Five of the seven library internal standards are in every run and are found by both 🏷️ and
-  🧪 (draft table: `benchmarks/real_data_audit/internal_standards.py`).
-- No real calibration sequence or spectral library exists yet.
+Private instrument data is under `C:\REAL_DATA_FOR_PYGCGC`, including the August 2026
+10 s calibration acquisitions in `Cal files for James` and earlier 8 s exhaust/diesel
+acquisitions. The repository's ignored `real_data/` holds generated outputs and legacy
+crops/caches. Older scripts may hard-code that former raw-data location; check their
+paths, fold settings and reference requirements before running them.
+
+The supplied `AEROSOLS/Standards.xlsx` inventory is available. Its RI column contains
+catalogue codes. Acenaphthene-d10, phenanthrene-d10 and n-tetracosane-d50 have inventory-
+matched calibration starter tables. The m/z 240 deuterated PAH is isomer-unconfirmed;
+do not perpetuate the former heuristic chrysene-d12 label as established identity.
+Exact per-compound amounts, ambiguous filename amounts and IS additions are unconfirmed.
+
+Use [docs/README.md](docs/README.md) as the documentation map. Keep current instructions
+in README, user guide, architecture and ROADMAP. Changelog and dated validation results
+record their original revision; add a dated correction or supersession note instead of
+silently replacing historical measurements. Preserve archived plans in `docs/history/`.
+Update UI labels and step numbers against the code, check relative links, and distinguish
+the main Export action from batch reports and a Python wheel from a Windows executable.

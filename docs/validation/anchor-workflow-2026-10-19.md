@@ -1,3 +1,7 @@
+> **Dated validation record.** Results, timings and test totals describe the version
+> and dataset checked here. See the [documentation index](../README.md) for current
+> guidance and superseding evidence. Historical measurements are retained.
+
 # Anchor workflow and local-maximum refinement, 19 October 2026
 
 The former two-click route paired one target run with the reference and stopped.

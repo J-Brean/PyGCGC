@@ -17,10 +17,12 @@ workflow test fixtures. Each view is described in the [user guide](docs/user-gui
 
 ## Status
 
-The methods below have synthetic tests with known answers. The
-right-hand column says what has been checked on real runs; the details are in
-[docs/validation/audit-2026-09-24.md](docs/validation/audit-2026-09-24.md) and what is left is in
-[ROADMAP.md](ROADMAP.md).
+Current guidance, updated 19 October 2026. The methods below have synthetic tests with
+known answers. Real-data evidence comes from several dated acquisitions and does not
+establish chemical identity or absolute mass accuracy. The [documentation index](docs/README.md)
+maps the reports and their limits; remaining work is in [ROADMAP.md](ROADMAP.md).
+The latest [code audit](docs/validation/code-audit-2026-10-19.md) passed 850 tests with
+31 optional-data skips. Re-run Quantify after updating to include its calibration precision fix.
 
 | Step | What | On real data |
 |---|---|---|
@@ -31,11 +33,11 @@ right-hand column says what has been checked on real runs; the details are in
 | 4 🔍 Peaks | MS-aware overlapping tilted Gaussian components (default) or legacy blobs | Independent widths and tilt; eight methods compared on 32 real windows, plus known-area recovery in measured backgrounds. See the [fitting check](docs/validation/peak-fitting-2026-10-18.md) |
 | 4a 🫧 Siloxane filterer (in Peaks) | score blobs against bleed and cyclic references; block their siloxane ions, or fit per pixel | Defaults chosen on two runs: every siloxane-like blob caught, none of the hydrocarbon signal removed |
 | ⛓️ Hydrocarbon assignment (under Assign) | n-alkane ladder (straight, smooth or polynomial), peak assignment, stencils, homologous series | Ladder from two clicks reaches C9–C30 on four runs; one or two carbons wrong per run. Assignment and ladder shapes not yet checked on real data |
-| 5 🏷️ IS | label internal standards, find them on every run, write them to the target table | Five deuterated standards found with high confidence on all four runs |
+| 5 🏷️ IS | label internal standards, find them on every run, write them to the target table | September spectral matches used five provisional identities; three August calibration IS names match the supplied inventory. Isomer identities and spike amounts still need confirmation |
 | 6 Assign | target tables, hydrocarbon assignment, compound classes, spectral library search and clustering | Class and cluster methods checked on one earlier run; no independent spectral library check yet |
 | 7 🧪 Quantify | targets, internal standards, weighted calibration, bracketing | Planted standards in real matrix: within a few % on selective ions, 15–60% off on busy ones |
 | 8 Export | all available tables, assignments, project snapshot and provenance in one folder | Freshness flags and fit warnings are preserved; raw files remain at their source paths |
-| 📈 Calibrate | separate window: standard runs, compounds from a table or clicks, IS-normalised blobs, curves edited point by point | Four real levels without a compound list: 59 calibrants and four internal standards suggested; phases lined up; responses bend at 25 ng |
+| 📈 Calibrate | separate window: standard runs, compounds from a table or clicks, IS-normalised peaks, curves edited point by point | Four filename-labelled levels: 59 calibrant and four IS candidates suggested, phases lined up and response bending observed; actual amounts and identities remain unconfirmed |
 | 🗂️ Batch, 📤 Reports | cached parallel pipeline, feature table, QC, PCA, volcano, Excel/HTML/PDF | Ran end to end on nine real-matrix runs |
 
 ## Install
@@ -47,7 +49,7 @@ uv pip install -e ".[gui,test]"
 ```
 
 This installs two commands, `pygcgc-gui` and `pygcgc`. The core alone (`uv pip install -e .`)
-needs only numpy, scipy, scikit-image and netCDF4; the extras are `plot` (matplotlib),
+needs numpy, scipy, scikit-image, netCDF4 and threadpoolctl; the extras are `plot` (matplotlib),
 `report` (openpyxl), `cluster` (scikit-learn), `gui` and `test`.
 
 ## Quick start
@@ -163,10 +165,15 @@ calibration runs. Leave `istd` blank to use the nearest internal standard.
 results in.
 
 ```
-level,phenanthrene,fluorene
-L1,0.1,0.1
-L2,0.25,0.25
+level,phenanthrene
+L1,0.1
+L2,0.25
+L3,1.0
 ```
+
+This example supplies the default minimum of three distinct levels for the example
+target above. Add a column for each further target. See [input tables](docs/input-tables.md)
+for all columns, units, validation rules and the locally generated starter tables.
 
 ## Command line
 
@@ -221,8 +228,10 @@ those inputs are not configured. The latest audit records the actual pass/skip t
 
 | File | What it holds |
 |---|---|
+| [docs/README.md](docs/README.md) | documentation map, current evidence and historical reports |
 | [docs/user-guide.md](docs/user-guide.md) | every step and panel, and how the methods work |
-| [examples/demo_data/](examples/demo_data/README.md) | the synthetic demonstration pack, its generator and a tour of the app; `docs/images/make_screenshots.py` retakes every screenshot from it |
+| [docs/input-tables.md](docs/input-tables.md) | target, sequence and calibration CSV formats, units and starter-table scope |
+| [examples/demo_data/](examples/demo_data/README.md) | synthetic demonstration pack, generator and tour; `docs/images/make_screenshots.py` generates the main screenshot set |
 | [ROADMAP.md](ROADMAP.md) | known limits, recommended changes and suggested features, in priority order |
 | [CHANGELOG.md](CHANGELOG.md) | dated record of what changed and what real-data checks found |
 | [docs/architecture.md](docs/architecture.md) | code layout, rules, design decisions, gotchas |

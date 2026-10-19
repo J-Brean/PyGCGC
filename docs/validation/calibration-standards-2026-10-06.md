@@ -1,3 +1,14 @@
+> **Dated validation record.** Results, timings and test totals describe the version
+> and dataset checked here. See the [documentation index](../README.md) for current
+> guidance and superseding evidence. Historical measurements are retained.
+
+> **Interpretation update, 19 October 2026.** A compound inventory is now available.
+> Its RI field contains catalogue codes. The former chrysene-d12 label is an
+> unconfirmed m/z 240 deuterated-PAH isomer; perylene-d12 is omitted from current
+> starter tables. `025ng`, per-compound amounts and the tentative 1 ng IS addition
+> remain unconfirmed. The original measurements and assumptions below are preserved;
+> see [input tables](../input-tables.md) for current import guidance.
+
 # 📈 Calibration builder on the August 2026 standards (6 October 2026)
 
 Four standard runs, supplied without a compound list, taken through the 📈 Calibration builder

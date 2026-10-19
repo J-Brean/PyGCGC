@@ -1,6 +1,9 @@
 # Roadmap
 
-What is left, in the order it is worth doing. Evidence for every item marked *(audit)* is in
+Outstanding work, reconciled with the code on 19 October 2026. The eight-step workflow,
+guided calibration, standards review, previews, anchor editing/refinement and all-results
+export are implemented. The [code audit](docs/validation/code-audit-2026-10-19.md) records
+the latest regression fixes. Evidence for every item marked *(audit)* is in
 [docs/validation/audit-2026-09-24.md](docs/validation/audit-2026-09-24.md). Delete an item when it
 is done, and record it in CHANGELOG.md.
 
@@ -8,7 +11,8 @@ is done, and record it in CHANGELOG.md.
 
 These block validation, not development.
 
-1. **The composition of the August 2026 standards** (four levels, 0.25 to 25 ng, 10 s method):
+1. **The composition of the August 2026 standards** (four filename-labelled levels, nominally
+   0.25 to 25 ng, 10 s method):
    exact amounts per compound, IS amount per tube, and whether "025ng" means 0.25 ng. A compound
    inventory is now available in `AEROSOLS/Standards.xlsx`; its RI column contains catalogue
    codes, not retention indices. The user tentatively recalled 1 ng of IS per tube. The 📈
@@ -16,10 +20,14 @@ These block validation, not development.
    ([report](docs/validation/calibration-standards-2026-10-06.md)), but nothing can be checked
    against a known answer yet. A fifth level between 5 and 25 ng would show where the response
    bends. 🧪 itself has still only been checked on planted peaks.
-2. **Internal-standard concentrations**, and whether the mix always contains the five standards
-   found in the current runs (acenaphthene-d10, phenanthrene-d10, n-tetracosane-d50,
-   chrysene-d12, perylene-d12). n-Dotriacontane-d66 elutes after the end of these 76-minute
-   runs and di-n-octyl phthalate-d4 was not found *(audit)*.
+2. **Internal-standard identities and amounts.** The earlier spectral audit used five
+   provisional names. The supplied inventory supports the calibration starter-table names
+   acenaphthene-d10, phenanthrene-d10 and n-tetracosane-d50. The m/z 240 deuterated PAH
+   cannot be assigned to chrysene-d12 versus benzo[a]anthracene-d12 from these checks;
+   perylene-d12 is omitted from the starter tables. Confirm which standards were actually
+   added, and their amounts per tube, for each sequence. See [input tables](docs/input-tables.md).
+   On the September 76-minute runs, n-dotriacontane-d66 lay beyond the acquisition and
+   di-n-octyl phthalate-d4 was not found *(audit)*.
 3. **A mass-spectral library** (NIST export via `lib2nist`, or MoNA/MassBank). Every 🏷️ threshold
    is tuned on small synthetic libraries.
 4. **A labelled co-eluting standard pair** (BbF/BkF, benz[a]anthracene/chrysene or
@@ -51,7 +59,8 @@ These block validation, not development.
   independent chemical truth is available. See the [fitting comparison](docs/validation/peak-fitting-2026-10-18.md).
 
 - **MS-aware peaks do not reach every tool.** 🫧 blocking, ⛓️ stencil totals and series, 🗂️ batch
-  and the 14 eV path of 🧬 still run the legacy detector. Legacy footprints cover most of the
+  still use legacy blobs. The 14 eV evidence path of 🧬 needs legacy pixel footprints and
+  is unavailable when classifying fitted MS-aware components. Legacy footprints cover most of the
   image on these busy runs, so anything summed over footprints (stencil totals, all-signals
   ratios) inherits that.
 - **The ladder can take a wrong isomer.** One or two carbons per run are off by a modulation or
@@ -82,10 +91,14 @@ These block validation, not development.
   across runs has no GUI; PARAFAC2 was never built; MCR-ALS unimodality is an approximation.
 - **Detector saturation** is the brightest value seen three times; estimating it from flat-topped
   apexes, as James asked, awaits real saturated peaks.
-- **Reports** never carry a real manual-edit log; the mechanism exists but no GUI action passes
-  one.
+- **Batch reports** have no interactive edit log because the batch workflow has no per-run
+  review state. The main Export action already includes blob edits, quantitative decisions
+  and stencils in provenance. Rich Excel/HTML/PDF report generation directly from the main
+  project's reviewed state remains separate work.
 - **Semi-quantitative amounts** assume an unknown responds like its nearest calibrated target.
-- **Packaging**: `packaging/pygcgc.spec` has never been built.
+- **Windows executable packaging**: `packaging/pygcgc.spec` remains unbuilt and untested.
+  The Python wheel built successfully and passed module/asset checks on 19 October;
+  a fresh dependency installation was not tested in that audit.
 
 ## 4. Suggested features
 
@@ -109,10 +122,10 @@ Chemical ground truth and quantitative validation remain the scientific gaps abo
    a branched isomer of the same mass, and its signal is weak (1–3% of base at 14 eV), so it should
    propose two seeds for the user to accept, not replace the clicks. In the audit it confirmed 7 to
    11 carbons per run up to C21 and was silent above.
-3. **A "report this project" action** that passes the project's review decisions, blob edits and
-   stencils into the provenance of an Excel/HTML report.
+3. **Rich reports from the reviewed main project.** Reuse the current Export provenance
+   and decisions to generate Excel/HTML/PDF reports directly from that project's state.
 4. **A settings dialog for 🧬** and a class filter for 🏷️ search.
-5. **Split `gui/mainwindow.py`** (about 3,000 lines holding every step's handlers) into one
+5. **Split `gui/mainwindow.py`** (holding every step's handlers) into one
    controller per step; it is the file every change touches and where parallel edits collide.
 
 Done on 24 September 2026 (see CHANGELOG.md): siloxane scoring against both references at 0.15,

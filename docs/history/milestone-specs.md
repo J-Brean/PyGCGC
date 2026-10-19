@@ -1,12 +1,12 @@
-> **Historical document.** Kept for reference; superseded by the README, ROADMAP.md and
-> docs/architecture.md. File paths and numbers describe the project when it was written
-> (scripts have since moved from examples/ to benchmarks/, and the 10 s acquisition it refers
-> to has left real_data/).
+> **Archived design record.** Statements, paths and numbers describe the revision
+> when this was written. See the [documentation index](../README.md) for current
+> behaviour, implemented features and later validation. Private raw data now lives
+> under `C:\REAL_DATA_FOR_PYGCGC`; old repository paths are historical.
 
 # Milestone specs and acceptance tests
 
 The original specification for each milestone, with acceptance tests. Kept as the design
-record: the milestones are built, and what remains is in [ROADMAP.md](../ROADMAP.md).
+record: the milestones are built, and what remains is in [ROADMAP.md](../../ROADMAP.md).
 Numbering follows the old docs/history/handover-2026-09-21.md (this was its section 9).
 
 ## 9. Roadmap, with specs and acceptance tests

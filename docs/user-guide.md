@@ -1,13 +1,16 @@
 # PyGCGC user guide
 
-Reference for every step and panel of the app, followed by how the methods work.
+Current reference, reconciled on 19 October 2026, for every step and panel of the app,
+followed by how the methods work. The [documentation index](README.md) maps current
+guidance and dated validation reports; [input tables](input-tables.md) defines the CSV formats.
 Install and quick start are in the [README](../README.md).
 
 ## Using the app
 
-Every screenshot in this guide was taken on the synthetic demonstration data
-([examples/demo_data](../examples/demo_data/README.md)), so each can be reproduced; the tour in
-that README walks through every step on it. `docs/images/make_screenshots.py` retakes them all.
+Screenshots use the synthetic [demonstration data](../examples/demo_data/README.md)
+or smaller workflow fixtures. `docs/images/make_screenshots.py` generates the main set;
+later focused checks also supplied screenshots. Older images can show former toolbar
+arrangements; current names and routes are given in the text.
 
 ![The main window: the diesel sample after background removal, with the spectrum of pristane](images/screenshot_main.png)
 
@@ -50,7 +53,7 @@ inputs before quantification is complete.
 | Step | Settings shown | Go does |
 |---|---|---|
 | 1 Load | folder, individual files or saved project; modulation checks | opens a data folder and estimates period and phase |
-| 2 Align (optional) | reference run, anchors | finds the anchors on every other run; **Skip alignment** continues without fitting a transform |
+| 2 Align (optional) | reference run, guided anchor table, bounded refinement | starts **Pick anchors across runs**; **Skip alignment** continues without fitting a transform |
 | 3 🧹 Background | 🧹 settings, aligned blank, preview, split view, diagnostics | removes background on every run |
 | 4 🔍 Peaks | MS-aware regions or legacy blob table | runs the selected detection method on every run |
 | 5 🏷️ IS | IS library, labelled peaks, thresholds on Δt₁, Δt₂ and spectral match | finds every labelled standard in every run; results grid in the Standards tab |
@@ -153,7 +156,7 @@ The settings:
 | Remove repeating t₂ pattern | on, 51 modulations | Stripes that repeat every modulation. The window must be much wider than any peak |
 | Remove single-scan spikes | on, 8 SD | Points far above all four neighbouring scans |
 | Noise map blocks | 20 modulations | Length of each stretch of t₁ in the noise map |
-| Subtract blank | none | A blank run, cleaned the same way and subtracted per ion, never going below zero |
+| Subtract blank | none | A cleaned blank subtracted per ion, capped at the positive signal available; signed baseline-noise residuals can remain |
 | Scale blank to each run | on | Per-artefact scale from the median sample-to-blank ratio, worked out separately for each connected region of significant blank pixels on an ion, so two artefacts sharing an ion but varying independently between tubes don't share one compromise factor. Whatever significant signal isn't part of any of those regions still falls back to one scale for the ion as a whole |
 
 The diagnostics show what's left of the background for one ion. A good correction looks like:
@@ -211,9 +214,9 @@ Calibration fitting is numerically scaled so changing between equivalent amount 
 preserves the curve and recovered amounts. Re-run Quantify after updating from a version
 before the 19 October numerical fix, especially for quadratic curves in very small units.
 
-![Step 6 after Go: targets circled and internal standards squared on the urban sample](images/screenshot_quant.png)
+![Quantify (step 7) after processing: targets circled and internal standards squared on the urban sample](images/screenshot_quant.png)
 
-Step **6 🧪 Quantify** (Go) runs the whole thing in the background:
+Step **7 🧪 Quantify** (Go) runs the whole thing in the background:
 1. Every target and internal standard is found in the calibration runs on its own quantifier ion, and their average positions are learned from there, together with the qualifier ratios of any row that leaves them blank. Each later search is also shifted by however far its internal standard has moved in that run.
 2. Every run is measured with those positions. Several candidate peaks may sit inside a target's window; each is scored on its distance from the expected position, how well its qualifier ratios match, and how clearly it stands out of the noise. If the runner-up scores almost as well, the result is flagged as ambiguous.
 3. Every other peak in every run (a TIC blob) is found as well.
@@ -289,8 +292,8 @@ compound list, and reading the curves off for samples. It keeps its own runs, fo
 from the main window's project, and never saves over it. The science is in `core/calbuilder.py`;
 `examples/tutorials/07_calibration_builder.py` does the same without the window.
 
-Select the standards in the Runs table (Ctrl+click), then press **📈 Calibrate** on the toolbar (or
-*📈 Build curves from my standards…* in step 6). The banner above each tab says what to do on it
+Select the standards in the Runs table (Ctrl+click), then open **Tools → 📈 Calibrate** (or
+**Quantify → Advanced calibration tools → Build curves from my standards…**). The banner above each tab says what to do on it
 next; a tab title is ticked when it is done.
 
 ![Tab 1, Standards: four calibration runs taken from the main window, cleaned and searched, with their level amounts](images/screenshot_calibrate_standards.png)
@@ -411,7 +414,7 @@ usual region-matching rules. Inspect/refit is available from **Peak tools…**.
 
 ![Isolated fitting preview on synthetic data, showing observed signal, fitted contributions, residual and fitted fraction](images/screenshot_peak_preview.png)
 
-Step 4 offers two peer detection methods in a saved selector. **MS-aware separation** is the new route for crowded real data. **Legacy blob borders** keeps the old behaviour for comparison and for existing tools that still consume `BlobSet`. Both run across every loaded run from **Find peaks**.
+Step 4 offers two detection methods in a saved selector. **MS-aware separation** is the default route for crowded real data. **Legacy blob borders** keeps the old behaviour for comparison and for existing tools that still consume `BlobSet`. Both run across every loaded run from **Find peaks**.
 
 **Tilted Gaussian is the default peak shape**, in both automatic separation and manual
 refits. Every component has its own widths and tilt: its second retention time may drift
@@ -498,7 +501,7 @@ On its own the bleed reference leaves a discrete Dn peak alone (its ion ratios d
 
 **Flagging** happens automatically wherever 🔍 blobs are shown: every blob is scored (the fraction of its volume on the reference ions, times its cosine similarity to the reference) and the 🔍 Blobs panel's "🫧 siloxane?" column marks anything at or above the threshold. The default threshold, 15%, was chosen on two of the September 2026 runs ([audit](validation/audit-2026-09-24.md)); check it on your own runs.
 
-**Blocking out siloxane blobs (default method).** The slider in the 🫧 tab, *Siloxane certainty ≥*, sets how sure a 🔍 blob must be to count as siloxane. A blob's certainty is the score above as a percentage. Drag it and the blobs at or above it are outlined in dashed magenta in the 2D view (the 🔍 outlines switch on for you), the 🔍 table's 🫧 column shows each blob's percentage, marked *yes* at or above the slider, and the panel counts how many blobs on the current run qualify. **🫧 Siloxanes** then zeroes the ions of both references in every scan inside those blobs' footprints, so anything co-eluting inside a blob survives (tick *Block every ion in the blob* to zero everything; on a busy run that removed several per cent of the hydrocarbon signal with the bleed). Nothing is fitted. Projects saved before 24 September 2026 keep the settings they were saved with (30%, every ion, one reference): pick the preset again and set the slider to 15% to use the new defaults.
+**Blocking out siloxane blobs (default method).** The slider in the 🫧 tab, *Siloxane certainty ≥*, sets how sure a 🔍 blob must be to count as siloxane. A blob's certainty is the score above as a percentage. Drag it and the blobs at or above it are outlined in dashed magenta in the 2D view (the 🔍 outlines switch on for you), the 🔍 table's 🫧 column shows each blob's percentage, marked *yes* at or above the slider, and the panel counts how many blobs on the current run qualify. **🫧 Siloxanes** then zeroes the ions of both references in every scan inside those blobs' footprints, leaving other mass channels intact; co-eluting analytes can still lose signal on shared siloxane ions (tick *Block every ion in the blob* to zero everything; on a busy run that removed several per cent of the hydrocarbon signal with the bleed). Nothing is fitted. Projects saved before 24 September 2026 keep the settings they were saved with (30%, every ion, one reference): pick the preset again and set the slider to 15% to use the new defaults.
 - 🫧 finds the 🔍 blobs first if a run has none, or if they are out of date. Blobs are always found on the layer beneath 🫧 (🧹 if applied, otherwise raw), so a blocked-out blob is still listed and outlined, and the slider keeps working after 🫧 is applied.
 - Delete a blob in the 🔍 panel to keep it out of the removal, or use ➕ Add to include a peak the detector missed.
 - A blob's footprint stops at 1% of its apex, so a faint edge tail (about 0.4% of the signal in the synthetic test) remains.
@@ -545,11 +548,20 @@ A hydrocarbon chromatogram is usually a big diagonal smudge: every homologous se
 
 ### 🧬 Classify
 
-![Step 7 on the wood-smoke sample: peaks outlined by compound group, with the class summary](images/screenshot_classify.png)
+![Classification on the wood-smoke sample: peaks outlined by compound group, with the class summary](images/screenshot_classify.png)
 
-Step 7 on the toolbar. It gives every blob of the open run a compound class (alkane, alkene, cycloalkane, alkylbenzene, indane, naphthalene, PAH, N-heteroaromatic, aliphatic amine, alcohol or ether, ketone or aldehyde, carboxylic acid, ester, aromatic oxygenate, siloxane, phthalate) from its mass spectrum, its retention relative to the n-alkane ladder and, when available, its 14 eV spectrum. It needs no library. It replaces the rule language of commercial packages (GC Image's CLIC) with a plain text file you can read and edit.
+Open **Assign (step 6) → Assign compound classes…**. It assigns compound classes from
+peak spectra, retention relative to the n-alkane ladder and, where supported, a loaded
+14 eV partner. The editable rules cover alkanes, aromatics, oxygenates and other classes
+without requiring a spectral library.
 
-**Running it.** Open a 70 eV run, press step 7 and then **▶ Go**. It uses the blobs from 🔍 if they exist. If you have run only the MS-aware detector, the legacy detector is run here on the same cleaned run, because classification needs whole-peak spectra; the notes line says so. The ladder from ⛓️ is optional: without it the retention evidence is skipped, not counted against a blob. The 14 eV channel of a tandem acquisition is found automatically when it is loaded alongside (same acquisition, lower energy) and is switched on by the checkbox at the top; its background is removed here if you have not done it. Selecting the 14 eV run itself is refused with the reason, since classes are read from the 70 eV spectrum.
+**Running it.** Open a 70 eV run, choose **Assign → Assign compound classes…**, then
+**Classify blobs**. It uses detected legacy peaks, or re-solves full-ion spectra for
+the fitted MS-aware components. If neither result is available, it finds legacy blobs
+privately and says so in the notes. The alkane ladder is optional; without it, retention
+evidence is skipped. A loaded 14 eV partner can supply evidence for legacy footprints,
+with background removed here if needed. That evidence is unavailable for fitted MS-aware
+components. Selecting the 14 eV run itself is refused: classification uses the 70 eV run.
 
 **What a call is.** Each blob gets a class, a score from 0 to 1, a tier and a plain-language reason.
 
@@ -588,7 +600,12 @@ The settings are saved with the project; results are not, so classify again afte
 
 ![The identifier window: the urban sample's peaks searched against the demonstration library](images/screenshot_identify.png)
 
-Search every 🔍 blob on the current run against an MSP library (toolbar, or Process menu). Opens on whichever run is open when it's shown; reopening it is how it picks up a run switch, but the loaded library stays put since it isn't tied to any one run. Read-only in the sense that nothing here is saved or undoable, the same as ✂️ and 🗂️ -- but "Promote to target…" and "Add to in-house library…" do write files.
+Open **Assign → Search a spectral library…** or the corresponding Tools/Process action.
+The identifier searches the selected detector's peak spectra, including full-ion spectra
+from fitted MS-aware components. Reopening refreshes the selected run and retains the
+loaded library. Search results stay in the dialog; the main Export action can include
+available identification results. **Promote to target…** and **Add to in-house library…**
+write files explicitly. Accepted component fitting is handled separately in Resolve overlap.
 
 - **Load library (MSP)…** reads any plain-text MSP file (NIST via `lib2nist`, MoNA, MassBank, or one built here). "Generate decoys automatically" (on by default) adds a shuffled decoy per real entry, so a target-decoy q-value can be estimated even from a library that doesn't carry its own decoys already.
 - **🏷️ Identify blobs** searches every blob's own apex spectrum (cleaner than the whole-footprint sum, which can pick up a co-eluting neighbour), using the retention index from ⛓️'s own alkane ladder if one's been found on this run (search still works without it, on the spectrum alone). The results table gives each blob's best hit, its score, the query and library retention indices, a simplified confidence tier (2a/2b/3, see [Known limitations](../ROADMAP.md)), and a target-decoy q-value.
@@ -630,7 +647,7 @@ The export includes the review decisions and standard-match freshness alongside 
 
 ![Step 5: five internal standards labelled on CAL_L1_1ng and searched for in every run; the Standards tab gives the spectral match where each passed](images/screenshot_istd.png)
 
-Step 5 on the toolbar. A small library of standards (the seven in the shipped mix; ➕ Add to library for your own, kept in `~/.pygcgc/istd_library.json`), each labelled once by clicking its peak, then looked for in every chromatogram on the first dimension, the second dimension and the mass spectrum.
+Step 5 on the toolbar. A small library of standards (seven shipped library candidates; ➕ Add to library for your own, kept in `~/.pygcgc/istd_library.json`), each labelled once by clicking its peak, then looked for in every chromatogram on the first dimension, the second dimension and the mass spectrum.
 
 1. Find peaks (step 4) first: labelling picks the detected peak nearest the click and keeps its spectrum.
 2. Select a standard in the table, press **🏷️ Label peak on this run** and click its peak. The table then shows where it was labelled, its t₁ and t₂, and later on how many runs it was found.
@@ -646,13 +663,20 @@ Step 5 on the toolbar. A small library of standards (the seven in the shipped mi
 4. **Go** (🔎 Find in every chromatogram) searches every loaded run, the labelled one included. The **Standards** tab of the Workspace shows one row per standard and one column per run: ✓ where it passed (amber if more than one peak did), ✗ where it did not, · where the run has no peaks. **Show** picks what the cells display (spectral match, t₁, t₂, or Δt₁ and Δt₂ from the expected or labelled position); hover a cell for every number and, for a ✗, which threshold failed. Click a cell to open that run on the peak; double-click to label it there by hand. **Export results (CSV)…** writes one row per standard per run, with the thresholds used.
 5. **📋 Use as target table…** writes the labelled standards as `istd` rows into the target table (the quantifier and two qualifiers are the strongest ions weighted by m/z, with their measured ratios), keeping any other rows, and loads it: the standards then anchor the phase and normalise 🧪.
 
-On the September 2026 runs, five standards are present (acenaphthene-d10, phenanthrene-d10, n-tetracosane-d50, chrysene-d12, perylene-d12; perylene wraps, true t₂ about 9.1 s at an 8 s period). Labelled on ATWC, all five passed the default thresholds on the other three runs: within 2.3 s in t₁ and 0.09 s in t₂ of the expected position, spectral match 0.97 to 0.99. Twice a second peak also passed (phenanthrene-d10 on BTWC, perylene-d12 on T191), so check the amber cells. n-Dotriacontane-d66 elutes after the end of those runs and di-n-octyl phthalate-d4 was not found.
+The September audit reported high spectral matches for five provisional IS labels
+on four exhaust/diesel runs; this establishes matching behaviour, not independent
+chemical identity. For the August calibration files, three names match the supplied
+inventory, while the m/z 240 deuterated PAH remains isomer-unconfirmed. The local
+[starter tables](input-tables.md#local-starter-tables-supplied-on-19-october) retain
+that distinction and assume no IS amount. Review uncertain or multiple matches.
 
 ### 🧩 Peak clusters
 
-![Step 9 on the diesel sample: peaks filled with their cluster colour](images/screenshot_cluster.png)
+![Clustering on the diesel sample: peaks filled with their cluster colour](images/screenshot_cluster.png)
 
-Step 9 on the toolbar. It groups peaks by the shape of their mass spectra, with no rules and no library, so a chromatogram divides into chemically similar regions and, when several runs are pooled, the runs can be compared cluster by cluster. Where 🧬 says what kind of compound a peak is from rules you write, this asks which peaks look alike; the "Made of" column compares the two once a run has been classified.
+Open **Assign → Explore spectral clusters…**. It groups peaks by spectral similarity
+without a rule set or library. Pool runs to compare their cluster contributions.
+The “Made of” column compares clusters with any available class assignments.
 
 **Method.** Each peak's spectrum is weighted (intensity^0.5 × m/z^1, m/z ≥ 35) and scaled to unit length; peaks with fewer than five ions are left unassigned. The largest 5000 peaks are grouped by average-linkage hierarchical clustering of the cosine distance, cut at a merge distance (default 0.3, i.e. a mean similarity of 0.7 within a merged group), and groups of fewer than three peaks are not called clusters. Every other peak joins the cluster with the nearest centroid if that is within 0.4, otherwise it stays unassigned. Clusters are numbered by total volume, largest first. Retention time is not part of the distance: two runs never line up exactly, so using position would turn drift into false differences, and it means no alignment is needed to compare runs.
 
@@ -678,13 +702,13 @@ Step 9 on the toolbar. It groups peaks by the shape of their mass spectra, with 
 
 **Limits.** Peaks come from the legacy detector's blobs (found privately if 🔍 has not been run), or from the fitted MS-aware components when that detector is in use, so a cluster is only as good as the peak boundaries under it: on a run with saturated peaks the legacy footprints are wide bands, and they are coloured as such. The settings are saved with the project; results are not, so cluster again after reopening. The defaults are not tuned to your samples; use **Scan distances** and **Check stability** on a real sample set before trusting a threshold.
 
-**Not built:** normalisation of the run table to an internal standard or by centred log-ratio (CLR is negative, which the existing PCA's log transform cannot take) and QC-based drift correction; saving cluster results and names in the project file; pooled pixel regions that align retention first (regions are spectral only, so they do not need it, but the label images are per run); a spatially aware region method (each pixel is grouped on its own spectrum, then smoothed, rather than with its neighbours in the model); choosing the number of regions automatically (k-means needs it given); a peak-clustering method that fits the largest peaks of a big pool by density rather than a tree.
+**Not built:** normalisation of the run table to an internal standard or by centred log-ratio (CLR is negative, which the existing PCA's log transform cannot take) and QC-based drift correction; saving cluster results and names in the project file; pooled pixel regions that align retention first (regions are spectral only, so they do not need it, but the label images are per run); a spatially aware region method (each pixel is grouped on its own spectrum, then smoothed, rather than with its neighbours in the model); choosing the number of regions automatically (k-means needs it given); a bounded landmark/subsample density fit for very large pools (the optional density method currently fits all usable peaks).
 
 ### 🗂️ Batch
 
 ![🗂️ Batch on the demonstration folder: PCA of the seven runs](images/screenshot_batch.png)
 
-A one-shot, whole-folder analysis (toolbar, or Process menu), separate from the per-run project the rest of the app is built around: pick a folder, choose which steps to run, and go.
+A one-shot, whole-folder analysis (**Tools → Batch**, or the Process menu), separate from the per-run project the rest of the app is built around: pick a folder, choose which steps to run, and go.
 
 **The pipeline** reads the sequence the same way `pygcgc quant` does (`sequence.csv`, `target_table.csv`, calibration levels, `method.json`), then runs 🧹 (always), 🫧 and 🔍 (optional) on every run **in a process pool** -- real multiprocessing, not the thread pool used elsewhere in the app for responsiveness, because the GIL means a thread pool doesn't actually parallelise this kind of work. Every step's result is cached to disk keyed by a hash of its inputs and settings, in `<folder>/.pygcgc_cache`; re-running the same folder with the same settings loads straight from the cache instead of recomputing, which is also how an interrupted batch resumes -- just run it again. 🧪 quantification (optional) runs once, in the main process, on the results of that parallel prep, the same `quantify_prepared` the CLI and the GUI already use.
 
@@ -698,7 +722,20 @@ A one-shot, whole-folder analysis (toolbar, or Process menu), separate from the 
 
 ⚙️ Settings… edits every step's settings and the feature-table reference run. **Not built:** a progress bar beyond the status line; blank subtraction (the batch pipeline and CLI do not subtract blanks).
 
-### 📤 Report export
+### Export the main project (step 8)
+
+Open **8 Export** and choose an output folder. The export includes the available
+quantitative tables, per-run peak tables, internal-standard matches, assignments,
+input tables, calibration setup, standard-review decisions, a project snapshot and
+provenance. `manifest.json` lists the files and records missing or stale results.
+The export remains available before quantification, so check those status fields.
+
+Raw acquisitions remain at their source paths, and exporting does not change the
+active project's save location. The exported snapshot points to the exported target
+and level CSVs. Provenance records blob edits, quantitative decisions and stencils.
+**Export current figure…** saves the current view separately.
+
+### Batch reports (Excel, HTML and PDF)
 
 A "📤 Export…" button and a format dropdown sit next to "▶ Run batch", enabled once a run finishes. Whichever format you pick writes exactly what the tabs are currently showing: the QC compound selected in its dropdown, and the volcano groups selected (if two or more runs are picked in each list) -- so the exported file matches what's on screen, not some fixed default.
 
@@ -708,13 +745,19 @@ A "📤 Export…" button and a format dropdown sit next to "▶ Run batch", ena
 
 Every format also records **provenance**: the PyGCGC version, the modulation period, `method.json`'s own contents, the settings the batch ran with, and a manual-edit log -- which is always empty for anything 🗂️ produces, since the batch dialog is deliberately a one-shot, whole-folder tool with no interactive review of its own to report (see "Not built" above, and the Architecture section). `pygcgc quant --xlsx` and `pygcgc batch --report {xlsx,html,pdf,all}` write the same files from the command line, and both always write a small standalone `provenance.json` regardless of `--report`/`--xlsx`.
 
-**Not built:** a way to feed a real edit log into these reports from the GUI (🔍's edit log, 🧪's review decisions, ⛓️'s stencils) -- `core.report.build_provenance` accepts all three and is tested against synthetic ones, but nothing in the shipped batch dialog or CLI has that state to pass, by the same design choice that keeps 🗂️ out of the per-run Project; a future "generate a report for the run open right now" action on the main window would be the natural place to wire it in. A PyInstaller spec (`packaging/pygcgc.spec`) is written but **not built or run anywhere** -- there was no environment available to try it in during this milestone; see the [Known limitations](../ROADMAP.md) entry before relying on it.
+**Main-project export is separate.** Step **8 Export** already writes available result
+tables, inputs, a project snapshot, freshness flags and provenance containing blob edits,
+quantitative decisions and stencils. Batch Excel/HTML/PDF reports have no interactive
+edit log because they are produced by a one-shot batch. Producing those rich reports
+directly from the reviewed main project remains on the roadmap. A Python wheel was built
+and checked on 19 October; the Windows executable spec (`packaging/pygcgc.spec`) remains
+unbuilt and untested. See [known gaps](../ROADMAP.md#3-known-gaps).
 
 ### Working order, settings and figures
 
 **Toolbar order** follows eight steps: Load, Align (optional), Background, Peaks, Standards, Assign, Quantify and Export. Modulation checks are under Load; Classify, Identify and Cluster are under Assign. Peak editing and display options live in contextual menus. The step buttons open settings on the left; see [Workflow panel](#workflow-panel). Blank subtraction reads the blank through both runs' alignment to the reference, so alignment comes before background removal. A run without a transform counts as the reference.
 
-**Settings.** Every settings object has a form: Process → 🔍 Peak detection settings… edits whichever method is selected, ⛓️ Hydrocarbon settings… (or ⚙️ in the ⛓️ panel), ⚙️ in the 🏷️ dialog, ⚙️ Settings… in 🗂️ Batch (every step, plus the feature-table reference run), the 🫧 tab, and 🧪 Quantification settings. Restore defaults is in each. Changing legacy settings clears hand edits to the blob list.
+**Settings.** Available forms include: Process → 🔍 Peak detection settings… edits whichever method is selected, ⛓️ Hydrocarbon settings… (or ⚙️ in the ⛓️ panel), ⚙️ in the 🏷️ dialog, ⚙️ Settings… in 🗂️ Batch (every step, plus the feature-table reference run), the 🫧 tab, and 🧪 Quantification settings. Restore defaults is in each. Changing legacy settings clears hand edits to the blob list.
 
 **Figures.** 📤 Figure… (File menu too) saves the 2D view as it is: window, colour levels, scale and ion, at 89 mm or 183 mm wide, 300 dpi, PNG or TIFF, boxed axes with inward ticks and a short horizontal colour bar, no title, plus a sibling `.txt` caption to finish (site, sampling, instrument, levels).
 
@@ -734,11 +777,11 @@ Every format also records **provenance**: the PyGCGC version, the modulation per
 
 ### Projects and the results cache
 
-The project saves itself beside the runs (`project.pygcgc.json`) and offers to resume when the folder is opened again. It holds the fold, every setting and decision, run types and levels, alkane ladders, stencils, internal-standard labels and MS-aware components. Background layers and peak detections are kept in a cache on local disk (`%LOCALAPPDATA%\PyGCGC\results`, or the folder in `PYGCGC_CACHE`), never in the data folder, so reopening a project reads them back in a second instead of recomputing them. Each entry is keyed by the run file, its fold, the settings and the code that made it, so a changed setting or a new version of a method recomputes. A real run's background layer takes about 380 MB; the least recently used entries are deleted beyond 10 GB (`PYGCGC_CACHE_GB`), and File → Clear results cache… empties it. Layers made with a blank are not cached.
+The project saves itself beside the runs (`project.pygcgc.json`) and offers to resume when the folder is opened again. It holds the fold, every setting and decision, run types and levels, alkane ladders, stencils, internal-standard labels and MS-aware components. Background layers and peak detections are kept in a cache on local disk (`%LOCALAPPDATA%\PyGCGC\results`, or the folder in `PYGCGC_CACHE`), never in the data folder, so reopening a project reads them back when their cache keys remain valid. Each entry is keyed by the run file, its fold, the settings and the code that made it, so a changed setting or a new version of a method recomputes. A real run's background layer takes about 380 MB; the least recently used entries are deleted beyond 10 GB (`PYGCGC_CACHE_GB`), and File → Clear results cache… empties it. Layers made with a blank are not cached.
 
 ### Undo
 
-- Phase, period, 🧹, 🫧, 🧪 review decisions (accept, reject, exclude, curve overrides, peaks picked by hand), 🔍 blob edits (delete, merge, add) and ⛓️ stencils (add, delete, reweight) can be undone (Ctrl+Z) and redone (Ctrl+Shift+Z).
+- Alignment points/transforms, accepted component fits, phase, period, 🧹, 🫧, 🧪 review decisions (accept, reject, exclude, curve overrides, peaks picked by hand), 🔍 blob edits (delete, merge, add) and ⛓️ stencils (add, delete, reweight) can be undone (Ctrl+Z) and redone (Ctrl+Shift+Z).
 - Dragging a slider counts as one step.
 - The History tab lists every step.
 - Zoom, ion and colour settings are view choices, so they aren't on the undo stack.
@@ -789,7 +832,7 @@ Every core module opens with a plain-English explanation; these are summaries.
 
 **Phase** (`core/phase.py`). The modulator's cycle rarely starts when the acquisition does.
 - The *anchor method* finds each internal standard's brightest pulse in the raw stream and works out which phase puts it at its known t₂. The anchors are combined with a circular mean, because t₂ wraps round like a clock face.
-- The *void method* finds the quietest band in the average t₂ profile and cuts there. It is used only when no run has usable anchors.
+- Without usable anchors, the *bleed method* puts the cut just before the repeating column-bleed rise. If no convincing bleed is found, the *void method* chooses a quiet band. These are display cuts, not proof of the modulator's physical start. Runs without anchors borrow phase from usable anchors elsewhere in the sequence when available.
 
 **Period** (`core/period.py`). Without anchors, the period is the frequency at which the whole detector stream repeats (bleed and unresolved hump are locked to the modulator), found from a spectrum of the total signal and refined by folding at trial periods; it reports a confidence and how far peaks could drift. It does not track single peaks, because a genuine drift of t₂ looks exactly like a period error. With anchors, each anchor's phase estimate drifts in proportion to its modulation number if the period is wrong, and a straight-line fit gives the correction with a standard error.
 
@@ -807,13 +850,18 @@ Before this, single-scan spikes are removed. Afterwards, an optional cleaned bla
 
 **Candidates, components and overlap** (`core/candidates.py`, `core/components.py`, `core/modelselect.py`, `core/overlap.py`). The MS-aware path finds local maxima ion by ion, groups agreeing ions and requires local TIC prominence. Padded rectangles bound calculations. The default pursuit starts with one tilted Gaussian, fits independent positions, widths and correlations on diagnostic ions, and adds components only with BIC, spectral/spatial and held-out support. Spectra and estimated intensities are then solved on a wider ion set using the same count weights, non-negative spectra and signed local background. Interacting windows are merged and duplicates removed. Results and warnings live in a serialisable `ComponentSet`; reaching width limits or failing quality checks marks a group unresolved. Manual `fit_overlap` uses weighted variable projection; `fit_template_overlap` shifts a measured profile. The projected Gaussian/tilt Jacobian accounts for the solved spectra. Low-level fitting functions retain their Gaussian API defaults; pass `model="tilt"` explicitly in scripts. The [October comparison](validation/peak-fitting-2026-10-18.md) supersedes earlier injection figures: tilt improved median held-out reconstruction, while experimental free-modulation models recovered copied-profile total areas better. Component intensities remain estimates and do not directly replace calibrated quantification.
 
-The planned end state is one durable result per overlapping component—shape, spectrum,
-intensity and confidence—with analysis rectangles hidden as an implementation detail. The
-data model, automatic separation pipeline, visual design, persistence and downstream
-migration are specified in
-[`docs/history/ms-aware-component-plan.md`](history/ms-aware-component-plan.md).
+The durable component model, automatic separation, overlapping contours, manual acceptance
+and persistence are implemented. Some downstream tools still use legacy footprints;
+see the [remaining migration gaps](../ROADMAP.md#3-known-gaps). The
+[original component plan](history/ms-aware-component-plan.md) is a historical design record.
 
-**Siloxane** (`core/siloxane.py`). Every blob is scored: the fraction of its volume on a set of ions common to siloxane fragmentation, times its cosine similarity to the reference pattern. By default, every blob scoring at or above the threshold is blocked out (`remove_siloxane_blobs`: each scan inside its footprint is zeroed). The older method is per pixel: every siloxane ion's image is fit against the same reference pattern by non-negative least squares (one reference reduces this to a clipped projection), and only the fitted component, capped at what's actually there, is subtracted, so a real analyte sharing one ion without the others rising in the matching ratio is barely touched.
+**Siloxane** (`core/siloxane.py`). Legacy blobs are scored against the selected bleed
+and cyclic reference spectra, retaining the larger score. The default blob method
+zeroes only the selected reference-ion channels inside qualifying footprints.
+Other channels remain; analyte signal on shared ions can be removed. Blocking every
+ion is an explicit alternative. The per-pixel method fits the first reference only
+and subtracts its estimated contribution, capped at the available positive signal,
+where the multi-ion presence and spectral-similarity gates pass.
 
 **Hydrocarbons** (`core/hydrocarbons.py`). The n-alkane ladder is found from two confirmed points and grows one carbon at a time: each carbon is predicted from the line through its two nearest confirmed neighbours and searched for on m/z 57 inside a t₁ and t₂ window, taking the tallest pulse whose qualifier ratios match; a couple of passes retry carbons still missing. A group-type stencil is recorded not in absolute t1/t2 but as carbon number and t2 offset from the alkane line, so it transfers onto any other run through that run's own ladder rather than the run it was drawn on. Other homologous series are found among blobs carrying a strong share of a diagnostic ion pair, placed in the ladder's carbon-equivalent space: members must sit one carbon apart at a consistent t₂ offset from the alkane line.
 

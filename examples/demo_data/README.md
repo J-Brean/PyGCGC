@@ -50,7 +50,8 @@ Open the folder: `pygcgc-gui "C:\path\to\SYNTHETIC_DEMO"`. The period comes from
 `method.json`, the run types from `sequence.csv`, and the phase of every run is found from the
 internal standards in `target_table.csv` as the runs load. Work along the numbered toolbar.
 
-1. **🔄 Fold.** Select the diesel sample. The fold panel says the phase came from five anchors.
+1. **Load and check the fold.** Select the diesel sample. Open the modulation checks under
+   Load; the fold panel says the phase came from five anchors.
    Drag the phase slider to see a wrong phase split the peaks across the top and bottom edges,
    then Ctrl+Z.
 2. **📍 Align.** Set the reference to `CAL_L3_20ng`, choose one ion or TIC and press
@@ -60,7 +61,7 @@ internal standards in `target_table.csv` as the runs load. Work along the number
    the run, skipping missing peaks. Finish with Esc, then use **Refine anchors to local maxima**
    to adjust the clicks within ±1 modulation and ±0.150 s in t2. Search limits, transform
    settings and optional **Auto-find on all runs** are under **More alignment options**.
-   The Compare tab (5) blinks, overlays or subtracts the runs.
+   The Compare tab blinks, overlays or subtracts the runs.
    **Add points** resumes collection; select table rows and use **Delete selected points**
    to remove them. **Start alignment over** keeps the reference and restarts at P1; Ctrl+Z
    restores the previous alignment.
@@ -76,26 +77,31 @@ internal standards in `target_table.csv` as the runs load. Work along the number
    Inspect its fitted sum and residual, then apply the settings to all runs when satisfied.
    - **🫧 Siloxane filterer…** (button under the table): the large D5 in the urban sample (10.5 min,
      0.7 s) and the D4 to D8 series light up in dashed magenta at the default 15% certainty.
-   - **⛓️ Hydrocarbon identifier…**: select the diesel sample, Ion `57`, press ➕ Find alkane series
-     and click n-C14 (15.0 min) and n-C20 (25.5 min), typing 14 and 20. The ladder grows to
-     about C9 to C30; check its ends, where the qualifier gate can take a minor isomer for an
-     extra carbon. *Propagate to other runs*, then *Assign peaks to hydrocarbons*.
 5. **🏷️ IS.** Select `CAL_L1_1ng`, where the native compounds beside the standards are smallest.
    For each internal standard, select it in the table, press 🏷️ Label peak on this run and click it
    (positions in `truth/truth_amounts.csv`). Go finds all five in every run; the Standards tab
    shows the grid. 📋 Use as target table writes them as `istd` rows.
-6. **🧪 Quantify.** Go. The Review tab (3) shows each target across the sequence: pick
-   benz[a]anthracene to see it flagged for sharing a peak with chrysene. The Calibration tab (4) shows
+6. **Assign.** The supplied target table already names the quantitative targets. Optional tools
+   under Assign let you explore the samples before continuing to Quantify:
+   - **Assign hydrocarbons…**: select the diesel sample, Ion `57`, find the alkane series
+     from n-C14 (15.0 min) and n-C20 (25.5 min), typing 14 and 20. Check the ladder's ends,
+     propagate it and assign hydrocarbons. Minor isomers can pass the qualifier gate.
+     Peak assignment and stencil totals need legacy blobs; skip those actions in an
+     MS-aware-only tour. Ladder finding itself does not require that detector.
+   - **Assign compound classes…**: on the wood-smoke sample, classify peaks and inspect
+     the evidence for phenols, PAHs, acids, esters and alkanes.
+   - **Search a spectral library…**: load `demo_library.msp` and search the urban peaks.
+     The ladder supplies a retention-index check; target-decoy competition supplies q-values.
+   - **Explore spectral clusters…**: cluster the diesel peaks or pool the samples to compare
+     their spectral groups. These synthetic examples do not establish chemical accuracy.
+7. **🧪 Quantify.** Go. The Review tab shows each target across the sequence: pick
+   benz[a]anthracene to see it flagged for sharing a peak with chrysene. The Calibration tab shows
    every curve with its relative-error plot; click the 50 ng point of naphthalene and Exclude it.
    The Results tab lists targets, all signals, internal standards and calibrations; compare the
    amounts with `truth/truth_amounts.csv`.
-7. **🧬 Classify.** On the wood-smoke sample: phenols, PAHs, acids, esters and alkanes are coloured by
-   group; select a row to read why it was called what it was.
-8. **🏷️ Identify.** Load `demo_library.msp` and identify the peaks of the urban sample. Hits come with
-   a retention-index check (once the alkane ladder exists) and a target-decoy q-value.
-9. **🧩 Cluster.** Cluster the diesel sample and fill the peaks with their cluster colour: the
-   alkanes, cycloalkanes, alkylbenzenes, naphthalenes and PAHs separate without any rules. Pool every
-   run to compare the three samples cluster by cluster.
+8. **Export.** Write all available results, inputs, assignments, freshness flags and a project
+   snapshot into a new folder. Raw files remain at their source paths. Export the current
+   figure separately when you want a publication image.
 
 Elsewhere: ✂️ Resolve overlap opens a peak group in 3D and refits it; 🗂️ Batch runs the whole folder
 in parallel and gives a feature table, QC chart, PCA and volcano plot, and exports Excel, HTML or PDF;
@@ -115,8 +121,8 @@ confirmed misses retain missing-standard flags. The workflow explains prerequisi
 results need rerunning. The separate builder below remains an advanced route for curve editing
 and amount-ratio calibration when IS additions vary.
 
-1. In the Runs table select the four `CAL_` runs (Ctrl+click), then press **📈 Calibrate** on the
-   toolbar and *Use the 4 runs selected in the main window*. The standards are cleaned, their peaks
+1. In the Runs table select the four `CAL_` runs (Ctrl+click), then open **Tools → 📈 Calibrate**
+   and *Use the 4 runs selected in the main window*. The standards are cleaned, their peaks
    found and their phases lined up; the level amounts (1, 5, 20, 50) are read from the run names.
 2. On **2 Compounds**, press *📄 Load a compound table…* and choose `calibration_compounds.csv`.
    Every compound is matched to a peak in every standard and divided by its nearest internal

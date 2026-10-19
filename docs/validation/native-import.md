@@ -1,5 +1,10 @@
-> Describes the earlier acquisition (10 s modulation, 2025-10-09) that is no longer in
-> real_data/. The current runs are covered by [audit-2026-09-24.md](audit-2026-09-24.md).
+> **Dated validation record.** Results, timings and test totals describe the version
+> and dataset checked here. See the [documentation index](../README.md) for current
+> guidance and superseding evidence. Historical measurements are retained.
+
+> Dataset: the original 10 s acquisition dated 2025-10-09. Later 8 s tandem
+> runs are covered by [the September audit](audit-2026-09-24.md), and August
+> calibration acquisitions by the October reports linked in the documentation index.
 
 # Native LSC import: implementation and validation
 

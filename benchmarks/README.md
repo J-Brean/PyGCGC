@@ -1,5 +1,9 @@
 # Benchmarks and real-data checks
 
+For current usage and evidence, start with the [documentation index](../docs/README.md).
+The [19 October code audit](../docs/validation/code-audit-2026-10-19.md) records the latest
+full-suite result (850 passed, 31 optional-data skips), native checks and wheel verification.
+
 The guided workflow has route-level regressions as well as numerical tests:
 
 ```powershell
@@ -15,7 +19,9 @@ identification accuracy. See [the workflow validation](../docs/validation/guided
 Scripts that measure how well the methods work, as opposed to `tests/` (which check that the
 code does what it says) and `examples/tutorials/` (which show how to use it). None of them
 changes a default. Run them from the repository root with the project's Python environment;
-they read from, and write into, `real_data/` (git-ignored, see `real_data/README.md`).
+generated outputs belong under the repository's ignored `real_data/`. Private raw data
+now lives under `C:\REAL_DATA_FOR_PYGCGC`. The modern calibration scripts take that input
+path explicitly; legacy scripts below retain hard-coded original paths and fold settings.
 
 ## Calibration peak recovery (October 2026)
 
@@ -28,12 +34,14 @@ amount-recovery benchmark. Findings: [workflow-and-peaks-2026-10-18.md](../docs/
 ```powershell
 python benchmarks/validate_calibration_peaks.py "C:\REAL_DATA_FOR_PYGCGC\Cal files for James" --out real_data/workflow_audit/calibration_peaks.json
 $env:PYGCGC_CALIBRATION_DATA = "C:\REAL_DATA_FOR_PYGCGC\Cal files for James"
-python -m pytest tests/test_real_calibration.py -q
+python -m pytest tests/test_real_calibration.py -q -p no:cacheprovider
 ```
 
-The real-data test is opt-in and skips without this environment variable, so private instrument
-files are not needed for CI. Older benchmarks below still describe their original datasets and
-paths; the files have since moved to `C:\REAL_DATA_FOR_PYGCGC` on the development machine.
+The real-data tests are opt-in and skip without this environment variable. They also require
+the saved, non-empty manually labelled standard reference expected by the script; the data
+folder alone is insufficient. Neither test establishes independently known chemical identity
+or spike amounts. Private instrument files are not needed for CI. Older benchmarks below
+describe their original datasets and paths; the files have since moved to `C:\REAL_DATA_FOR_PYGCGC` on the development machine.
 
 ## Fitting comparison on the August calibration files
 
@@ -60,8 +68,11 @@ API for existing scripts, so pass `model="tilt"` when calling them directly.
 
 ## real_data_audit/: the four tandem acquisitions (September 2026)
 
-Written for the audit of 24 September 2026, on the four 70 and 14 eV acquisitions now in
-`real_data/` (8 s modulation, phase 2.77 s). Results and interpretation:
+Written for the audit of 24 September 2026, on four 70 and 14 eV acquisitions originally
+under `real_data/` (8 s modulation, phase 2.77 s). `common.py` still hard-codes that layout
+and those fold settings; it does not read `PYGCGC_REAL_DATA`. Its original raw files or
+decoded caches must be available in that layout to reproduce the historical results.
+Do not point these scripts at the August 10 s calibration acquisitions. Interpretation:
 [docs/validation/audit-2026-09-24.md](../docs/validation/audit-2026-09-24.md).
 The first script to run decodes the files once into `real_data/.cache/` (about a minute).
 
@@ -92,7 +103,8 @@ published numbers as long as that file is kept. Background:
 ## Written for the earlier acquisition, not yet updated
 
 These take the first `*_70eV.lsc` in `real_data/` and assume a 10 s period and 1.81 s phase,
-so on the current files they run but do not reproduce the numbers in their reports.
+so they are historical reproduction tools, not general runners for the current private
+data folder. Without the original input or crop, they cannot reproduce their reports.
 
 | Script | Report |
 |---|---|

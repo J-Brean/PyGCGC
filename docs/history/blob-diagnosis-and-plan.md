@@ -1,7 +1,7 @@
-> **Historical document.** Kept for reference; superseded by the README, ROADMAP.md and
-> docs/architecture.md. File paths and numbers describe the project when it was written
-> (scripts have since moved from examples/ to benchmarks/, and the 10 s acquisition it refers
-> to has left real_data/).
+> **Archived design record.** Statements, paths and numbers describe the revision
+> when this was written. See the [documentation index](../README.md) for current
+> behaviour, implemented features and later validation. Private raw data now lives
+> under `C:\REAL_DATA_FOR_PYGCGC`; old repository paths are historical.
 
 # Real-data blob diagnosis and development plan
 
@@ -140,8 +140,8 @@ All derived real-data files are under `real_data/blob_diagnosis/`:
   focus window, with t1 midpoint and t2 axes. Use the wider scan crop to expand
   windows when a fitted peak reaches an edge.
 - `metrics.json`: machine-readable results and per-blob extents.
-- [Border comparisons](../real_data/blob_diagnosis/comparison.png).
-- [Individual ion maps](../real_data/blob_diagnosis/ions.png).
+- Border comparisons: local artefact `real_data/blob_diagnosis/comparison.png` (not shipped).
+- Individual ion maps: local artefact `real_data/blob_diagnosis/ions.png` (not shipped).
 
 The context is deliberately wider than the analysis window because the background
 pattern filter spans 51 modulations. This is still a crop experiment: its baseline

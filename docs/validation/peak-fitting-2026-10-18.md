@@ -1,3 +1,7 @@
+> **Dated validation record.** Results, timings and test totals describe the version
+> and dataset checked here. See the [documentation index](../README.md) for current
+> guidance and superseding evidence. Historical measurements are retained.
+
 # Peak fitting corrections and comparison, 18 October 2026
 
 The production default is now **tilted Gaussian**, at the user's request after

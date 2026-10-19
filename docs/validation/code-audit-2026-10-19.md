@@ -1,3 +1,7 @@
+> **Dated validation record.** Results, timings and test totals describe the version
+> and dataset checked here. See the [documentation index](../README.md) for current
+> guidance and superseding evidence. Historical measurements are retained.
+
 # Code audit, 19 October 2026
 
 The user requested a codebase-wide bug check. This pass found and fixed numerical,

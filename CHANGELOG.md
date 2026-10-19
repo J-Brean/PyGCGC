@@ -6,6 +6,22 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Documentation reconciliation, 2026-10-19.**
+Added a documentation index, historical-record index and complete input-table reference.
+README, user guide, demo tour, architecture, benchmark instructions, roadmap and agent notes
+now agree on the eight-step route, guided anchor actions, tilted Gaussian default, saved
+components/ladders, source-data location, current theme and main-project export/provenance.
+The roadmap distinguishes implemented export from remaining rich-report work and the
+checked Python wheel from the untested Windows executable. Calibration filename amounts
+and tentative IS identities remain explicitly unconfirmed.
+
+Dated reports retain their measurements and test totals, with clear scope/supersession
+notes and a dated correction to the original calibration IS interpretation. Repaired
+13 broken local references, including links to unshipped local figures. The CSV examples
+parse through the native readers, all 13 target columns are documented, Python examples
+compile, and local file/heading links were checked. This was documentation-only; the latest
+software suite remains the 850-pass, 31-skip code audit below.
+
 **Codebase audit and regression fixes, 2026-10-19.**
 The previous full suite passed 722 tests, yet deterministic checks reproduced queued
 cancellation races, stale-result publication, stuck analysis controls, inconsistent
