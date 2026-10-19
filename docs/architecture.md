@@ -61,7 +61,7 @@ src/pygcgc/
     quantstate.py       🧪 state; align_state.py 📍; blob_state.py 🔍; hydrocarbon_state.py ⛓️;
     class_state.py      🧬; cluster_state.py 🧩; istd_state.py 🏷️ internal standards
     overlap_dialog.py   ✂️ pick a group or blob, 3D surface, splits, fits, MCR-ALS
-    fitting_help.py     local scripted 16-second explanation with matching 1D/2D contributions
+    fitting_help.py     local 16-second explanation: detector pulse train, cycle enlargement and folded 2D map
     calibration_setup.py  four-page transactional setup for named targets, runs, amounts and units
     standard_review.py  exceptions queue with candidate spectra and fitted-profile comparisons
     workflow_assistant.py  prerequisites, direct repair actions and freshness/completion guidance
@@ -119,8 +119,11 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
   settings reload while preserving newly saved explicit choices and existing reviewed fits.
   Manual GUI refits start with `OverlapSettings.model="tilt"`; low-level fit function defaults
   stay Gaussian for API compatibility. Changed core modules already invalidate result caches.
-- **Fitting help is illustrative.** Its Qt timer animates synthetic profiles and matching
-  projections/contours without running an optimiser or reading user data. It stops when hidden
+- **Fitting help is illustrative.** Its Qt timer animates synthetic profiles without running an optimiser or reading user data.
+  The detector trace unfolds the sampled 2D columns in time order, with 250 ms component
+  pulse FWHM and a 10 s illustrative modulation interval. Never substitute a first-dimension
+  projection for this trace. A shared cycle highlight links the trace, pulse enlargement and
+  map; fitted contours describe the same correlated Gaussian profiles. It stops when hidden
   or closed, follows the current palette, and reuses one modeless dialog per host.
 
 - **`pygcgc.core` never imports Qt.** All science goes there, is tested there, and is callable from scripts and the command line. The GUI only calls into it.

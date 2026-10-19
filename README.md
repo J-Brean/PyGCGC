@@ -66,7 +66,9 @@ peak detections are cached on local disk, so reopening does not recompute them. 
 
 **Peaks uses tilted Gaussian fitting by default**, including automatic selection of the number
 of overlapping components. Click **▶ How it works** in the Peaks panel or the manual refit
-dialog for a 16-second animation showing the same mixture in 1D and 2D, with pause and replay.
+dialog for a 16-second animation showing narrow detector-time pulses (250 ms in this example),
+a highlighted modulation cycle enlarged beside its 2D column, and the fitted contributions.
+Pause, seek and replay are available.
 The previous automatic default upgrades when old projects are loaded. Rerun **Find peaks**
 for new automatic fits; accepted manual fits remain overrides where their regions still match.
 Explicit alternative models remain available. Component intensities

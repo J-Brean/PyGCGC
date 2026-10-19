@@ -394,13 +394,18 @@ across modulation slices. The algorithm still chooses how many components the ev
 supports; selecting tilt does not force an extra peak. Other shapes remain available in
 the manual refit dialog and advanced detection settings.
 
-Click **▶ How it works** beside the fitting controls for a 16-second animation. The left
-plot shows a 1D projection and the right plot shows the same two synthetic peaks in 2D.
-Coloured curves and contours become separate contributions while the dashed sum approaches
-the observed signal. Pause, scrub the timeline or replay it. This is a scripted explanation,
-not a fit of your sample; opening it does not start or change an analysis.
+Click **▶ How it works** beside the fitting controls for a 16-second animation. The top
+plot shows the detector-time chromatogram: narrow pulses, with component widths of 250 ms
+at half height and a 10 s modulation interval in this synthetic example. These values
+illustrate the principle; they do not set your acquisition or fitting parameters. Each
+modulation cycle becomes one column of the 2D map, rather than being summed into a broad
+1D peak. A shared highlight follows a cycle through the trace and map; the lower-left plot
+enlarges its overlapping pulses against second retention time. Coloured curves and contours
+show separate contributions while the dashed sum approaches the observed signal. Pause,
+scrub the timeline or replay it. Motion is scripted, not a fit of your sample; opening it
+does not start or change an analysis.
 
-![Animated fitting explanation, paused at its final frame: the same synthetic mixture in 1D and 2D](images/screenshot_fitting_help.png)
+![Fitting explanation: narrow detector-time pulses above, with the highlighted cycle enlarged beside the 2D map](images/screenshot_fitting_help.png)
 
 On reopening an older project, the previous automatic Gaussian/adaptive default upgrades
 to tilt. Explicitly fixed alternative models are retained. Existing results are not rewritten

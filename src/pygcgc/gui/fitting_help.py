@@ -1,7 +1,8 @@
 """A small, local animation explaining joint multi-component peak fitting.
 
 This is a scripted illustration with synthetic peaks, not an optimiser trace or
-a chemical identification. Both views use the same profiles at every frame.
+a chemical identification. The detector trace, cycle enlargement and folded map
+use the same sampled profiles at every frame.
 """
 
 from __future__ import annotations
@@ -14,12 +15,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 class FittingHelpDialog(QtWidgets.QDialog):
     DURATION_MS = 16000
     CAPTIONS = (
-        ("1. One signal can hide overlapping peaks",
-         "The map shows two synthetic peaks added together. The 1D trace sums the same map "
-         "over the second retention time, so their overlap is harder to see."),
+        ("1. Narrow pulses repeat with each modulation",
+         "The detector records narrow pulses: components are 250 ms wide here, with bursts 10 s apart. "
+         "Stacking successive 10 s cycles gives the 2D map. The shaded cycle is enlarged below."),
         ("2. Propose separate contributions",
          "Ion-by-ion peak positions provide starting guesses. Blue and pink are proposed "
-         "components; orange is their sum plus the local background."),
+         "components; orange is their sum plus the local background. Follow the shaded cycle "
+         "between the detector trace, enlarged pulse and 2D map."),
         ("3. Fit positions, widths, tilt and spectra together",
          "Each component has independent widths and a non-negative mass spectrum. Tilt lets "
          "its second retention time drift across modulations. All selected ions constrain the fit."),
@@ -31,17 +33,24 @@ class FittingHelpDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("How overlapping peaks are fitted")
-        self.resize(940, 610)
-        self.setMinimumSize(700, 500)
+        self.resize(1040, 780)
+        self.setMinimumSize(780, 650)
         self.position_ms = 0
-        self._x = np.linspace(0, 80, 161)
-        self._y = np.linspace(0, 4, 101)
+        self._period = 10.
+        self._dt = .005
+        self._starts = np.arange(0., 80., self._period)
+        self._x = self._starts + self._period/2
+        self._y = np.arange(0., self._period, self._dt)
+        self._detector_time = (self._starts[:, None] + self._y).ravel()
         self._xx, self._yy = np.meshgrid(self._x, self._y)
         # (first time, second time, first width, second width, correlation, height)
-        self._truth = np.array([[35., 1.8, 9., .40, -.55, 1.],
-                                [45., 2.15, 6., .25, .45, .9]])
-        self._guess = np.array([[29., 1.6, 11., .50, 0., .7],
-                                [50., 2.4, 9., .40, 0., .6]])
+        # Conditional pulse FWHM = 2*sqrt(2*log(2))*sy*sqrt(1-rho**2).
+        # Set both true components to 250 ms within each modulation.
+        pulse_sigma = .250 / (2*np.sqrt(2*np.log(2)))
+        self._truth = np.array([[35., 1.8, 14., pulse_sigma/np.sqrt(1-.55**2), -.55, 1.],
+                                [45., 1.98, 12., pulse_sigma/np.sqrt(1-.45**2), .45, .9]])
+        self._guess = np.array([[29., 1.65, 17., .16, 0., .7],
+                                [50., 2.12, 15., .15, 0., .6]])
         self._observed = .025 + sum(self._profile(p) for p in self._truth)
 
         title = QtWidgets.QLabel("From an overlapping signal to separate contributions")
@@ -55,26 +64,39 @@ class FittingHelpDialog(QtWidgets.QDialog):
         self.caption.setWordWrap(True)
         self.caption.setMinimumHeight(62)
 
-        self.trace = pg.PlotWidget(title="1D: projection over the second retention time")
+        self.trace = pg.PlotWidget(title="1D: detector trace, narrow pulses every 10 s")
+        self.zoom = pg.PlotWidget(title="Selected cycle: resolve the overlapping pulses")
         self.map = pg.PlotWidget(title="2D: the same signal and fitted contours")
-        self.trace.setLabel("bottom", "First retention time (illustrative seconds)")
-        self.trace.setLabel("left", "Summed signal (arbitrary units)")
+        self.trace.setLabel("bottom", "Elapsed detector time (s)")
+        self.trace.setLabel("left", "Signal (a.u.)")
+        self.zoom.setLabel("bottom", "Second retention time within cycle (s)")
+        self.zoom.setLabel("left", "Signal (a.u.)")
         self.map.setLabel("bottom", "First retention time (illustrative seconds)")
         self.map.setLabel("left", "Second retention time (s)")
         self.trace.setXRange(0, 80, padding=0)
-        self.trace.setYRange(0, self._observed.sum(axis=0).max() * 1.25, padding=0)
-        self.map.setRange(xRange=(0, 80), yRange=(0, 4), padding=0)
-        for plot in (self.trace, self.map):
+        self.trace.setYRange(0, self._observed.max() * 1.25, padding=0)
+        self.zoom.setRange(xRange=(1.2, 2.6), yRange=(0, self._observed.max()*1.25), padding=0)
+        self.map.setRange(xRange=(0, 80), yRange=(1.2, 2.6), padding=0)
+        for plot in (self.trace, self.zoom, self.map):
             plot.setMenuEnabled(False)
             plot.hideButtons()
             plot.setMouseEnabled(x=False, y=False)
         self.image = pg.ImageItem(axisOrder="row-major")
         self.image.setImage(self._observed, autoLevels=False, levels=(0, self._observed.max()))
-        self.image.setRect(QtCore.QRectF(-.25, -.02, 80.5, 4.04))
+        self.image.setRect(QtCore.QRectF(0, -self._dt/2, 80, self._period))
         self.map.addItem(self.image)
-        self.observed_curve = self.trace.plot(self._x, self._observed.sum(axis=0))
+        self.observed_curve = self.trace.plot(self._detector_time, self._observed.T.ravel())
         self.sum_curve = self.trace.plot()
         self.component_curves = [self.trace.plot(), self.trace.plot()]
+        self.zoom_observed = self.zoom.plot()
+        self.zoom_sum = self.zoom.plot()
+        self.zoom_components = [self.zoom.plot(), self.zoom.plot()]
+        self.cycle_bands = []
+        for plot in (self.trace, self.map):
+            band = pg.LinearRegionItem(values=(30, 40), movable=False)
+            band.setZValue(5)
+            plot.addItem(band)
+            self.cycle_bands.append(band)
         self.contours = [[self.map.plot(), self.map.plot()] for _ in range(2)]
         self.key = QtWidgets.QLabel()
         self.key.setWordWrap(True)
@@ -99,12 +121,13 @@ class FittingHelpDialog(QtWidgets.QDialog):
         for widget in (self.play_button, self.replay_button, self.slider, self.time_label, close_button):
             controls.addWidget(widget, 1 if widget is self.slider else 0)
         plots = QtWidgets.QHBoxLayout()
-        plots.addWidget(self.trace, 1)
+        plots.addWidget(self.zoom, 1)
         plots.addWidget(self.map, 1)
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(title)
         layout.addWidget(self.heading)
         layout.addWidget(self.caption)
+        layout.addWidget(self.trace, 1)
         layout.addLayout(plots, 1)
         layout.addWidget(self.key)
         layout.addWidget(self.note)
@@ -128,17 +151,27 @@ class FittingHelpDialog(QtWidgets.QDialog):
         colours = ("#28d7e8", "#ff79c6") if dark else ("#007fa3", "#c02680")
         foreground = palette.color(QtGui.QPalette.ColorRole.WindowText)
         base = palette.color(QtGui.QPalette.ColorRole.Base)
-        for plot in (self.trace, self.map):
+        for plot in (self.trace, self.zoom, self.map):
             plot.setBackground(base)
             for axis in ("bottom", "left"):
                 plot.getAxis(axis).setPen(foreground)
                 plot.getAxis(axis).setTextPen(foreground)
-        self.trace.setTitle("1D: projection over the second retention time", color=foreground.name())
+        self.trace.setTitle("1D: detector trace, narrow pulses every 10 s", color=foreground.name())
+        self.zoom.setTitle(self.zoom.plotItem.titleLabel.text, color=foreground.name())
         self.map.setTitle("2D: the same signal and fitted contours", color=foreground.name())
         self.image.setColorMap(pg.ColorMap([0, 1], [base, foreground]))
         self.observed_curve.setPen(pg.mkPen(foreground, width=2))
+        self.zoom_observed.setPen(pg.mkPen(foreground, width=2))
         self.sum_curve.setPen(pg.mkPen("#e69824" if dark else "#a85b00", width=2,
                                       style=QtCore.Qt.PenStyle.DashLine))
+        self.zoom_sum.setPen(self.sum_curve.opts["pen"])
+        for curve, colour in zip(self.zoom_components, colours):
+            curve.setPen(pg.mkPen(colour, width=2.5))
+        for band in self.cycle_bands:
+            band.setBrush(pg.mkBrush(100, 140, 200, 35))
+            band.setHoverBrush(pg.mkBrush(100, 140, 200, 35))
+            for line in band.lines:
+                line.setPen(pg.mkPen(foreground, width=1, style=QtCore.Qt.PenStyle.DotLine))
         for colour, curve, contours in zip(colours, self.component_curves, self.contours):
             curve.setPen(pg.mkPen(colour, width=2.5))
             for i, contour in enumerate(contours):
@@ -152,7 +185,7 @@ class FittingHelpDialog(QtWidgets.QDialog):
             '2D contours: 10% (solid) and 50% (dotted) of each component\'s maximum; overlap is allowed.')
 
     def set_position(self, milliseconds: int) -> None:
-        """Draw matching projections and contours at a chosen illustration time."""
+        """Unfold the same sampled modulation columns into detector time."""
         self.position_ms = int(np.clip(milliseconds, 0, self.DURATION_MS))
         self.slider.blockSignals(True)
         self.slider.setValue(self.position_ms)
@@ -166,11 +199,28 @@ class FittingHelpDialog(QtWidgets.QDialog):
         fraction = fraction*fraction*(3-2*fraction)
         parameters = self._guess*(1-fraction) + self._truth*fraction
         profiles = [self._profile(p) for p in parameters]
-        self.sum_curve.setData(self._x, (.025 + sum(profiles)).sum(axis=0))
+        total = .025 + sum(profiles)
+        self.sum_curve.setData(self._detector_time, total.T.ravel())
         self.sum_curve.setVisible(stage > 0)
+        # Visit the central four cycles, then hold the strongest overlap for review.
+        self._selected_cycle = (2 + min(self.position_ms // 3000, 3)
+                                if self.position_ms < 12000 else 3)
+        selected = self._selected_cycle
+        start = self._starts[selected]
+        for band in self.cycle_bands:
+            band.setRegion((start, start + self._period))
+        foreground = QtWidgets.QApplication.palette().color(QtGui.QPalette.ColorRole.WindowText)
+        self.zoom.setTitle(f"Cycle {start:.0f}\u2013{start+self._period:.0f} s: enlarged pulses",
+                           color=foreground.name())
+        self.zoom_observed.setData(self._y, self._observed[:, selected])
+        self.zoom_sum.setData(self._y, total[:, selected])
+        self.zoom_sum.setVisible(stage > 0)
+        for curve, profile in zip(self.zoom_components, profiles):
+            curve.setData(self._y, profile[:, selected])
+            curve.setVisible(stage > 0)
         theta = np.linspace(0, 2*np.pi, 101)
         for p, profile, curve, contours in zip(parameters, profiles, self.component_curves, self.contours):
-            curve.setData(self._x, profile.sum(axis=0))
+            curve.setData(self._detector_time, profile.T.ravel())
             curve.setVisible(stage > 0)
             x, y, sx, sy, rho, _height = p
             for contour, level in zip(contours, (.10, .50)):

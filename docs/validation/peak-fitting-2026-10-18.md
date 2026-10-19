@@ -67,6 +67,21 @@ animation and end-to-end workflow modules passed **45 tests**. The animation tes
 cover matching 1D/2D profiles, playback, pause, seek, replay, end-of-clip behaviour,
 timer shutdown, window reuse, current themes and theme changes while open.
 
+### Animation correction, 19 October 2026
+
+The original explanation above used a second-time-summed projection as its 1D view.
+That matched the synthetic model mathematically but misrepresented the detector
+chromatogram. The corrected animation unfolds the sampled modulation columns into
+a detector-time pulse train, with 250 ms component FWHM and a 10 s example interval.
+A linked highlight and pulse enlargement show how cycles become 2D columns. New
+regressions measure pulse widths and spacing, verify scan-for-scan folding and
+check that enlarged observed/fitted contributions follow the highlighted column.
+This corrects the teaching display, without changing the fitting comparison.
+The animation, component-display and workflow modules passed **35 tests** with no
+failures. Start, fitting and final frames were inspected in light and dark themes;
+the guide screenshot was regenerated. The focused run is recorded in
+`real_data/peak_fitting/animation_correction.xml`.
+
 ## What was wrong
 
 1. The fast fitter shared both widths between neighbouring peaks. A narrow

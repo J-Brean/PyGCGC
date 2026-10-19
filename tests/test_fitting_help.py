@@ -45,10 +45,12 @@ def test_1d_and_2d_share_the_same_contributions_and_final_sum(qtbot):
     dialog.set_position(dialog.DURATION_MS)
     assert all(curve.isVisible() for curve in dialog.component_curves)
     x, total = dialog.sum_curve.getData()
-    np.testing.assert_allclose(x, dialog._x)
-    np.testing.assert_allclose(total, dialog.image.image.sum(axis=0))
+    np.testing.assert_allclose(x, dialog._detector_time)
+    # Folding the detector stream must recover the displayed map, scan for scan.
+    np.testing.assert_allclose(total.reshape(len(dialog._x), len(dialog._y)).T,
+                               dialog.image.image)
     contributions = sum(curve.getData()[1] for curve in dialog.component_curves)
-    np.testing.assert_allclose(contributions + .025*len(dialog._y), total)
+    np.testing.assert_allclose(contributions + .025, total)
     # Each 2D contour is an equal-height line on the same fitted Gaussian.
     for p, contours in zip(dialog._truth, dialog.contours):
         cx, cy, sx, sy, rho, _height = p
@@ -56,6 +58,42 @@ def test_1d_and_2d_share_the_same_contributions_and_final_sum(qtbot):
             x, y = curve.getData()
             dx, dy = (x-cx)/sx, (y-cy)/sy
             np.testing.assert_allclose(np.exp(-.5*(dx*dx+dy*dy-2*rho*dx*dy)/(1-rho*rho)), level)
+
+
+def test_detector_trace_has_250_ms_pulses_at_modulation_intervals(qtbot):
+    """A broad first-dimension envelope must never stand in for the raw trace."""
+    from scipy.signal import find_peaks, peak_widths
+    dialog = FittingHelpDialog()
+    qtbot.addWidget(dialog)
+    dialog.set_position(dialog.DURATION_MS)
+    for curve in dialog.component_curves:
+        time, signal = curve.getData()
+        peaks, _ = find_peaks(signal, height=.03)
+        assert len(peaks) >= 5
+        widths = peak_widths(signal, peaks, rel_height=.5)[0] * dialog._dt
+        np.testing.assert_allclose(widths, .250, atol=.001)
+        # Tilt moves the pulse slightly within each 10 s cycle.
+        np.testing.assert_allclose(np.diff(time[peaks]), 10., atol=.06)
+        assert np.all(np.diff(time) > 0)
+    assert "detector time" in dialog.trace.getAxis("bottom").labelText.lower()
+
+
+@pytest.mark.parametrize("position", [0, 4500, 9000, 16000])
+def test_highlight_and_enlargement_follow_the_same_modulation(qtbot, position):
+    dialog = FittingHelpDialog()
+    qtbot.addWidget(dialog)
+    dialog.set_position(position)
+    selected = dialog._selected_cycle
+    start = dialog._starts[selected]
+    for band in dialog.cycle_bands:
+        np.testing.assert_allclose(band.getRegion(), [start, start+10])
+    np.testing.assert_allclose(dialog.zoom_observed.getData()[1],
+                               dialog.image.image[:, selected])
+    full_sum = dialog.sum_curve.getData()[1].reshape(len(dialog._x), len(dialog._y))
+    np.testing.assert_allclose(dialog.zoom_sum.getData()[1], full_sum[selected])
+    for zoom, full in zip(dialog.zoom_components, dialog.component_curves):
+        np.testing.assert_allclose(zoom.getData()[1],
+                                   full.getData()[1].reshape(full_sum.shape)[selected])
 
 
 def test_peak_help_opens_without_finding_peaks_and_reuses_one_window(qtbot):
@@ -101,9 +139,11 @@ def test_help_uses_the_current_theme_without_replacing_it(qtbot, qapp, dark):
     dialog = FittingHelpDialog(host)
     qtbot.addWidget(dialog)
     dialog.show()
-    assert dialog.trace.backgroundBrush().color().name() == (DARK if dark else LIGHT)["base"].lower()
+    plots = (dialog.trace, dialog.zoom, dialog.map)
+    assert all(plot.backgroundBrush().color().name() == (DARK if dark else LIGHT)["base"].lower()
+               for plot in plots)
     assert qapp.styleSheet() == stylesheet
     apply_theme(host, not dark)
-    qtbot.waitUntil(lambda: dialog.trace.backgroundBrush().color().name()
-                   == (LIGHT if dark else DARK)["base"].lower())
+    qtbot.waitUntil(lambda: all(plot.backgroundBrush().color().name()
+                               == (LIGHT if dark else DARK)["base"].lower() for plot in plots))
     dialog.close()

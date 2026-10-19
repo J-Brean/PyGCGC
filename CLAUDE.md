@@ -38,7 +38,8 @@ manual fits are reapplied after detection when their saved region geometry still
 they need an explicit manual refit to adopt tilt.
 Manual refits also start with tilt; low-level fitting APIs keep their Gaussian defaults for
 script compatibility. The local, scripted 1D/2D explanation is `gui/fitting_help.py`; it must
-not start fitting jobs or leave a timer running when hidden.
+not start fitting jobs or leave a timer running when hidden. Its 1D chromatogram must be
+an unfolded detector pulse train, never a summed first-dimension projection.
 
 The four workflow priorities are now implemented. `gui/calibration_setup.py` is a draft-only
 wizard until Apply; `core/calibration_inputs.py` validates amounts and treats ambiguous filename

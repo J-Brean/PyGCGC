@@ -6,6 +6,17 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Correct detector-time fitting animation, 2026-10-19.**
+Replaced the misleading broad 1D projection with an unfolded detector trace: 250 ms
+component pulses repeated at a 10 s illustrative modulation interval. A moving cycle
+highlight links the pulse train to a magnified within-cycle trace and its 2D column.
+All three views use the same sampled profiles, including fitted component contributions.
+Playback, seeking, themes and timer shutdown remain available. The guide and screenshot
+now explain this folding relationship. This changes the explanation only; production
+fitting and acquisition settings are unchanged.
+The animation, component-display and workflow checks passed **35 tests**. Light/dark
+screenshots at the start, fitting stage and final frame were inspected.
+
 **Guided calibration, exceptions review, prerequisites and fitting previews, 2026-10-18.**
 All four workflow priorities are implemented. A transactional four-page setup connects
 named compounds, quantifier/qualifier ions, internal standards, run types, calibration
