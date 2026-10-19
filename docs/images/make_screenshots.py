@@ -127,16 +127,25 @@ def main():
     shot("screenshot_runs")
 
     # ----------------------------------------------------------------- 2 align
-    # The reference is a mid-sequence standard; five internal standards and three alkanes are
-    # clicked on the urban sample, then found on every other run.
+    # Follow the guided picker across all runs for each point, then refine the clicks.
     w.workflow.show_step("align")
     w.set_reference("CAL_L3_20ng")
     # Perylene-d12 wraps past the end of the modulation, so it is not clicked.
     anchors = [(c, ion) for c, ion in ISTDS.values() if c != "perylene-d12"] + [("n-C14", 57), ("n-C20", 57), ("n-C26", 57)]
-    for k, (compound, ion) in enumerate(anchors):
-        (r1, r2), (s1, s2) = truth[("CAL_L3_20ng", compound)], truth[(URBAN, compound)]
-        w.align.add_anchor(URBAN, w.align.next_anchor_name(), r1, r2, s1, s2, ion)
-    w.propagate_anchors()
+    for compound, ion in anchors:
+        w.set_ion_expression(str(ion))
+        if w._anchor_stage is None:
+            w.start_add_anchor()
+        for _ in w.project.loaded():
+            run = w.project.entries[w.index].name
+            wait(lambda: w.view2d.result.name == run and w.view2d.result.expr == w.renderer.expr
+                 and not w.view2d.result.aligned, what=f"{run} anchor image")
+            t1, t2 = truth[(run, compound)]
+            f = w.project.fold(w.index)
+            col = int((t1-f.t1[0]) // f.spec.period)
+            w._point_clicked(col, t2+.04)
+    w.cancel_pick()
+    w.refine_anchors()
     idle()
     show(URBAN)
     spectrum_of(URBAN, "phenanthrene-d10")

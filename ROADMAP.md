@@ -64,7 +64,8 @@ These block validation, not development.
   blobs are back; settings and decisions are saved).
 - **Blank subtraction** reads the blank through the alignment, but is unchecked on real data, is
   not redone when an alignment changes, is not cached, and is absent from 🗂️ batch and the CLI.
-- **📍 alignment** is unchecked on real drift; clicks do not snap to a peak's centroid; batch
+- **📍 alignment** is unchecked on real drift. Guided clicks now cycle through every loaded
+  run, with bounded intensity-maximum refinement; intensity-weighted centroids remain unbuilt. Batch
   anchor-finding matches each anchor independently rather than by assignment across every peak.
 - **🔍 legacy co-elution flag** (single-linkage on each ion's apex) has never been checked against
   a real co-eluting pair.

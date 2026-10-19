@@ -39,7 +39,7 @@ src/pygcgc/
     quant.py            targets across a sequence, learned positions and qualifier ratios, bracketing, all signals, IS table
     targets.py          target table and calibration levels
     istd.py             🏷️ internal-standard library, click-labelled references, cross-run matching, to target rows
-    align.py            anchor fitting (shift/affine/smooth), cross-validation, propagation, resampling
+    align.py            anchor fitting, bounded maximum refinement, cross-validation, propagation, resampling
     hydrocarbons.py     ⛓️ n-alkane ladder, homologous series, group-type stencils, markers
     identify.py         🏷️ MSP import/export, weighted dot-product search, target-decoy confidence
     chemclass.py        🧬 compound classes from blob spectra: TOML rules, fuzzy criteria, 14 eV soft features
@@ -125,6 +125,24 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
   projection for this trace. A shared cycle highlight links the trace, pulse enlargement and
   map; fitted contours describe the same correlated Gaussian profiles. It stops when hidden
   or closed, follows the current palette, and reuses one modeless dialog per host.
+
+- **Anchor picking visits the whole sequence.** The primary Align action starts on the
+  reference, stores its click immediately, visits each other loaded run in sequence order
+  and returns to the reference for the next named point. Reference clicks are identity
+  `AnchorPoint` rows in `AlignState.points[reference]`, using the existing project schema.
+  The shared table contains all runs, while residual diagnostics follow the current run.
+  Missing peaks can be skipped. Esc, manual navigation and input changes finish picking
+  without deleting completed clicks. Raw-coordinate picking rejects stale or aligned renders.
+  Anchor overlays are independent of quantitative and standard overlays.
+- **Anchor refinement is bounded and transactional.** `core.align.refine_anchor_position`
+  searches finite positive intensity pixels within ±1 modulation and ±0.150 s by default,
+  using adjacent columns at wrap boundaries. Equal maxima favour the closest pixel; flat or
+  unsupported neighbourhoods return no replacement. The GUI job uses each saved ion or TIC
+  on the captured current layer, refines reference coordinates once per name and recomputes
+  transforms in one undoable edit. Input revision changes discard late results. Legacy
+  target-only anchor pairs supply reference positions when explicit reference rows are absent.
+  Search limits, automatic propagation and transform diagnostics sit in a collapsible section;
+  the panel scrolls, and the primary action changes its label while picking.
 
 - **`pygcgc.core` never imports Qt.** All science goes there, is tested there, and is callable from scripts and the command line. The GUI only calls into it.
 - **The GUI thread only draws and handles input.** Anything slow is a job: `gui/jobs.JobManager.submit(name, fn(token, progress), on_done, on_error, latest_key=None, quiet=False)`.

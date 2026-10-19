@@ -53,10 +53,14 @@ internal standards in `target_table.csv` as the runs load. Work along the number
 1. **🔄 Fold.** Select the diesel sample. The fold panel says the phase came from five anchors.
    Drag the phase slider to see a wrong phase split the peaks across the top and bottom edges,
    then Ctrl+Z.
-2. **📍 Align.** Set the reference to `CAL_L3_20ng`. Select the urban sample, press ➕ Add
-   anchor (A) and click the same peak on the reference and on the sample (phenanthrene-d10 at
-   about 22 min, 4.0 s, is easy); add four or five spread across the run. 📍 Auto-find on all
-   runs finds them elsewhere. The Compare tab (5) blinks, overlays or subtracts the runs.
+2. **📍 Align.** Set the reference to `CAL_L3_20ng`, choose one ion or TIC and press
+   **Pick anchors across runs** (A). Click a peak on the reference, then on each run as the
+   view advances (phenanthrene-d10 on m/z 188 at about 22 min, 4.0 s, is easy). After the last
+   run it returns to the reference for the next point. Collect four or five spread across
+   the run, skipping missing peaks. Finish with Esc, then use **Refine anchors to local maxima**
+   to adjust the clicks within ±1 modulation and ±0.150 s in t2. Search limits, transform
+   settings and optional **Auto-find on all runs** are under **More alignment options**.
+   The Compare tab (5) blinks, overlays or subtracts the runs.
 3. **🧹 Background.** Press ▶ Remove background. Type `73` in the Ion box, select the wood-smoke
    sample, zoom on 33 to 36 min and tick *Before / after split*: behenic acid stands out of the
    bleed once it is removed. Space toggles raw and cleaned; S/N shows signal-to-noise.

@@ -338,20 +338,27 @@ recognised four internal standards ([report](validation/calibration-standards-20
 
 Retention drifts a little from run to run: a few seconds in t1, a few hundredths of a second in t2. Alignment fits a map from one run's true coordinates onto a chosen reference run's, so images can be resampled onto the same grid and compared pixel for pixel.
 
-**Picking a reference.** In the 📍 Align panel, choose the run everything else will be aligned to (a calibration run in the middle of the sequence is a reasonable default). The reference is always shown as itself, never resampled.
+**Picking a reference.** In the 📍 Align panel, choose the run everything else will be aligned to, or press **Pick anchors across runs** to use the first loaded run. The reference is always shown as itself, never resampled.
 
-![Step 2: seven anchors on the urban sample against the reference CAL_L3_20ng, with their residuals](images/screenshot_align.png)
+![Guided anchor collection on the small synthetic workflow fixture: saved points remain in the shared table while the reference prompts for the next anchor](images/screenshot_align.png)
 
-**Anchors, by hand.** ➕ Add anchor (A) starts a two-click flow: the view switches to the reference run for you to click a peak, then to the target run to click the same peak, and the pair is recorded. Add a few (spread across the run) and a transform is fitted automatically:
+**Anchors, by hand.** Press **Pick anchors across runs** (or **A**) and use TIC or a single ion. Click a peak on the reference: it is recorded as P1 immediately, and the view advances to the next loaded chromatogram. Click the same peak there, then on each remaining run in sequence. A shared table keeps every recorded position visible, with the current run's rows in bold; labelled crosses mark saved clicks on the image. Keep the same ion throughout an anchor's round.
+
+After the last run, the view returns to the reference and prompts for a new peak, P2. Repeat with points spread across retention time. **Skip peak in this run** advances past a missing peak without inventing a match. **Finish picking**, **A** or **Esc** ends collection and keeps the points already recorded. Manually switching runs, leaving Align or changing the input data also finishes collection. Picking uses the run's own coordinates, so aligned display is off during collection.
+
+A transform is fitted as points arrive:
+
 - **1 anchor:** a plain shift in t1 and t2.
 - **3 or more:** a straight stretch and shift in t1, plus a t2 offset that can itself vary linearly with t1 (useful when the second dimension drifts differently early and late in the run). Both fits are Huber-weighted, so one bad click doesn't wreck the rest.
 - **6 or more:** a smooth curve instead of a straight line — a monotone cubic through the t1 anchors and a smoothing spline for the t2 offset.
 
-Auto (the default) picks the simplest tier that already fits the anchors well; you can force a tier with the Transform dropdown. If a run's anchors come out in a different order than the reference's, no honest time correction passes through them; the transform is flagged rather than trusted, and the panel explains why.
+Auto (the default) picks the simplest tier that already fits the anchors well; you can force a tier with the Transform dropdown under **More alignment options**. If a run's anchors come out in a different order than the reference's, no honest time correction passes through them; the transform is flagged rather than trusted, and the panel explains why.
 
-**Anchors, in bulk.** 📍 Auto-find on all runs searches every other loaded run for the anchors you've already named (by ion, within a window around the reference position, the same search phase estimation uses) and builds a transform for each. Missing ones are reported rather than silently skipped.
+**Refine the clicks.** Finish picking, then press **Refine anchors to local maxima**. Every saved anchor, including its reference position, moves to the brightest finite positive pixel in a small neighbourhood on its saved ion (or TIC). The default search is ±1 modulation in t1 and ±0.150 s in t2. Change these limits under **More alignment options**; set the modulation limit to 0 to refine within the clicked column only. The search uses the currently selected raw or processed layer and follows wrapped peaks across modulation boundaries. Flat or non-positive neighbourhoods are reported and kept unchanged. Equal maxima favour the nearest pixel. Reference positions are refined once and shared across all matching rows; transforms and labelled crosses update together. **Ctrl+Z** restores the entire refinement in one action. This finds an intensity maximum rather than an intensity-weighted centroid.
 
-**How good is it?** The panel's residual plot and summary give leave-one-out error in seconds: each anchor is predicted from the others and compared to where it was actually clicked, which is a more honest number than how well the curve fits the points it was built from.
+**Anchors, in bulk.** Under **More alignment options**, 📍 Auto-find on all runs searches every other loaded run for the anchors you've already named (by ion, within a window around the reference position, the same search phase estimation uses) and builds a transform for each. Missing ones are reported rather than silently skipped. This is a broader search for corresponding peaks; local refinement only adjusts existing clicks and also supports TIC anchors.
+
+**How good is it?** The summary gives leave-one-out error in seconds: each anchor is predicted from the others and compared to where it was actually clicked, which is a more honest number than how well the curve fits the points it was built from. The compact table shows anchor, run and its t1/t2 positions; hover for the full run name and coordinate pair. **More alignment options** reveals reference-coordinate and in-sample residual columns, plus a plot of t1 residuals and t2 residuals multiplied by ten.
 
 **Seeing it.** 📍 Show aligned (in the panel, or the toolbar) resamples the current run onto the reference's grid in the 2D and 1D views, so the ion box, colour scale and everything else keep working as normal, just on the reference's axes.
 
@@ -361,11 +368,11 @@ Auto (the default) picks the simplest tier that already fits the anchors well; y
 - **Difference** shows the reference minus the current run, scaled by the median ratio of their brightest shared pixels (a brightness match, not a concentration ratio), on a diverging colour scale.
 - **Overlay** puts the reference in magenta and the current run in green, so shared peaks look white and differences show colour.
 
-**Undo.** Every anchor added, removed or cleared, and every reference or transform-kind change, is undoable.
+**Undo.** Every anchor added, removed or cleared, every refinement, and every reference or transform-kind change, is undoable. Removal acts on the selected table row, even when another run is displayed. Removing a reference row removes that anchor's matching rows across all runs as one undoable edit. Completed clicks, including reference-only points, are saved in the project; an unfinished picking session itself is not resumed on reopening.
 
 ![Compare tab: the urban sample in green overlaid on the reference CAL_L3_20ng in magenta, aligned on seven anchors](images/screenshot_align_overlay.png)
 
-**Not built:** clicks don't yet snap to a peak's intensity-weighted centre (click precisely, or zoom in first); the batch search matches anchors independently rather than with a full Hungarian-plus-RANSAC pass across every blob; and there's no small-multiples gallery of one target across every run yet. These are candidates for the milestone 11 batch upgrade once real data show whether they're worth it.
+**Not built:** intensity-weighted centroid refinement; the batch search still matches anchors independently rather than with a full Hungarian-plus-RANSAC pass across every blob; and there is no small-multiples gallery of one target across every run yet.
 
 ### 🔍 Peak detection and separation
 
@@ -736,7 +743,7 @@ The project saves itself beside the runs (`project.pygcgc.json`) and offers to r
 | Space | raw / cleaned |
 | O | 🧪 peak overlay |
 | 3 / 4 / 5 | 🧪 Review / Calibration / 📍 Compare |
-| A | 📍 add anchor (click reference, then the target run) |
+| A | 📍 start or finish guided anchor picking across all loaded runs |
 | B | jump to Compare in blink mode |
 | G | 🔍 merge the selected blobs |
 | Y / N / U | accept / reject / clear (Review and Results) |

@@ -12,8 +12,8 @@ FT04/SD04 `.lsc` files (including tandem 70/14 eV acquisitions) and ANDI (AIA) `
 | ![Calibration](docs/images/screenshot_calibration.png) calibration curves | ![Classes](docs/images/screenshot_classify.png) compound classes | ![Clusters](docs/images/screenshot_cluster.png) spectral clusters |
 | ![Calibrate window](docs/images/screenshot_calibrate_curves.png) 📈 calibration builder | ![Compare](docs/images/screenshot_align_overlay.png) alignment overlay | ![Batch](docs/images/screenshot_batch.png) batch PCA |
 
-Every screenshot is of the synthetic [demonstration data](examples/demo_data/README.md) and is
-described in the [user guide](docs/user-guide.md).
+Screenshots use the synthetic [demonstration data](examples/demo_data/README.md) and smaller
+workflow test fixtures. Each view is described in the [user guide](docs/user-guide.md).
 
 ## Status
 
@@ -26,7 +26,7 @@ right-hand column says what has been checked on real runs; the details are in
 |---|---|---|
 | Read | native `.lsc` (70 eV, 14 eV, vendor DBC) and ANDI | Decodes every scan of the supplied files in 1 to 3 s each; vendor comparison of spectra and times still pending |
 | 1 Load | native or ANDI data; automatic period and phase, with manual checks under Load | Period found unaided on four runs (8.0000 s, as set in the method); anchor-free phase within 0.2 s of the hand-set value |
-| 2 📍 Align | anchors, shift/affine/smooth transforms, compare modes | Not yet checked on real drift |
+| 2 📍 Align | guided anchor collection across runs, local-maximum refinement, shift/affine/smooth transforms, compare modes | Not yet checked on real drift; bounded refinement checked on four native calibration runs |
 | 3 🧹 Background | bleed, stripes, spikes, noise map, blank subtraction | Used on every real run; blank subtraction unchecked |
 | 4 🔍 Peaks | MS-aware overlapping tilted Gaussian components (default) or legacy blobs | Independent widths and tilt; eight methods compared on 32 real windows, plus known-area recovery in measured backgrounds. See the [fitting check](docs/validation/peak-fitting-2026-10-18.md) |
 | 4a 🫧 Siloxane filterer (in Peaks) | score blobs against bleed and cyclic references; block their siloxane ions, or fit per pixel | Defaults chosen on two runs: every siloxane-like blob caught, none of the hydrocarbon signal removed |
@@ -63,6 +63,14 @@ type and calibration level in the Runs table (or with a `sequence.csv`). The pro
 beside the runs (`project.pygcgc.json`) and offers to resume next time; background layers and
 peak detections are cached on local disk, so reopening does not recompute them. The
 [user guide](docs/user-guide.md) covers every step.
+
+**Align collects one anchor across the sequence at a time.** Press **Pick anchors across
+runs**, click the peak on the reference and then on each chromatogram as the view advances.
+After the last run, it returns to the reference for the next point. The shared table keeps
+the clicks visible; skip missing peaks or finish with Esc. **Refine anchors to local maxima**
+then adjusts the saved points on their original ion or TIC, including the reference, in one
+undoable action. Search limits (default ±1 modulation and ±0.150 s in t2) and transform
+diagnostics are under **More alignment options**.
 
 **Peaks uses tilted Gaussian fitting by default**, including automatic selection of the number
 of overlapping components. Click **▶ How it works** in the Peaks panel or the manual refit

@@ -6,6 +6,27 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Guided anchor collection and bounded refinement, 2026-10-19.**
+Align now records a reference click immediately, visits every other loaded chromatogram
+for the same named anchor, then returns to the reference and prompts for the next point.
+The shared table retains all runs' clicks; labelled crosses show saved positions.
+Skip missing peaks or finish with Esc. The first loaded run is the default reference.
+Picking uses original run coordinates, rejects stale renders, and ends safely on manual
+navigation or input changes. Saved reference rows use the existing project format.
+
+**Refine anchors to local maxima** adjusts saved reference and target positions on their
+recorded ion or TIC and current processing layer. Its bounded search defaults to ±1
+modulation and ±0.150 s, handles wrapped peaks and keeps unsupported neighbourhoods
+unchanged. Reference updates are shared across pairs; the whole operation is undoable.
+Cancellation, failure and changed inputs cannot apply a late result. The primary button
+switches to Finish picking; limits, propagation and transform diagnostics are under
+More alignment options. Reference selection now follows undo correctly. The panel scrolls
+instead of compressing controls, and residual plots follow the current theme.
+The full suite passed 720 tests with 31 skips; final GUI/workflow and anchor runs
+passed 40 and 15 checks respectively. Bounded refinement increased the selected
+pixel intensity on all four native calibration runs in a read-only smoke check.
+See [the anchor workflow check](docs/validation/anchor-workflow-2026-10-19.md).
+
 **Correct detector-time fitting animation, 2026-10-19.**
 Replaced the misleading broad 1D projection with an unfolded detector trace: 250 ms
 component pulses repeated at a 10 s illustrative modulation interval. A moving cycle

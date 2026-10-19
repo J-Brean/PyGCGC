@@ -57,6 +57,18 @@ Fusion style is selected once per QApplication; colour switches must not recreat
 an equivalent resolved font. Candidate-plot redraws after palette changes are deferred until
 Qt repolishing finishes. Visual QA reproduced a native Windows crash without these guards.
 
+Alignment's primary action now collects one anchor across all loaded runs, returns to the
+reference and prompts for the next. Reference clicks are stored as identity AnchorPoints
+in `AlignState.points[reference]`; legacy projects with target-only pairs still load.
+The table shows all runs. Esc ends picking but keeps clicks; missing peaks can be skipped.
+Picking must use unaligned images and reject clicks on a previous run's pending render.
+`core.align.refine_anchor_position` searches a bounded intensity maximum, not a centroid;
+defaults are ±1 modulation and ±0.150 s in t2. Wrapped rows come from adjacent columns.
+`AlignState.refine_all` runs on saved ions/TIC and the current layer in a cancellable job,
+updates each reference position once, and rejects results after input edits. Apply as one
+undoable edit. Main picking/refinement stay visible; search limits and transform diagnostics
+are under More alignment options. The panel scrolls rather than squeezing the anchor table.
+
 | | |
 |---|---|
 | `src/pygcgc/core/` | all the science, no Qt; one module per method, each opening with an explanation |
