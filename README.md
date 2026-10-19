@@ -71,6 +71,9 @@ the clicks visible; skip missing peaks or finish with Esc. **Refine anchors to l
 then adjusts the saved points on their original ion or TIC, including the reference, in one
 undoable action. Search limits (default ±1 modulation and ±0.150 s in t2) and transform
 diagnostics are under **More alignment options**.
+Visible **Add points**, **Delete selected points** and **Start alignment over** buttons
+let you extend, edit or restart alignment. Deletion and restarting are undoable; restarting
+keeps the reference and returns to P1.
 
 **Peaks uses tilted Gaussian fitting by default**, including automatic selection of the number
 of overlapping components. Click **▶ How it works** in the Peaks panel or the manual refit

@@ -346,6 +346,14 @@ Retention drifts a little from run to run: a few seconds in t1, a few hundredths
 
 After the last run, the view returns to the reference and prompts for a new peak, P2. Repeat with points spread across retention time. **Skip peak in this run** advances past a missing peak without inventing a match. **Finish picking**, **A** or **Esc** ends collection and keeps the points already recorded. Manually switching runs, leaving Align or changing the input data also finishes collection. Picking uses the run's own coordinates, so aligned display is off during collection.
 
+**Add, delete or start again.** The visible **Add points (A)** button starts the same guided
+picker; while picking, it becomes **Finish picking (Esc)**. Select one or more table rows
+and press **Delete selected points** to remove them in a single undoable action. Deleting
+a reference row also deletes its matching points across the runs. **Start alignment over**
+clears all alignment points, transforms and transform overrides, keeps your chosen reference,
+and returns to it ready to pick P1 again. It also clears the old completion banner.
+**Ctrl+Z** restores the previous alignment. These controls are outside More alignment options.
+
 A transform is fitted as points arrive:
 
 - **1 anchor:** a plain shift in t1 and t2.

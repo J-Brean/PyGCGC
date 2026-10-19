@@ -55,7 +55,7 @@ def test_two_anchor_rounds_start_on_first_run_and_keep_a_shared_table(qtbot, win
     assert w.align.reference is None
     w.go("align")
     assert w.align.reference == "RUN_A" and w._anchor_stage == "ref"
-    assert w.align_panel.add_btn.isHidden()  # one primary action in the real workflow
+    assert w.align_panel.add_btn.isVisibleTo(w.workflow)
     assert "Finish picking" in w.workflow.go_btn.text()
     for anchor in ("P1", "P2"):
         assert w._anchor_pending["name"] == anchor
@@ -182,6 +182,40 @@ def seed_offset_clicks(w, *, reference_row=True):
     target = positions["RUN_B"]
     w.align.add_anchor("RUN_B", "P1", ref[0], ref[1]+.1, target[0], target[1]-.1, 50)
     return positions
+
+
+def test_visible_add_delete_and_restart_controls_are_undoable(qtbot, window):
+    from PySide6 import QtCore
+    w = window
+    w.workflow.show_step("align")
+    panel = w.align_panel
+    assert panel.add_btn.isVisibleTo(w.workflow) and panel.delete_btn.isVisibleTo(w.workflow)
+    assert panel.restart_btn.isVisibleTo(w.workflow) and not panel.delete_btn.isEnabled()
+    qtbot.mouseClick(panel.add_btn, QtCore.Qt.MouseButton.LeftButton)
+    click_peak(qtbot, w)
+    click_peak(qtbot, w)
+    w.cancel_pick()
+    before = w.align.snapshot()
+    panel.table.selectAll()
+    count = w.undo.count()
+    qtbot.mouseClick(panel.delete_btn, QtCore.Qt.MouseButton.LeftButton)
+    assert not w.align.points and w.undo.count() == count+1
+    w.undo.undo()
+    assert w.align.snapshot() == before
+    w.align.set_kind("RUN_B", "shift")
+    before = w.align.snapshot()
+    w.workflow.mark_done("align", "Old completion")
+    count = w.undo.index()
+    qtbot.mouseClick(panel.restart_btn, QtCore.Qt.MouseButton.LeftButton)
+    assert not w.align.points and not w.align.kind and not w.align.transforms
+    assert w.align.reference == "RUN_A" and w._anchor_pending["name"] == "P1"
+    assert w._anchor_stage == "ref" and w.index == w.project.index_of("RUN_A")
+    assert not w.workflow.is_done("align") and not w.workflow.banner.isVisible()
+    assert w.undo.index() == count+1
+    w.undo.undo()
+    assert w.align.snapshot() == before and w._anchor_stage is None
+    w.undo.redo()
+    assert not w.align.points and not w.align.kind
 
 
 @pytest.mark.parametrize("reference_row", [True, False])

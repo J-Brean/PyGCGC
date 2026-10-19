@@ -6,6 +6,15 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Visible alignment point controls, 2026-10-19.**
+Added visible Add points, Delete selected points and Start alignment over buttons.
+Deletion supports multiple table rows in one undoable edit. Restart keeps the chosen
+reference, clears all points and transform overrides, cancels pending propagation and
+returns to P1. Undo restores the previous alignment and stops the new picking session.
+These controls sit outside the advanced options; docs and the alignment screenshot were updated.
+All 40 affected anchor, alignment and workflow checks passed, including mouse-driven
+multi-row deletion, restart and undo/redo restoration.
+
 **Guided anchor collection and bounded refinement, 2026-10-19.**
 Align now records a reference click immediately, visits every other loaded chromatogram
 for the same named anchor, then returns to the reference and prompts for the next point.

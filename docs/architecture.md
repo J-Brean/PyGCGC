@@ -143,6 +143,11 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
   target-only anchor pairs supply reference positions when explicit reference rows are absent.
   Search limits, automatic propagation and transform diagnostics sit in a collapsible section;
   the panel scrolls, and the primary action changes its label while picking.
+  Add points, multi-row deletion and Start alignment over remain visible outside the
+  collapsible options. Deletion applies one snapshot edit; reference-row deletion removes
+  matching pairs. Restart clears points and transform overrides, keeps the reference,
+  clears completion, cancels pending propagation and resumes at P1. Undo restores the old
+  alignment and stops the new picking session before it can overwrite restored points.
 
 - **`pygcgc.core` never imports Qt.** All science goes there, is tested there, and is callable from scripts and the command line. The GUI only calls into it.
 - **The GUI thread only draws and handles input.** Anything slow is a job: `gui/jobs.JobManager.submit(name, fn(token, progress), on_done, on_error, latest_key=None, quiet=False)`.

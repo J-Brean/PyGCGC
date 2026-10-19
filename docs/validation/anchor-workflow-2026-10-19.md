@@ -32,6 +32,12 @@ clicks on the plot, Skip, Finish and Refine controls, plus compact-table options
 Logs and JUnit reports are in `real_data/anchor_workflow/full_suite.*`,
 `final_gui_checks.xml` and `final_anchor_checks.xml`.
 
+The subsequent visible point-controls change passed **40 affected GUI/workflow
+checks**, recorded in `real_data/anchor_workflow/point_controls.xml`. Mouse-driven
+checks cover Add points, multi-row deletion as one undo action, restarting at P1
+while retaining the reference, clearing transform overrides and completion, and
+undo/redo restoring the old alignment without leaving a conflicting picker active.
+
 - Core regressions check search bounds, ties, repeated refinement, unsupported
   pixels, wrap continuity, acquisition edges and invalid limits.
 - GUI regressions follow two complete anchor rounds, automatic first-reference

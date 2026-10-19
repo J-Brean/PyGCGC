@@ -16,7 +16,8 @@ KIND_LABELS = [("Auto", "auto"), ("Shift", "shift"), ("Affine", "affine"), ("Smo
 class AlignPanel(QtWidgets.QWidget):
     referenceChanged = QtCore.Signal(str)              # run name, or "" for none
     addAnchorRequested = QtCore.Signal()
-    removeAnchorRequested = QtCore.Signal(str, str)     # anchor name, run
+    removeAnchorRequested = QtCore.Signal(object)     # selected (anchor name, run) pairs
+    restartRequested = QtCore.Signal()
     skipAnchorRequested = QtCore.Signal()
     refineRequested = QtCore.Signal()
     clearRunRequested = QtCore.Signal()
@@ -35,7 +36,7 @@ class AlignPanel(QtWidgets.QWidget):
         self.reference.setToolTip("Every other run is aligned to this one")
         self.reference.currentIndexChanged.connect(self._reference_changed)
 
-        self.add_btn = QtWidgets.QPushButton("Pick anchors across runs (A)")
+        self.add_btn = QtWidgets.QPushButton("Add points (A)")
         self.add_btn.setToolTip("Click on the reference, then every loaded run; repeat for the next anchor")
         self.add_btn.clicked.connect(self.addAnchorRequested)
         self.skip_btn = QtWidgets.QPushButton("Skip peak in this run")
@@ -80,9 +81,13 @@ class AlignPanel(QtWidgets.QWidget):
         self.table.setColumnWidth(1, 100)
         for column in (2, 3, 6):
             self.table.setColumnHidden(column, True)
-        remove_row = QtWidgets.QPushButton("Remove selected anchor")
+        remove_row = self.delete_btn = QtWidgets.QPushButton("Delete selected points")
         remove_row.setToolTip("Remove the selected table row. A reference row removes its matching points on every run.")
         remove_row.clicked.connect(self._remove_selected)
+        self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.restart_btn = QtWidgets.QPushButton("Start alignment over")
+        self.restart_btn.setToolTip("Clear all alignment points and transform overrides, keep the reference, and begin again at P1. Undo restores the previous alignment.")
+        self.restart_btn.clicked.connect(self.restartRequested)
 
         self.summary = QtWidgets.QLabel("No reference set yet")
         self.summary.setWordWrap(True)
@@ -113,6 +118,8 @@ class AlignPanel(QtWidgets.QWidget):
         lay.addWidget(self.pick_status)
         lay.addWidget(self.skip_btn)
         lay.addWidget(self.table, 1)
+        lay.addWidget(self.delete_btn)
+        lay.addWidget(self.restart_btn)
         lay.addWidget(self.summary)
         lay.addWidget(self.refine_btn)
         lay.addWidget(self.show_aligned)
@@ -130,7 +137,6 @@ class AlignPanel(QtWidgets.QWidget):
         limits.addRow("Transform", self.kind)
         details.addLayout(limits)
         details.addWidget(self.propagate_btn)
-        details.addWidget(remove_row)
         details.addWidget(self.clear_btn)
         details.addWidget(self.resid_plot)
         self.details.hide()
@@ -175,7 +181,7 @@ class AlignPanel(QtWidgets.QWidget):
     def set_picking(self, message: str = "", can_skip: bool = False) -> None:
         self._picking = bool(message)
         self.pick_status.setText(message or "Start picking to visit each chromatogram in turn. Esc finishes.")
-        self.add_btn.setText("Finish picking (Esc)" if message else "Pick anchors across runs (A)")
+        self.add_btn.setText("Finish picking (Esc)" if message else "Add points (A)")
         self.skip_btn.setVisible(bool(message) and can_skip)
         self.refresh()
 
@@ -185,6 +191,8 @@ class AlignPanel(QtWidgets.QWidget):
             return
         is_ref = self.current_run is not None and self.current_run == a.reference
         self.add_btn.setEnabled(self.current_run is not None and not a.refining)
+        self.restart_btn.setEnabled(bool(any(a.points.values()) or a.kind or self._picking) and not a.refining)
+        self._selection_changed()
         self.reference.setEnabled(not self._picking and not a.refining)
         self.refine_btn.setEnabled(bool(a.reference and any(a.points.values())) and not a.refining and not self._picking)
         self.refine_btn.setText("Refining anchors..." if a.refining else "Refine anchors to local maxima")
@@ -243,7 +251,10 @@ class AlignPanel(QtWidgets.QWidget):
 
     def _remove_selected(self) -> None:
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
-        if rows and self.current_run:
-            name = self.table.item(rows[0], 0).text()
-            run = self.table.item(rows[0], 0).data(QtCore.Qt.ItemDataRole.UserRole)
-            self.removeAnchorRequested.emit(name, run)
+        selected = [(self.table.item(row, 0).text(),
+                     self.table.item(row, 0).data(QtCore.Qt.ItemDataRole.UserRole)) for row in rows]
+        if selected:
+            self.removeAnchorRequested.emit(selected)
+
+    def _selection_changed(self) -> None:
+        self.delete_btn.setEnabled(bool(self.table.selectedIndexes()) and not (self.align and self.align.refining))

@@ -113,6 +113,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._anchor_stage: str | None = None      # None, "ref", "run"
         self._anchor_pending: dict = {}
         self._anchor_switching = False
+        self._anchor_recording = False
         self.blobs = self.project.blobs
         self._blob_add_pending = False
         self.hydrocarbons = self.project.hydrocarbons
@@ -192,7 +193,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # replace the last, with a single Go button underneath (see gui/workflow.py).
         # The old panels keep their own primary buttons but hide them; Go does that job.
         for w in (self.bg_panel.apply_all_btn, self.sil_panel.apply_btn, self.blobs_panel.find_btn,
-                  self.hydro_panel.find_btn, self.align_panel.add_btn, self.fold_panel.fix_btn,
+                  self.hydro_panel.find_btn, self.fold_panel.fix_btn,
                   self.istd_panel.find_btn):
             w.setVisible(False)
         self.quant_step = QuantStepPanel()
@@ -940,7 +941,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.align_panel.skipAnchorRequested.connect(self.skip_anchor_run)
         self.align_panel.refineRequested.connect(self.refine_anchors)
         self.align.refinementRunning.connect(lambda _on: self.align_panel.refresh())
-        self.align_panel.removeAnchorRequested.connect(self.remove_anchor)
+        self.align_panel.removeAnchorRequested.connect(self.remove_alignment_points)
+        self.align_panel.restartRequested.connect(self.restart_alignment)
         self.align_panel.clearRunRequested.connect(self.clear_run_anchors)
         self.align_panel.kindChanged.connect(self.set_align_kind)
         self.align_panel.propagateRequested.connect(self.propagate_anchors)
@@ -2185,7 +2187,11 @@ class MainWindow(QtWidgets.QMainWindow):
         p["ion"] = self._current_single_ion()
         p["ref_t1"], p["ref_t2"] = t1, t2
         before = self.align.snapshot()
-        self.align.add_anchor(self.align.reference, p["name"], t1, t2, t1, t2, p["ion"])
+        self._anchor_recording = True
+        try:
+            self.align.add_anchor(self.align.reference, p["name"], t1, t2, t1, t2, p["ion"])
+        finally:
+            self._anchor_recording = False
         self.undo.push(EditAlignment(self.align, before, self.align.snapshot(),
                                      f"Record reference anchor {p['name']}"))
         self._anchor_stage = "run"
@@ -2236,14 +2242,40 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.index < 0 and run is None:
             return
         run = run or self.project.entries[self.index].name
+        self.remove_alignment_points([(name, run)])
+
+    def remove_alignment_points(self, selected):
         if self._anchor_stage is not None:
             self.cancel_pick()
         before = self.align.snapshot()
         # A reference point defines the coordinate shared by all matching rows.
-        for target in list(self.align.points) if run == self.align.reference else [run]:
-            self.align.remove_anchor(target, name)
-        self.undo.push(EditAlignment(self.align, before, self.align.snapshot(),
-                                     f"📍 Remove anchor {name} from {run}"))
+        points = {r: list(pts) for r, pts in before["points"].items()}
+        for name, run in selected:
+            for target in list(points) if run == self.align.reference else [run]:
+                points[target] = [p for p in points.get(target, []) if p.name != name]
+        after = dict(before, points={r: pts for r, pts in points.items() if pts})
+        if before != after:
+            self.align.restore(after)
+            self.undo.push(EditAlignment(self.align, before, after, "Delete selected alignment points"))
+
+    def restart_alignment(self):
+        if self.align.refining:
+            return
+        if self._anchor_stage is not None:
+            self.cancel_pick()
+        for job in list(self.jobs.jobs.values()):
+            if "Finding anchors:" in job.name:
+                self.jobs.cancel(job.id)
+        before = self.align.snapshot()
+        after = dict(reference=before["reference"], kind={}, points={})
+        self.act_aligned.setChecked(False)
+        self.align.restore(after)
+        self.workflow.clear_done("align")
+        if self.workflow.banner.property("for") == "align":
+            self.workflow.banner.hide()
+        if before != after:
+            self.undo.push(EditAlignment(self.align, before, after, "Start alignment over"))
+        self.start_add_anchor()
 
     def clear_run_anchors(self):
         if self.index < 0:
@@ -2296,6 +2328,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._anchor_stage is not None:
             p = self._anchor_pending
             if (p.get("reference") != self.align.reference
+                    or (self._anchor_stage == "ref" and not self._anchor_recording and any(
+                        point.name == p["name"] for point in self.align.points.get(self.align.reference, [])))
                     or (self._anchor_stage == "run" and not any(
                         point.name == p["name"] for point in self.align.points.get(self.align.reference, [])))):
                 self.cancel_pick()

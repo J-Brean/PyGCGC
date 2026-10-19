@@ -61,6 +61,9 @@ internal standards in `target_table.csv` as the runs load. Work along the number
    to adjust the clicks within ±1 modulation and ±0.150 s in t2. Search limits, transform
    settings and optional **Auto-find on all runs** are under **More alignment options**.
    The Compare tab (5) blinks, overlays or subtracts the runs.
+   **Add points** resumes collection; select table rows and use **Delete selected points**
+   to remove them. **Start alignment over** keeps the reference and restarts at P1; Ctrl+Z
+   restores the previous alignment.
 3. **🧹 Background.** Press ▶ Remove background. Type `73` in the Ion box, select the wood-smoke
    sample, zoom on 33 to 36 min and tick *Before / after split*: behenic acid stands out of the
    bleed once it is removed. Space toggles raw and cleaned; S/N shows signal-to-noise.

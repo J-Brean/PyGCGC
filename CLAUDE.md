@@ -68,6 +68,10 @@ defaults are ±1 modulation and ±0.150 s in t2. Wrapped rows come from adjacent
 updates each reference position once, and rejects results after input edits. Apply as one
 undoable edit. Main picking/refinement stay visible; search limits and transform diagnostics
 are under More alignment options. The panel scrolls rather than squeezing the anchor table.
+Add points, Delete selected points and Start alignment over are visible controls, explicitly
+requested by the user. Delete selected rows in one undo command; deleting a reference row
+removes its matching pairs. Restart retains the reference but clears points and kind overrides
+and resumes P1. Undo must stop that new picker before restored P1 can be overwritten.
 
 | | |
 |---|---|
