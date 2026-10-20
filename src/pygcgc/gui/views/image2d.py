@@ -246,6 +246,7 @@ class ChromatogramView(QtWidgets.QWidget):
     hovered = QtCore.Signal(float, float, float)      # t1 (s), t2 (s), value
     pixelClicked = QtCore.Signal(float)               # absolute time (s)
     pointClicked = QtCore.Signal(int, float)          # modulation index, t2 (s, may exceed the period)
+    peakLabelActivated = QtCore.Signal(str)           # a labelled peak was double-clicked: its key
     regionChanged = QtCore.Signal(float, float, float, float)   # t1a, t1b (s), t2a, t2b (s)
     bandChanged = QtCore.Signal(float, float)         # t1 range (s)
 
@@ -423,6 +424,21 @@ class ChromatogramView(QtWidgets.QWidget):
             item.setZValue(14)
             self.plot.addItem(item, ignoreBounds=True)
 
+        # Peak names (📚): shown when the mouse is over a peak, or for every peak when asked.
+        self._peak_labels: list[dict] = []
+        self.peak_label_hover, self.peak_label_all = True, False
+        self._label_items: list = []
+        self._label_geometry = None
+        self._hover_key = None
+        self.hover_label = pg.TextItem("", anchor=(0, 1), color=(255, 255, 255), fill=pg.mkBrush(18, 18, 24, 225),
+                                       border=pg.mkPen(255, 255, 255, 120))
+        self.hover_label.setZValue(40)
+        self.hover_label.setVisible(False)
+        self.hover_ring = pg.ScatterPlotItem(size=16, brush=None, pen=pg.mkPen(255, 255, 255, 230, width=2), symbol="o")
+        self.hover_ring.setZValue(39)
+        self.hover_ring.setVisible(False)
+        self.plot.addItem(self.hover_label, ignoreBounds=True)
+        self.plot.addItem(self.hover_ring, ignoreBounds=True)
         self.empty = pg.TextItem("", anchor=(0.5, 0.5), color=(128, 121, 115))
         self.plot.addItem(self.empty, ignoreBounds=True)
         self.set_empty_message("Open a folder of LSC or CDF runs to start  (Ctrl+O)")
@@ -493,6 +509,7 @@ class ChromatogramView(QtWidgets.QWidget):
         self._draw_overlay()
         self._draw_blob_overlay()
         self._draw_istd_overlay()
+        self._draw_peak_labels()
         prof = result.profile
         self.profile_curve.setData(result.t1 / 60.0 + result.period / 120.0, prof)
         if self._first_image:
@@ -923,8 +940,10 @@ class ChromatogramView(QtWidgets.QWidget):
     # ------------------------------------------------------------- mouse
     def _mouse_moved(self, pos) -> None:
         if self.result is None or not self.plot.sceneBoundingRect().contains(pos):
+            self._set_hover(None)                              # the mouse has left the image: no label left behind
             return
         p = self.plot.vb.mapSceneToView(pos)
+        self._set_hover(self._label_index_at(p.x(), p.y()))
         self.vline.setPos(p.x())
         self.hline.setPos(p.y())
         self.slice_hline.setPos(p.y())
@@ -944,6 +963,11 @@ class ChromatogramView(QtWidgets.QWidget):
         if not self.plot.sceneBoundingRect().contains(ev.scenePos()) or self._colourbar_hit(ev.scenePos()):
             return
         p = self.plot.vb.mapSceneToView(ev.scenePos())
+        if ev.double():
+            k = self._label_index_at(p.x(), p.y())
+            if k is not None:
+                self.peakLabelActivated.emit(self._peak_labels[k]["key"])
+                return
         t = self.absolute_time(p.x(), p.y())
         if t is None:
             return
@@ -1071,6 +1095,67 @@ class ChromatogramView(QtWidgets.QWidget):
             label.setPos(float(x[0]), float(y[0]))
             self.plot.addItem(label, ignoreBounds=True)
             self._stencil_items.append(label)
+
+    # ------------------------------------------------------------- peak names
+    def set_peak_labels(self, labels: list[dict], hover: bool = True, show_all: bool = False) -> None:
+        """labels: dicts with `key`, `t1`, `t2` (s), `rx`, `ry` (s, how far from the peak still counts as on it),
+        `text` and `rgb`. `hover` shows a peak's label while the mouse is over it; `show_all` draws every label."""
+        self._peak_labels = list(labels)
+        self.peak_label_hover, self.peak_label_all = bool(hover), bool(show_all)
+        self._label_geometry = None
+        self._draw_peak_labels()
+
+    def _draw_peak_labels(self) -> None:
+        for item in self._label_items:
+            self.plot.removeItem(item)
+        self._label_items = []
+        self._label_geometry = None
+        self._set_hover(None)
+        if self.result is None or not self._peak_labels:
+            return
+        t1 = np.array([d["t1"] for d in self._peak_labels], dtype=float)
+        t2 = np.array([d["t2"] for d in self._peak_labels], dtype=float)
+        x, y = self._to_display(t1, t2)
+        rx = np.array([d["rx"] for d in self._peak_labels], dtype=float) / 60.0
+        ry = np.array([d["ry"] for d in self._peak_labels], dtype=float)
+        self._label_geometry = (x, y, np.maximum(rx, 1e-6), np.maximum(ry, 1e-6))
+        if self.peak_label_all:
+            for k, d in enumerate(self._peak_labels):
+                item = pg.TextItem(d["text"].split("\n")[0], anchor=(0, 1), color=tuple(d["rgb"]))
+                item.setZValue(30)
+                item.setPos(float(x[k]), float(y[k]))
+                self.plot.addItem(item, ignoreBounds=True)
+                self._label_items.append(item)
+
+    def _label_index_at(self, x_min: float, y_s: float):
+        """The labelled peak the point is on (the nearest, by the peak's own size), or None."""
+        if self._label_geometry is None:
+            return None
+        x, y, rx, ry = self._label_geometry
+        d2 = ((x_min - x) / rx) ** 2 + ((y_s - y) / ry) ** 2
+        k = int(np.argmin(d2))
+        return k if d2[k] <= 1.0 else None
+
+    def _set_hover(self, k) -> None:
+        if k is None or not (self.peak_label_hover or self.peak_label_all):
+            self._hover_key = None
+            self.hover_label.setVisible(False)
+            self.hover_ring.setVisible(False)
+            return
+        d = self._peak_labels[k]
+        if d["key"] == self._hover_key:
+            return
+        self._hover_key = d["key"]
+        x, y, _rx, _ry = self._label_geometry
+        self.hover_label.setText(d["text"] + "\ndouble-click to rename")
+        self.hover_label.setColor(tuple(d["rgb"]))
+        self.hover_label.setPos(float(x[k]), float(y[k]))
+        self.hover_ring.setData([float(x[k])], [float(y[k])])
+        self.hover_label.setVisible(True)
+        self.hover_ring.setVisible(True)
+
+    def hovered_peak_key(self):
+        return self._hover_key
 
     def set_band(self, t1a: float | None, t1b: float | None) -> None:
         if t1a is None:

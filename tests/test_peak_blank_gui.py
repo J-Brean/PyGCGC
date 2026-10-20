@@ -119,11 +119,36 @@ def test_the_panel_follows_settings_changed_elsewhere_such_as_a_loaded_project(q
     w = window
     w.blank_panel.refresh_runs(w.project.entries)
     state = w.project.blank
-    state.from_dict({"settings": {"blank_run": "RUN_B", "factor": 0.35, "max_dt1": 7.0}, "apply_to_quant": False})
+    state.from_dict({"settings": {"blank_run": "RUN_B", "factor": 0.35, "max_dt1": 120.0}, "apply_to_quant": False})
     panel = w.blank_panel
     assert panel.blank_box.currentData() == "RUN_B" and panel.factor.value() == pytest.approx(0.35)
-    assert panel.dt1.value() == 7.0 and not panel.apply_quant.isChecked()
+    assert panel.dt1.value() == 2.0 and not panel.apply_quant.isChecked()
     assert state.settings.factor == 0.35                    # syncing the widgets did not write anything back
+
+
+def test_the_position_limits_are_set_in_minutes_and_seconds_and_turn_away_distant_peaks(qtbot, window):
+    w = window
+    state, i = subtracted(qtbot, w)
+    panel = w.blank_panel
+    panel.set_shown_run(i)
+    panel.refresh()
+    assert panel.dt1.isVisibleTo(panel) and panel.dt2.isVisibleTo(panel)        # always on show, not tucked away
+    assert state.settings.max_dt1 == panel.dt1.value() * 60.0
+    loose = state.results_for(i).summary["matched"]
+    assert loose > 0
+    panel.dt1.setValue(0.01)                                                    # 0.6 s in t1
+    panel.dt2.setValue(0.01)                                                    # 0.01 s in t2
+    assert state.settings.max_dt1 == pytest.approx(0.6) and state.settings.max_dt2 == pytest.approx(0.01)
+    assert state.current_for(i) is None                                         # the old pairing is out of date
+    state.subtract_runs([i])
+    qtbot.waitUntil(lambda: state.current_for(i) is not None, timeout=TIMEOUT)
+    tight = state.results_for(i)
+    assert tight.summary["matched"] < loose
+    assert tight.summary["too_far"] > 0 and "beyond the position limits" in w.blank_panel.status.text()
+    assert any("outside the limits, not used" in panel.table.item(r, 9).text() for r in range(panel.table.rowCount()))
+    for row in tight.rows:                                                      # a peak turned away loses nothing
+        if row.blank_index is None:
+            assert row.corrected == max(row.volume, 0.0) and row.removed == 0.0
 
 
 def test_settings_are_saved_and_the_results_are_recomputed(qtbot, window):

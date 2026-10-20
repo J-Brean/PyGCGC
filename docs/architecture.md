@@ -134,6 +134,7 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
   saved; a library is never saved or copied beside a project. `BlobState.full_spectrum_peaks` caches the all-ion component
   spectra for 📚, ➖ and the internal standards. NIST's estimated RI is corrected per column class with the bias measured
   in `nist_sdf.ESTIMATE_BIAS`; the evidence is in `docs/validation/library-matcher-2026-10-20.md`.
+- **Peak names on the image** are the view's (`ChromatogramView.set_peak_labels`: keys, positions, hit sizes and text, hover and double-click) filled by `MainWindow._peak_label_items` from `MatchState` results; the view knows nothing of matching. Hit sizes come from the fitted components' widths when the peak lists line up one to one. A typed name goes through `core/naming.check_name` (key = lower case letters and digits; comma parts order-insensitive; library index built once per library) in `gui/peak_naming.PeakNameDialog` and is stored as a `named` decision in `MatchState`, so it carries the content signature like every other decision.
 - **➖ blank subtraction lives in two places that must agree.** The panel and `PeakBlankState` (on `Project.blank`) own the
   user's choices and the per-run peak tables; `QuantSettings.blank_run` and `blank_*` carry the same pair into
   quantification, where `quantify_sequence` corrects amounts (`blank_correct_amounts`) and `all_signals` corrects volumes

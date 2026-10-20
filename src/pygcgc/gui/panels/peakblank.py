@@ -56,19 +56,23 @@ class PeakBlankPanel(QtWidgets.QWidget):
         self.apply_quant.setToolTip("Quantification then reports sample minus factor times blank, target by target, and the "
                                     "unknowns' semi-quantitative amounts from their corrected volumes")
         self.more = QtWidgets.QToolButton()
-        self.more.setText("Matching windows")
+        self.more.setText("More matching options")
         self.more.setCheckable(True)
         self.more.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.more.setArrowType(QtCore.Qt.ArrowType.RightArrow)
         self.details = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(self.details)
         form.setContentsMargins(0, 0, 0, 0)
-        self.dt1 = self._spin(0.5, 120.0, 0.5, 1, " s")
-        self.dt2 = self._spin(0.01, 2.0, 0.01, 2, " s")
+        # The position limits are always visible: a blank peak further away than these from the sample peak is
+        # never paired with it, however alike the spectra are. t₁ is in minutes, t₂ in seconds.
+        self.dt1 = self._spin(0.01, 30.0, 0.05, 2, " min")
+        self.dt2 = self._spin(0.01, 10.0, 0.05, 2, " s")
+        tip = ("A blank peak further than this from the sample peak is not paired with it and nothing is removed, "
+               "however alike the spectra are. Peaks turned away are counted and listed in the table.")
+        self.dt1.setToolTip(tip)
+        self.dt2.setToolTip(tip)
         self.similarity = self._spin(0.0, 1.0, 0.05, 2, "")
         self.significance = self._spin(1.0, 100.0, 0.5, 1, " x")
-        form.addRow("A blank peak may sit within t₁", self.dt1)
-        form.addRow("and t₂", self.dt2)
         form.addRow("Spectra must match at least", self.similarity)
         form.addRow("Above blank from", self.significance)
         self.details.hide()
@@ -96,6 +100,10 @@ class PeakBlankPanel(QtWidgets.QWidget):
         lay.addWidget(QtWidgets.QLabel("Factor"))
         lay.addLayout(row)
         lay.addWidget(self.suggestion)
+        limits = QtWidgets.QFormLayout()
+        limits.addRow("Only pair peaks within  t₁", self.dt1)
+        limits.addRow("and t₂", self.dt2)
+        lay.addLayout(limits)
         lay.addWidget(self.apply_quant)
         lay.addWidget(self.more)
         lay.addWidget(self.details)
@@ -150,7 +158,7 @@ class PeakBlankPanel(QtWidgets.QWidget):
         s = self.state.settings
         self._updating = True
         self.blank_box.setCurrentIndex(max(self.blank_box.findData(s.blank_run), 0))
-        for widget, value in ((self.factor, s.factor), (self.dt1, s.max_dt1), (self.dt2, s.max_dt2),
+        for widget, value in ((self.factor, s.factor), (self.dt1, s.max_dt1 / 60.0), (self.dt2, s.max_dt2),
                               (self.similarity, s.min_similarity), (self.significance, s.significance)):
             if abs(widget.value() - value) > 1e-9:
                 widget.setValue(value)
@@ -164,7 +172,7 @@ class PeakBlankPanel(QtWidgets.QWidget):
 
     def current_settings(self):
         return replace(self.state.settings, blank_run=self.blank_box.currentData() or "", factor=self.factor.value(),
-                       max_dt1=self.dt1.value(), max_dt2=self.dt2.value(), min_similarity=self.similarity.value(),
+                       max_dt1=self.dt1.value() * 60.0, max_dt2=self.dt2.value(), min_similarity=self.similarity.value(),
                        significance=self.significance.value())
 
     def _edited(self, *_a) -> None:
@@ -212,6 +220,8 @@ class PeakBlankPanel(QtWidgets.QWidget):
         self.status.setText(
             f"{s['peaks']} peaks: {s['above']} above blank, {s['near']} near blank; {s['matched']} have a partner in the blank, "
             f"{s['removed']} removed entirely, {s['reduced']} reduced; {s['signal_removed']:.1%} of the run's signal removed."
+            + (f" {s['too_far']} peaks have a similar blank peak beyond the position limits, so nothing was removed from them."
+               if s.get("too_far") else "")
             + ("" if current else " <out of date: the peaks, alignment or settings have changed since>")
             + (" " + warning if warning else ""))
         hint = found.suggestion
@@ -228,7 +238,9 @@ class PeakBlankPanel(QtWidgets.QWidget):
         for r, row in enumerate(rows):
             status = blank_status(row, self.state.settings)
             words = ("● above blank" if status == ABOVE else "○ near blank")
-            if row.blank_index is None:
+            if row.too_far:
+                words += f" (similar blank peak {abs(row.far_dt1) / 60:.2f} min, {abs(row.far_dt2):.2f} s away: outside the limits, not used)"
+            elif row.blank_index is None:
                 words += " (not in the blank)"
             values = [(str(row.index + 1), row.index), (f"{row.t1 / 60:.3f}", row.t1), (f"{row.t2:.3f}", row.t2),
                       (f"{row.volume:.4g}", row.volume), (f"{row.blank_volume:.4g}" if row.blank_index is not None else "", row.blank_volume),

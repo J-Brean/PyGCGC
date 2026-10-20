@@ -6,6 +6,15 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Peak names on the image and blank-subtraction limits, 2026-10-20 (second round).** Hover a matched peak in the 2D view
+for its name, confidence and match factor (on by default; optional labels for every peak); double-click to suggest
+another name, checked so that capitals, commas, dashes, spaces and comma-part order do not create a new compound, with
+the library's spelling and CAS used when it has the compound and close names suggested when it does not
+(`core/naming.py`). The blank step's position limits are always visible (t₁ in minutes, t₂ in seconds); a blank peak
+outside them is never paired or subtracted, and the similar peaks turned away are counted, shown with their offsets and
+written to the CSV. Suite: 1001 passed, 32 skipped. Also repaired 12 user-guide lines whose special characters had been
+double-encoded in the previous round.
+
 **Colleague feedback round, 2026-10-20** (branch `feedback-2026-10-20`; plan in `docs/plans/feedback-2026-10-20.md`).
 Four requests, all built.
 

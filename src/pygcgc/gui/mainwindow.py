@@ -484,6 +484,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_assign_hydrocarbons = A("🏷️ Assign peaks to hydrocarbons", self.assign_hydrocarbons, None,
                                          "Label every peak as n-alkane, branched alkane, cycloalkane, "
                                          "alkylbenzene or alkylnaphthalene, using the alkane ladder")
+        self.act_peak_labels = A("📚 Peak names on hover", lambda _on=False: self._update_peak_labels(), None,
+                                 "Show a peak's name when the mouse is over it (needs 📚 matches). Double-click a peak to "
+                                 "suggest another name.", checkable=True)
+        self.act_peak_labels.setChecked(True)
+        self.act_peak_labels_all = A("📚 Show every peak name", lambda _on=False: self._update_peak_labels(), None,
+                                     "Write each matched peak's name beside it, as well as on hover (can be crowded)",
+                                     checkable=True)
         self.act_stencil_overlay = A("⛓️ Stencil outlines", self.view2d.set_stencil_overlay_visible, None,
                                      "Show every stencil, lifted onto this run's own alkane series",
                                      checkable=True)
@@ -616,7 +623,8 @@ class MainWindow(QtWidgets.QMainWindow):
         display.setText("Display options")
         display.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
         display_menu = QtWidgets.QMenu(display)
-        for action in (self.act_snr, self.act_overlay, self.act_blob_overlay, self.act_stencil_overlay,
+        for action in (self.act_snr, self.act_overlay, self.act_blob_overlay, self.act_peak_labels,
+                       self.act_peak_labels_all, self.act_stencil_overlay,
                        self.act_lock, self.act_auto, self.act_extend, self.act_region):
             display_menu.addAction(action)
         display.setMenu(display_menu)
@@ -947,6 +955,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.fold_panel.estimatePeriodRequested.connect(self.estimate_period)
         self.fold_panel.copyPhaseRequested.connect(self.copy_phase_to_all)
         self.view2d.hovered.connect(self._hovered)
+        self.view2d.peakLabelActivated.connect(self._rename_peak_label)
+        self.project.matcher.changed.connect(self._update_peak_labels)
         self.view2d.pixelClicked.connect(self.show_spectrum_at)
         self.view2d.regionChanged.connect(self.show_region_spectrum)
         self.view2d.bandChanged.connect(self._band_from_2d)
@@ -1345,6 +1355,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clusters_changed()
         self._istd_changed()
         self.blank_panel.set_shown_run(index)
+        self._update_peak_labels()
         if self.bg_panel.preview.isChecked():
             self.start_preview()
         if self._last_click is not None:
@@ -1463,6 +1474,46 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def set_levels_locked(self, on: bool):
         self.view2d.levels_locked = on
+
+    # ================================================================ 📚 peak names on the image
+    def _peak_label_items(self) -> list[dict]:
+        """Labels for the open run's matched peaks: where each is, how far from it still counts as on it, its name."""
+        if self.index < 0:
+            return []
+        found = self.project.matcher.results_for(self.index)
+        if found is None or not found.matches:
+            return []
+        from .peak_naming import label_for
+        decisions = self.project.matcher.decisions_for(self.index)
+        fold = self.project.fold(self.index)
+        components = (self.blobs.components_for(self.index).components
+                      if self.blobs.method == MS_AWARE and self.blobs.components_for(self.index) is not None else [])
+        usable = len(components) == len(found.matches)
+        items = []
+        for k, m in enumerate(found.matches):
+            sigma_col = max(float(components[k].sigma_col), 0.6) if usable else 1.0
+            sigma_row = max(float(components[k].sigma_row), 1.5) if usable else 3.0
+            text, rgb = label_for(m, decisions.get(m.query.label))
+            items.append(dict(key=m.query.label, t1=m.query.t1, t2=m.query.t2, text=text, rgb=rgb,
+                              rx=2.0 * sigma_col * fold.spec.period, ry=2.0 * sigma_row * fold.row_pitch))
+        return items
+
+    def _update_peak_labels(self, *_args):
+        if not hasattr(self, "act_peak_labels_all"):          # the actions are still being built
+            return
+        on =self.act_peak_labels.isChecked() or self.act_peak_labels_all.isChecked()
+        self.view2d.set_peak_labels(self._peak_label_items() if on else [], hover=self.act_peak_labels.isChecked(),
+                                    show_all=self.act_peak_labels_all.isChecked())
+
+    def _rename_peak_label(self, key: str):
+        """Double-click on a labelled peak: suggest another name for it."""
+        if self.index < 0 or any((self._anchor_stage is not None, self._blob_add_pending, self._picking is not None,
+                                  self._alkane_seed_pending is not None, self._siloxane_pick_pending,
+                                  self._qual_pick_pending, self._istd_label_pending is not None)):
+            return
+        from .peak_naming import rename_peak
+        if rename_peak(self, self.project, self.index, key):
+            self.say("Peak renamed")
 
     def _hovered(self, t1, t2, value):
         r = self.view2d.result

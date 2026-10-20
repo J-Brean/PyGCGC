@@ -84,6 +84,38 @@ def test_one_blank_peak_is_used_once_by_the_better_matching_sample_peak():
     assert rows[1].blank_index == 0 and rows[0].blank_index is None
 
 
+def test_a_blank_peak_beyond_the_limits_is_not_matched_removed_or_binned_but_is_reported():
+    """The user's limits: a similar blank peak more than max_dt1 / max_dt2 away is not the sample peak's partner."""
+    sample = Table([(600.0, 3.0, 100.0, SILOXANE), (900.0, 2.0, 100.0, PLASTICISER)])
+    blank = Table([(660.0, 3.0, 40.0, SILOXANE),                  # 60 s later in t1 (1 minute)
+                   (900.0, 3.4, 40.0, PLASTICISER)])              # 1.4 s later in t2
+    tight = PeakBlankSettings(max_dt1=30.0, max_dt2=1.0)
+    rows = subtract_blank_peaks(sample, blank, tight)
+    assert [r.blank_index for r in rows] == [None, None] and [r.corrected for r in rows] == [100.0, 100.0]
+    assert [r.match for r in rows] == [UNTOUCHED, UNTOUCHED]
+    assert rows[0].too_far and rows[0].far_dt1 == pytest.approx(60.0) and rows[0].far_dt2 == pytest.approx(0.0)
+    assert rows[1].too_far and rows[1].far_dt2 == pytest.approx(1.4)
+    assert summarise(rows, tight)["too_far"] == 2 and summarise(rows, tight)["matched"] == 0
+    # exactly at the edge counts as inside; widening the limits pairs them
+    assert subtract_blank_peaks(sample, blank, PeakBlankSettings(max_dt1=60.0, max_dt2=1.4))[0].blank_index == 0
+    wide = subtract_blank_peaks(sample, blank, PeakBlankSettings(max_dt1=61.0, max_dt2=1.5))
+    assert [r.blank_index for r in wide] == [0, 1] and not any(r.too_far for r in wide)
+    # a blank peak with a different spectrum is not "similar", so nothing is reported
+    different = subtract_blank_peaks(Table([(600.0, 3.0, 100.0, ALKANE)]), blank, tight)[0]
+    assert not different.too_far
+
+
+def test_the_csv_records_the_limits_and_any_similar_peak_turned_away(tmp_path):
+    import csv
+    from pygcgc.core.peak_blank import write_rows_csv
+    sample = Table([(600.0, 3.0, 100.0, SILOXANE)])
+    s = PeakBlankSettings(blank_run="B", max_dt1=30.0, max_dt2=1.0)
+    rows = subtract_blank_peaks(sample, Table([(660.0, 3.0, 40.0, SILOXANE)]), s)
+    out = list(csv.DictReader(write_rows_csv(tmp_path / "x.csv", "S", rows, s).open(encoding="utf-8")))[0]
+    assert out["max_dt1_min"] == "0.5" and out["max_dt2_s"] == "1"
+    assert out["similar_blank_peak_dt1_min"] == "1.00" and out["blank_volume"] == "" and out["removed"] == "0"
+
+
 def test_the_alignment_mapping_is_used_to_read_the_blank_at_the_samples_times():
     sample = Table([(100.0, 1.0, 100.0, SILOXANE)])
     blank = Table([(160.0, 1.0, 40.0, SILOXANE)])                     # the blank ran 60 s later

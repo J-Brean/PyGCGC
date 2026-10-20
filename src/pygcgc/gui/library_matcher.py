@@ -29,6 +29,7 @@ from ..core.libmatch import FLAGS, describe_candidate_rank, largest_peaks, write
 from ..core.nist_sdf import COLUMN_CLASSES
 from ..core.identify import promote_to_target
 from ..core.targets import write_targets_csv
+from .match_state import NAMING_ACTIONS
 from .theme import fit_to_screen
 
 LEVELS = {"confident": ("●", "#009E73", "Confident"), "probable": ("◐", "#0072B2", "Probable"),
@@ -211,6 +212,8 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.accept_btn = QtWidgets.QPushButton("✔ Accept best")
         self.choose_btn = QtWidgets.QPushButton("Use selected candidate")
         self.reject_btn = QtWidgets.QPushButton("✘ Reject")
+        self.rename_btn = QtWidgets.QPushButton("Suggest another name…")
+        self.rename_btn.setToolTip("Type a different name for this peak; capitals, commas, dashes and spaces are checked against the library")
         self.unknown_btn = QtWidgets.QPushButton("Mark unknown")
         self.clear_btn = QtWidgets.QPushButton("Clear decision")
         self.promote_btn = QtWidgets.QPushButton("Promote to target…")
@@ -219,11 +222,12 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.choose_btn.clicked.connect(lambda: self._decide("chosen"))
         self.reject_btn.clicked.connect(lambda: self._decide("rejected"))
         self.unknown_btn.clicked.connect(lambda: self._decide("unknown"))
+        self.rename_btn.clicked.connect(self._rename)
         self.clear_btn.clicked.connect(self._clear_decision)
         self.promote_btn.clicked.connect(self._promote)
         self.export_btn.clicked.connect(self._export)
         buttons = QtWidgets.QHBoxLayout()
-        for b in (self.accept_btn, self.choose_btn, self.reject_btn, self.unknown_btn, self.clear_btn):
+        for b in (self.accept_btn, self.choose_btn, self.rename_btn, self.reject_btn, self.unknown_btn, self.clear_btn):
             buttons.addWidget(b)
         buttons.addStretch(1)
         buttons.addWidget(self.promote_btn)
@@ -418,7 +422,7 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
     def _display_name(match, decisions) -> str:
         d = decisions.get(match.query.label)
         best = match.best
-        if d and d["action"] in ("accepted", "chosen") and d.get("name"):
+        if d and d["action"] in NAMING_ACTIONS and d.get("name"):
             return d["name"]
         return best.name if best else ""
 
@@ -545,7 +549,8 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.down_bars.setOpts(x=[], height=[])
         self.ri_errors.setData(x=np.array([]), y=np.array([]), left=np.array([]), right=np.array([]))
         self.ri_points.setData([], [])
-        for b in (self.accept_btn, self.choose_btn, self.reject_btn, self.unknown_btn, self.clear_btn, self.promote_btn):
+        for b in (self.accept_btn, self.choose_btn, self.rename_btn, self.reject_btn, self.unknown_btn, self.clear_btn,
+                  self.promote_btn):
             b.setEnabled(match is not None and match.best is not None)
         self.export_btn.setEnabled(self._current_matches() is not None)
         if match is None or match.best is None:
@@ -660,6 +665,12 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
             return
         name, cas = (cand.name, cand.cas) if action in ("accepted", "chosen") else ("", "")
         self.state.decide(int(index), match.query.label, action, name, cas)
+
+    def _rename(self) -> None:
+        index = self.run_box.currentData()
+        if self._shown is not None and index is not None:
+            from .peak_naming import rename_peak
+            rename_peak(self, self.project, int(index), self._shown.query.label)
 
     def _clear_decision(self) -> None:
         if self._shown is not None and self.run_box.currentData() is not None:

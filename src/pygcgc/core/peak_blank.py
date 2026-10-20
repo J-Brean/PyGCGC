@@ -32,7 +32,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from .compare import MAX_DT1, MAX_DT2, MIN_SIMILARITY, match_peaks
+from .compare import MAX_DT1, MAX_DT2, MIN_SIMILARITY, WEIGHT_A, WEIGHT_B, common_axis, match_peaks, peak_spectra
 
 ABOVE, NEAR = "above blank", "near blank"
 UNTOUCHED, REDUCED, REMOVED = "untouched", "reduced", "removed"
@@ -69,12 +69,19 @@ class PeakBlankRow:
     removed: float = 0.0
     corrected: float = 0.0
     ratio: float = float("inf")           # sample volume over the blank's contribution (factor x blank volume)
+    far_dt1: float = float("nan")         # a blank peak with a similar spectrum exists, but beyond the position limits:
+    far_dt2: float = float("nan")         # its offset (s). Not paired, nothing removed.
 
     @property
     def match(self) -> str:
         if self.blank_index is None or self.removed <= 0:
             return UNTOUCHED
         return REMOVED if self.corrected <= 0 else REDUCED
+
+    @property
+    def too_far(self) -> bool:
+        """A similar blank peak was found but lies outside the limits, so it was not used."""
+        return self.blank_index is None and np.isfinite(self.far_dt1)
 
     @property
     def fraction_removed(self) -> float:
@@ -95,10 +102,15 @@ def subtract_blank_peaks(sample, blank, settings: PeakBlankSettings, to_sample=N
     identity = to_sample or (lambda t1, t2: (np.asarray(t1, dtype=float), np.asarray(t2, dtype=float)))
     pairs = match_peaks(sample, blank, identity, max_dt1=settings.max_dt1, max_dt2=settings.max_dt2,
                         min_similarity=settings.min_similarity)
+    # Peaks with a similar spectrum in the blank but outside the position limits are NOT paired. They are
+    # recorded (how far away the best one is), so the user can see what the limits turned away and widen them.
+    paired = {pair.a for pair in pairs if pair.a is not None and pair.b is not None}
+    _record_far(rows, sample, blank, identity, settings, skip=paired)
     for pair in pairs:
         if pair.a is None or pair.b is None:
             continue
         row = rows[pair.a]
+        row.far_dt1 = row.far_dt2 = float("nan")
         vb = max(float(pair.volume_b), 0.0)
         row.blank_index, row.blank_volume = int(pair.b), vb
         row.similarity, row.dt1, row.dt2 = float(pair.similarity), float(pair.dt1), float(pair.dt2)
@@ -107,6 +119,32 @@ def subtract_blank_peaks(sample, blank, settings: PeakBlankSettings, to_sample=N
         row.corrected = float(max(row.volume, 0.0) - row.removed)
         row.ratio = row.volume / contribution if contribution > 0 else float("inf")
     return rows
+
+
+def _record_far(rows: list, sample, blank, to_sample, settings: PeakBlankSettings, skip: set) -> None:
+    """For each sample peak not paired, note its most similar blank peak if that is similar enough to count but
+    lies beyond the position limits. One matrix product of weighted spectra, so thousands of peaks are fast."""
+    mz, cols_a, cols_b = common_axis(np.asarray(sample.mz), np.asarray(blank.mz))
+    todo = [i for i in range(len(rows)) if i not in skip]
+    if not todo or mz.size == 0:
+        return
+    weight = np.power(np.clip(mz.astype(float), 1, None), WEIGHT_B)
+
+    def unit(spectra):
+        w = np.power(np.clip(np.asarray(spectra, dtype=float), 0, None), WEIGHT_A) * weight
+        norm = np.linalg.norm(w, axis=1, keepdims=True)
+        return np.divide(w, norm, out=np.zeros_like(w), where=norm > 0)
+
+    ua = unit(np.asarray(peak_spectra(sample), dtype=float)[todo][:, cols_a])
+    ub = unit(np.asarray(peak_spectra(blank), dtype=float)[:, cols_b])
+    sim = (ua @ ub.T) ** 2
+    t1_b, t2_b = (np.asarray(v, dtype=float) for v in to_sample(np.asarray(blank.t1, dtype=float),
+                                                              np.asarray(blank.t2, dtype=float)))
+    best = np.argmax(sim, axis=1)
+    for k, i in enumerate(todo):
+        j = int(best[k])
+        if sim[k, j] >= settings.min_similarity:
+            rows[i].far_dt1, rows[i].far_dt2 = float(t1_b[j] - rows[i].t1), float(t2_b[j] - rows[i].t2)
 
 
 def blank_status(row: PeakBlankRow, settings: PeakBlankSettings) -> str:
@@ -144,13 +182,14 @@ def summarise(rows: list, settings: PeakBlankSettings) -> dict:
     removed = sum(r.removed for r in rows)
     return dict(peaks=len(rows), matched=sum(r.blank_index is not None for r in rows),
                 removed=sum(r.match == REMOVED for r in rows), reduced=sum(r.match == REDUCED for r in rows),
-                untouched=sum(r.match == UNTOUCHED for r in rows),
+                untouched=sum(r.match == UNTOUCHED for r in rows), too_far=sum(r.too_far for r in rows),
                 above=sum(blank_status(r, settings) == ABOVE for r in rows),
                 near=sum(blank_status(r, settings) == NEAR for r in rows),
                 signal_removed=removed / total if total > 0 else 0.0)
 
 FIELDS = ["run", "peak", "t1_min", "t2_s", "volume", "blank_volume", "removed", "corrected", "percent_removed",
-          "spectrum_match", "match", "against_blank", "blank_run", "factor"]
+          "spectrum_match", "match", "against_blank", "similar_blank_peak_dt1_min", "similar_blank_peak_dt2_s",
+          "blank_run", "factor", "max_dt1_min", "max_dt2_s"]
 
 
 def write_rows_csv(path, run: str, rows: list, settings: PeakBlankSettings):
@@ -167,5 +206,9 @@ def write_rows_csv(path, run: str, rows: list, settings: PeakBlankSettings):
                 blank_volume=f"{r.blank_volume:.6g}" if r.blank_index is not None else "", removed=f"{r.removed:.6g}",
                 corrected=f"{r.corrected:.6g}", percent_removed=f"{100 * r.fraction_removed:.1f}",
                 spectrum_match=f"{r.similarity:.3f}" if np.isfinite(r.similarity) else "", match=r.match,
-                against_blank=blank_status(r, settings), blank_run=settings.blank_run, factor=f"{settings.factor:g}"))
+                against_blank=blank_status(r, settings),
+                similar_blank_peak_dt1_min=f"{r.far_dt1 / 60:.2f}" if r.too_far else "",
+                similar_blank_peak_dt2_s=f"{r.far_dt2:.3f}" if r.too_far else "",
+                blank_run=settings.blank_run, factor=f"{settings.factor:g}",
+                max_dt1_min=f"{settings.max_dt1 / 60:g}", max_dt2_s=f"{settings.max_dt2:g}"))
     return path

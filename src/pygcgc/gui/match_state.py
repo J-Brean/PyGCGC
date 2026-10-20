@@ -26,7 +26,8 @@ from ..core.libmatch import MatchSettings, match_queries, queries_from_peaks
 from ..core.nist_sdf import compact_from_entries, open_library
 from .blob_state import MS_AWARE
 
-ACTIONS = ("accepted", "rejected", "chosen", "unknown")
+ACTIONS = ("accepted", "rejected", "chosen", "named", "unknown")
+NAMING_ACTIONS = ("accepted", "chosen", "named")           # decisions that give the peak a name
 
 
 @dataclass
@@ -269,15 +270,17 @@ class MatchState(QtCore.QObject):
         return [c.cls if c.cls and c.tier in ("confident", "probable") else "" for c in result.calls]
 
     # ------------------------------------------------------------- decisions
-    def decide(self, index: int, label: str, action: str, name: str = "", cas: str = "") -> None:
+    def decide(self, index: int, label: str, action: str, name: str = "", cas: str = "", typed: str = "") -> None:
         if action not in ACTIONS:
             raise ValueError(f"unknown decision '{action}'")
         found = self.current_for(index)
         if found is None:
             return
         run = self.project.entries[index].name
-        self.decisions.setdefault(run, {})[label] = dict(action=action, name=name, cas=cas,
-                                                          signature=found.content_signature)
+        entry = dict(action=action, name=name, cas=cas, signature=found.content_signature)
+        if typed:
+            entry["typed"] = typed                         # what the user typed, before the library spelling was applied
+        self.decisions.setdefault(run, {})[label] = entry
         self.changed.emit()
         self.project.request_autosave()
 
