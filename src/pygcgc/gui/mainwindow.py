@@ -40,6 +40,7 @@ from .panels.calibration import CalibrationPanel
 from .panels.classes import ClassesPanel, group_colour
 from .panels.clusters import ClustersPanel
 from .panels.hydrocarbons import HydrocarbonsPanel
+from .panels.peakblank import PeakBlankPanel
 from .panels.istd import IstdPanel, IstdResultsTable
 from .panels.results import ResultsPanel
 from .panels.siloxane import SiloxanePanel
@@ -184,6 +185,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hydro_panel = HydrocarbonsPanel()
         self.class_panel = ClassesPanel()
         self.cluster_panel = ClustersPanel()
+        self.blank_panel = PeakBlankPanel()
+        self.blank_panel.set_state(self.project.blank)
         self.cluster_panel.set_values(self.clusters.settings, self.clusters.skip_siloxane, self.clusters.scope,
                                       self.clusters.use_soft, self.clusters.unit, self.clusters.n_regions,
                                       self.clusters.normalise)
@@ -252,7 +255,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sil_panel, "Remove siloxanes", parent="blobs")
         self.assign_step = ToolChoicesPanel(
             [("setup", "Set up named targets, calibration and units…"),
-             ("identify", "Search a spectral library…"), ("targets", "Load named target peaks…"), ("hydro", "Assign hydrocarbons…"),
+             ("identify", "Search a spectral library…"), ("blank", "Subtract a run's peaks…"), ("targets", "Load named target peaks…"), ("hydro", "Assign hydrocarbons…"),
              ("classify", "Assign compound classes…"), ("cluster", "Explore spectral clusters…")],
             "Use a target table for known compounds, or open library search below. Review suggested names "
             "and promote accepted matches to targets before quantification.")
@@ -296,6 +299,13 @@ class MainWindow(QtWidgets.QMainWindow):
             "It matches the peaks from step 4 and uses the retention index from the alkane ladder when one "
             "exists, so matching comes after both. No column dimensions or oven programme are needed.",
             self.identify_step, "Open the library matcher", parent="assign")
+        add("blank", "➖ Subtract a run", "Subtract a run's peaks",
+            "Takes one run's peaks (a blank, or a sample whose signal is background) away from every other run, "
+            "peak by peak, times a factor you choose. Use it when the blank's baseline is too messy to subtract pixel "
+            "by pixel. Each peak is then marked above blank or near blank, and quantified amounts become sample minus blank.",
+            "It needs fitted peaks in the blank and in the samples (step 4) and, when the runs are aligned, uses "
+            "the alignment to find each peak's partner. It comes before quantification so the amounts include it.",
+            self.blank_panel, "Subtract the blank", parent="assign")
         add("cluster", "🧩 Cluster", "Peak clusters",
             "Groups peaks by the shape of their mass spectra, with no rules and no library, so the chromatogram "
             "divides into chemically similar regions. Cluster the selected run, or pool every 70 eV run so each "
@@ -314,7 +324,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.export_step, "Export everything…")
         # Widget indices stay in registration order; workflow order is explicit.
         self.workflow.set_order(["load", "fold", "align", "background", "blobs", "siloxane",
-                                 "istd", "assign", "hydro", "classify", "identify", "cluster",
+                                 "istd", "assign", "hydro", "classify", "identify", "blank", "cluster",
                                  "quant", "export"])
         # One left-hand dock with three tabs, so the run list, the layers and the open
         # step's settings share the space instead of competing for it.
@@ -567,7 +577,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # The Tools and Panels menus live in the menu bar (a drop-down button that falls into the
         # toolbar's overflow arrow on a narrow window does not open reliably).
         self.tools_menu = QtWidgets.QMenu("Tools", self)
-        for key in ("fold", "siloxane", "hydro", "classify", "identify", "cluster"):
+        for key in ("fold", "siloxane", "hydro", "classify", "identify", "blank", "cluster"):
             self.tools_menu.addAction(self.workflow.step_info(key)["label"],
                                       lambda _checked=False, k=key: self.workflow.show_step(k))
         self.tools_menu.addSeparator()
@@ -831,6 +841,7 @@ class MainWindow(QtWidgets.QMainWindow):
          "hydro": self.start_find_alkanes,
          "classify": self.start_classify,
          "identify": self._go_identify,
+         "blank": self.run_blank_subtraction,
          "assign": self._accept_assignments,
          "export": self.export_everything,
          "quant": self.run_quant,
@@ -872,6 +883,25 @@ class MainWindow(QtWidgets.QMainWindow):
                     else "▸ " if key == nxt else "")
             act.setText(mark + self._step_names[key])
             act.setIconText(plain(mark + self._step_names[key]))
+
+    def run_blank_subtraction(self):
+        """Go on the ➖ step: take the blank run's peaks off every other run."""
+        state = self.project.blank
+        if state.blank_index() is None:
+            self.say("Choose the blank run first")
+            return
+        indices = [i for i in self.project.loaded() if i != state.blank_index()]
+        if not any(not state.why_not(i) for i in indices):
+            self.say("; ".join(dict.fromkeys(m for i in indices for m in state.why_not(i))) or "Nothing to subtract from")
+            return
+        self.workflow.set_busy("blank", True)
+
+        def finished():
+            self.workflow.set_busy("blank", False)
+            self.workflow.mark_done("blank", "Blank peaks subtracted. Run Quantify to get amounts as sample minus blank.")
+            self.blank_panel.refresh()
+        if not state.subtract_runs(indices, on_done=finished):
+            self.workflow.set_busy("blank", False)
 
     def _go_identify(self):
         self.show_library_matcher()
@@ -961,6 +991,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.project.runsChanged.connect(lambda: self.align_panel.refresh_runs(self.project.entries))
         self.align_panel.referenceChanged.connect(self.set_reference)
         self.align_panel.addAnchorRequested.connect(self.start_add_anchor)
+        self.blank_panel.settingsChanged.connect(lambda s, apply: self.project.blank.set_settings(s, apply))
+        self.project.blank.changed.connect(self.blank_panel.refresh)
+        self.project.runsChanged.connect(lambda: self.blank_panel.refresh_runs(self.project.entries))
         self.align_panel.openWindowRequested.connect(lambda: self.show_anchor_window())
         self.align_panel.skipAnchorRequested.connect(self.skip_anchor_run)
         self.align_panel.refineRequested.connect(self.refine_anchors)
@@ -1311,6 +1344,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._classes_changed()
         self._clusters_changed()
         self._istd_changed()
+        self.blank_panel.set_shown_run(index)
         if self.bg_panel.preview.isChecked():
             self.start_preview()
         if self._last_click is not None:

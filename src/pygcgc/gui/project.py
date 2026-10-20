@@ -37,6 +37,7 @@ from .cluster_state import ClusterState
 from .hydrocarbon_state import HydrocarbonState
 from .istd_state import IstdState
 from .match_state import MatchState
+from .peak_blank_state import PeakBlankState
 from .quantstate import QuantState
 
 PROJECT_VERSION = 1
@@ -143,6 +144,8 @@ class Project(QtCore.QObject):
         self.istd = IstdState(self, self)
         # 📚 matching peaks to a spectral library by spectrum and retention index
         self.matcher = MatchState(self, self)
+        # ➖ a blank run's peaks taken away from every other run's, and from its quantified amounts
+        self.blank = PeakBlankState(self, self)
         # 🏷️ confident library hits, run name -> [(t1, t2, name)], for ⚖️ to pair peaks by
         # identity. Session only: identification itself is a one-shot dialog and is not saved.
         self.identifications: dict[str, list[tuple[float, float, str]]] = {}
@@ -834,6 +837,7 @@ class Project(QtCore.QObject):
         self.classes.forget_runs(removed)
         self.clusters.forget_runs(removed)
         self.matcher.forget_runs(removed)
+        self.blank.forget_runs(removed)
         for i in sorted(set(indices), reverse=True):
             if self.preview is not None and self.preview[0] is self.entries[i]:
                 self.preview = None
@@ -916,6 +920,7 @@ class Project(QtCore.QObject):
             "clusters": self.clusters.to_dict(),
             "istd": self.istd.to_dict(),
             "matcher": self.matcher.to_dict(),
+            "peak_blank": self.blank.to_dict(),
             "view": self.view_state,
         }
 
@@ -984,6 +989,7 @@ class Project(QtCore.QObject):
         self.clusters.from_dict(data.get("clusters", {}))
         self.istd.from_dict(data.get("istd", {}))
         self.matcher.from_dict(data.get("matcher", {}))
+        self.blank.from_dict(data.get("peak_blank", {}))
         bg =data.get("background", {})
         self.bg_settings = BackgroundSettings.from_dict(bg.get("settings", {}))
         self.bg_blank = bg.get("blank")

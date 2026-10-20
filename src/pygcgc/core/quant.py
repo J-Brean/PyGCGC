@@ -48,7 +48,7 @@ because unknowns have no quantifier ion of their own.
 from __future__ import annotations
 
 import csv
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -57,6 +57,7 @@ from .background import NoiseMap
 from .calibration import CalibrationError, CalibrationFit, CalibrationSettings, fit_calibration
 from .background import storage_threshold
 from .fold import Fold
+from .peak_blank import ABOVE, NEAR, PeakBlankSettings, blank_status, subtract_blank_peaks
 from .peaks import (BlobSet, PeakSettings, _max_raw, detect_ceiling, find_blobs, make_frame,
                     measure_ion_peak, measure_ion_polygon)
 from .run import Run
@@ -84,6 +85,20 @@ class QuantSettings:
     # coming from the target table (put an M+1 or other isotope ion in the qualifier list, with
     # its ratio, to use it). The hit is flagged as quantified on that ion.
     saturated_qualifier: bool = False
+    # OPTIONAL, off when `blank_run` is empty. A blank run whose contribution, times `blank_factor`, is taken away
+    # from every sample: peak by peak from the volumes of the unknowns, and target by target from the amounts
+    # (`core.peak_blank`). The tolerances pair a sample peak with its blank peak.
+    blank_run: str = ""
+    blank_factor: float = 1.0
+    blank_max_dt1: float = 12.0
+    blank_max_dt2: float = 0.2
+    blank_min_similarity: float = 0.7
+    blank_significance: float = 3.0
+
+    def blank_settings(self) -> PeakBlankSettings:
+        return PeakBlankSettings(blank_run=self.blank_run, factor=self.blank_factor, max_dt1=self.blank_max_dt1,
+                                 max_dt2=self.blank_max_dt2, min_similarity=self.blank_min_similarity,
+                                 significance=self.blank_significance)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -654,6 +669,50 @@ class SampleResult:
     concentration: float
     cal_set: str
     note: str = ""
+    amount_raw: float = float("nan")      # before the blank was taken away (only set when a blank is in use)
+    blank_amount: float = float("nan")    # the blank run's amount of this compound
+    blank_status: str = ""                # "above blank" or "near blank"; empty when no blank is in use
+
+
+def blank_correct_amounts(rows: list, seq: list, settings: QuantSettings) -> list:
+    """Take the blank run's amount of each target, times the factor, away from every sample's.
+
+    Calibration runs, the blank itself and internal standards are left alone (a calibration curve is built from
+    responses, which a blank does not touch). A compound the blank did not show counts as zero in it. A corrected
+    amount is never negative: one at or below the blank is set to zero and flagged "at or below blank". Each row
+    says whether its amount stands above the blank's contribution (`blank_status`), in positive terms."""
+    blank = settings.blank_run
+    if not blank or not any(r.name == blank for r in seq):
+        return rows
+    ps = settings.blank_settings()
+    calibration = {r.name for r in seq if r.is_calibration}
+    volumes = {r.name: r.volume for r in seq}
+    in_blank = {x.compound: x for x in rows if x.run == blank}
+    out = []
+    for r in rows:
+        if r.run == blank or r.run in calibration or r.role == "istd" or not np.isfinite(r.amount):
+            out.append(r)
+            continue
+        b = in_blank.get(r.compound)
+        b_amount = float(b.amount) if b is not None and np.isfinite(b.amount) else 0.0
+        b_se = float(b.amount_se) if b is not None and np.isfinite(b.amount_se) else 0.0
+        contribution = settings.blank_factor * b_amount
+        corrected = r.amount - contribution
+        flags, status = list(r.flags), r.status
+        if corrected <= 0:
+            corrected = 0.0
+            flags.append("at or below blank")
+            if status == "ok":
+                status = "check"
+        se = float(np.hypot(r.amount_se, settings.blank_factor * b_se)) if np.isfinite(r.amount_se) else r.amount_se
+        ratio = r.amount / contribution if contribution > 0 else float("inf")
+        volume = volumes.get(r.run)
+        note = (r.note + "; " if r.note else "") + f"blank {b_amount:.3g} x {settings.blank_factor:g} subtracted"
+        out.append(replace(r, amount=corrected, amount_se=se, status=status, flags=flags, note=note,
+                           concentration=corrected / volume if volume else float("nan"),
+                           amount_raw=r.amount, blank_amount=b_amount,
+                           blank_status=ABOVE if ratio >= ps.significance else NEAR))
+    return out
 
 
 def quantify_sequence(seq: list[SequenceRun], targets: list[Target], fits: dict,
@@ -689,7 +748,7 @@ def quantify_sequence(seq: list[SequenceRun], targets: list[Target], fits: dict,
             conc = amount / r.volume if (r.volume and np.isfinite(amount)) else float("nan")
             rows.append(SampleResult(r.name, t.compound, t.role, h.found, status, flags,
                                      h.t1, h.t2, resp, amount, se, conc, bracket.label(), note))
-    return rows
+    return blank_correct_amounts(rows, seq, settings)
 
 
 @dataclass
@@ -709,6 +768,9 @@ class SignalRow:
     amount: float                 # "as <surrogate>"
     concentration: float
     note: str = ""
+    blank_volume: float = float("nan")      # the partner peak's volume in the blank run (only when a blank is in use)
+    corrected_volume: float = float("nan")  # volume minus the blank's contribution; `amount` and `ratio` use it
+    blank_status: str = ""                  # "above blank" or "near blank"
 
 
 def all_signals(seq: list[SequenceRun], targets: list[Target], fits: dict,
@@ -716,14 +778,21 @@ def all_signals(seq: list[SequenceRun], targets: list[Target], fits: dict,
     s = settings
     rows = []
     calibrated = [t for t in targets if not t.is_istd]
+    blank_q = (next((x.quant for x in seq if x.name == s.blank_run and x.quant is not None), None)
+               if s.blank_run else None)
+    ps, calibration_names = s.blank_settings(), {x.name for x in seq if x.is_calibration}
     for i, r in enumerate(seq):
         q = r.quant
         if q is None:
             continue
         bracket = bracket_cal_sets(seq, i, s.interpolate_cal_sets)
         owner = {h.blob: h.compound for h in q.hits.values() if h.found and h.blob is not None}
+        # The blank's contribution, peak by peak, taken from each unknown's volume before it is read off a curve.
+        paired = (subtract_blank_peaks(q.blobs, blank_q.blobs, ps)
+                  if blank_q is not None and r.name != s.blank_run and r.name not in calibration_names else None)
         for b in range(len(q.blobs)):
-            t1, t2, vol = float(q.blobs.t1[b]), float(q.blobs.t2[b]), float(q.blobs.volume[b])
+            t1, t2, raw_vol = float(q.blobs.t1[b]), float(q.blobs.t2[b]), float(q.blobs.volume[b])
+            vol = paired[b].corrected if paired is not None else raw_vol
             ref = q.nearest_istd(t1, t2, s.t1_scale, s.t2_scale)
             ratio = vol / ref.tic_volume if (ref is not None and ref.tic_volume > 0) else float("nan")
             sur, dist, amount = "", float("nan"), float("nan")
@@ -750,9 +819,12 @@ def all_signals(seq: list[SequenceRun], targets: list[Target], fits: dict,
             if np.isfinite(amount) and amount < 0:
                 amount, note = float("nan"), "below the surrogate curve"
             conc = amount / r.volume if (r.volume and np.isfinite(amount)) else float("nan")
-            rows.append(SignalRow(r.name, b, t1, t2, float(q.blobs.snr[b]), vol,
+            rows.append(SignalRow(r.name, b, t1, t2, float(q.blobs.snr[b]), raw_vol,
                                   ref.compound if ref else "", ref.tic_volume if ref else float("nan"),
-                                  ratio, owner.get(b, ""), sur, dist, amount, conc, note))
+                                  ratio, owner.get(b, ""), sur, dist, amount, conc, note,
+                                  blank_volume=paired[b].blank_volume if paired is not None else float("nan"),
+                                  corrected_volume=vol if paired is not None else float("nan"),
+                                  blank_status=blank_status(paired[b], ps) if paired is not None else ""))
     return rows
 
 

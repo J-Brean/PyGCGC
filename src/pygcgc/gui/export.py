@@ -15,6 +15,7 @@ from ..core.chemclass import write_classes_csv
 from ..core.cluster import write_clusters_csv
 from ..core.istd import write_istd_report_csv
 from ..core.libmatch import write_identifications_csv
+from ..core.peak_blank import write_rows_csv as write_peak_blank_csv
 from ..core.report import build_provenance, write_feature_table_csv
 from ..core.targets import write_targets_csv
 
@@ -117,6 +118,12 @@ def export_project(project, folder, *, identifications=None) -> list[Path]:
                                                    project.matcher.decisions_for(i), library, project.matcher.settings))
             row["identifications"] = f"identifications_{i + 1:03d}.csv"
             row["identifications_stale"] = project.matcher.current_for(i) is None
+        subtraction = project.blank.results_for(i)
+        if subtraction is not None and subtraction.rows:
+            paths.append(write_peak_blank_csv(folder / f"peak_blank_{i + 1:03d}.csv", entry.name, subtraction.rows,
+                                              project.blank.settings))
+            row["peak_blank"] = f"peak_blank_{i + 1:03d}.csv"
+            row["peak_blank_stale"] = project.blank.current_for(i) is None
         classes = project.classes.result_for(i)
         classified_peaks = project.classes.blobs_classified(i)
         if classes is not None and classified_peaks is not None:
@@ -155,6 +162,7 @@ def export_project(project, folder, *, identifications=None) -> list[Path]:
         method={"modulation_period_confirmed": project.period_confirmed},
         settings={"background": project.bg_settings.to_dict(), "quant": project.quant.settings.to_dict(),
                   "peaks": project.blobs.component_settings.to_dict(),
+                  "peak_blank": dict(project.blank.settings.to_dict(), applied_to_quantification=project.blank.apply_to_quant),
                   "library_match": dict(project.matcher.settings.to_dict(), library=project.matcher.source,
                                         alkane_ladder_run=project.matcher.ladder_run or "each run's own")},
         blob_edits=project.blobs.edits, quant_decisions=project.quant.decisions,

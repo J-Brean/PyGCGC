@@ -20,10 +20,11 @@ from ...core.quant import calibration_table
 from ..views.results_colours import STATUS_HEX as STATUS_COLOURS
 
 VIEWS = {
-    "targets": ("Targets", ["run", "compound", "status", "flags", "amount", "amount_se",
-                            "concentration", "response", "t1", "t2", "cal_set", "note"]),
-    "signals": ("All signals", ["run", "blob", "t1", "t2", "snr", "volume", "istd", "ratio",
-                                "target", "surrogate", "amount", "concentration", "note"]),
+    "targets": ("Targets", ["run", "compound", "status", "flags", "amount", "amount_se", "blank_status",
+                            "amount_raw", "blank_amount", "concentration", "response", "t1", "t2", "cal_set", "note"]),
+    "signals": ("All signals", ["run", "blob", "t1", "t2", "snr", "volume", "blank_volume", "corrected_volume",
+                                "blank_status", "istd", "ratio", "target", "surrogate", "amount", "concentration",
+                                "note"]),
     "istd": ("Internal standards", ["run", "compound", "found", "volume", "rel_to_median", "flag",
                                     "t1", "t2"]),
     "calibrations": ("Calibrations", ["cal_set", "compound", "response", "passes", "model", "weights",
@@ -31,7 +32,11 @@ VIEWS = {
                                       "intercept_p", "excluded"]),
 }
 
+BLANK_KEYS = {"blank_status", "amount_raw", "blank_amount", "blank_volume", "corrected_volume"}
+
 HEADERS = {
+    "blank_status": "against blank", "amount_raw": "before blank", "blank_amount": "blank amount",
+    "blank_volume": "blank volume", "corrected_volume": "volume − blank",
     "t1": "t₁ (min)", "t2": "t₂ (s)", "amount_se": "± SE", "concentration": "conc.",
     "rel_to_median": "vs median (%)", "worst_rel_error": "worst error (%)", "snr": "S/N",
     "cal_set": "cal set", "mandel_p": "Mandel p", "intercept_p": "intercept p", "r2": "R²",
@@ -277,7 +282,9 @@ class ResultsPanel(QtWidgets.QWidget):
     def refresh(self) -> None:
         key = self.current_view()
         rows = self.rows_for(key)
-        self.model.set_rows(rows, VIEWS[key][1])
+        # The blank columns only appear once a blank run is in use.
+        keys = [k for k in VIEWS[key][1] if k not in BLANK_KEYS or any(row.get("blank_status") for row in rows)]
+        self.model.set_rows(rows, keys)
         for b in self.decision_buttons:
             b.setEnabled(key == "targets")
         self.chart.setVisible(key == "istd")

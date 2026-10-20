@@ -34,7 +34,7 @@ from .theme import fit_to_screen
 LEVELS = {"confident": ("●", "#009E73", "Confident"), "probable": ("◐", "#0072B2", "Probable"),
           "tentative": ("○", "#E69F00", "Tentative"), "unknown": ("✕", "#777777", "Unknown")}
 COLUMNS = ["#", "t₁ (min)", "t₂ (s)", "% signal", "Name", "Formula", "Confidence", "MF", "RMF", "RI peak",
-           "RI library", "z", "Flags", "Decision"]
+           "RI library", "z", "Flags", "Decision", "Against the blank"]
 CANDIDATE_COLUMNS = ["Name", "Formula", "MF", "RMF", "RI library", "Source", "z", "RI gate"]
 COLUMN_LABELS = {"Standard non-polar": "Standard non-polar (100 % dimethyl)",
                  "Semi-standard non-polar": "Semi-standard non-polar (5 % phenyl)",
@@ -448,6 +448,8 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
             self._show_detail(None)
             return
         decisions = self._decisions()
+        blank = self.state.project.blank.current_for(int(self.run_box.currentData()))
+        position = {id(m): k for k, m in enumerate(found.matches)}
         total = sum(max(m.query.volume, 0.0) for m in found.matches)
         ranked = sorted(found.matches, key=lambda m: m.query.volume, reverse=True)
         keep = []
@@ -469,7 +471,8 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
                       (f"{best.ri_lib:.0f}" if best and np.isfinite(best.ri_lib) else "", best.ri_lib if best else None),
                       (f"{best.z:+.1f}" if best and np.isfinite(best.z) else "", best.z if best else None),
                       (f"{len(m.flags)}" if m.flags else "", len(m.flags)),
-                      (f"{d['action']}: {d['name']}" if d and d.get("name") else (d["action"] if d else ""), None)]
+                      (f"{d['action']}: {d['name']}" if d and d.get("name") else (d["action"] if d else ""), None),
+                      (self._blank_text(blank, position.get(id(m))), None)]
             for c, (text, key) in enumerate(values):
                 item = _Number(key, text) if key is not None else QtWidgets.QTableWidgetItem(text)
                 if c == 6:
@@ -494,6 +497,15 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
                 self._select_label(self._shown.query.label)
         else:
             self._show_detail(None)
+
+    def _blank_text(self, blank, k) -> str:
+        """Where the peak stands against the subtracted blank run, in positive terms; empty if no subtraction was made."""
+        if blank is None or k is None or k >= len(blank.rows):
+            return ""
+        from ..core.peak_blank import blank_status
+        row = blank.rows[k]
+        text = ("● " if blank_status(row, self.project.blank.settings) == "above blank" else "○ ") + blank_status(row, self.project.blank.settings)
+        return text + (f", {100 * row.fraction_removed:.0f}% removed" if row.removed else "")
 
     def _match_for_label(self, label):
         found = self._current_matches()

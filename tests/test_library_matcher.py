@@ -77,6 +77,19 @@ def test_selecting_a_peak_shows_the_spectra_candidates_and_every_uncertainty(qtb
     assert win.down_bars.opts["height"].min() == pytest.approx(-100.0)
 
 
+def test_the_table_says_where_each_peak_stands_against_a_subtracted_blank(qtbot, window, tmp_path):
+    from pygcgc.core.peak_blank import PeakBlankSettings
+    w = window
+    win, state = matched_window(qtbot, w, tmp_path)
+    assert all(win.table.item(r, 14).text() == "" for r in range(win.table.rowCount()))      # no subtraction yet
+    w.project.blank.set_settings(PeakBlankSettings(blank_run="RUN_B"))
+    w.project.blank.subtract_runs([w.index])
+    qtbot.waitUntil(lambda: w.project.blank.current_for(w.index) is not None, timeout=TIMEOUT)
+    win._fill_results()
+    words = [win.table.item(r, 14).text() for r in range(win.table.rowCount())]
+    assert words and all(x.startswith(("● above blank", "○ near blank")) for x in words)
+
+
 def test_filters_narrow_the_table_without_losing_the_selection_logic(qtbot, window, tmp_path):
     w = window
     win, state = matched_window(qtbot, w, tmp_path)
