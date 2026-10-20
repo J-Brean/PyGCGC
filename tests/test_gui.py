@@ -854,8 +854,7 @@ def test_compare_overlay_after_difference_is_not_washed_out(qtbot, window):
 def test_blink_shortcut_opens_compare_in_blink_mode(qtbot, window):
     w = window
     w.set_ion_expression("50")
-    from PySide6 import QtWidgets
-    assert "⚖️ Compare" in [a.text() for a in w.findChild(QtWidgets.QToolBar, "toolbar_main").actions()]
+    assert w.act_compare in w.tools_menu.actions()     # the toolbar's Tools menu, not a tab
     w.act_blink.trigger()
     assert w.compare_window.isVisible()
     assert w.compare_window.images.current_mode() == "blink"
