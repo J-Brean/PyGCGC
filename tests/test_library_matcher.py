@@ -56,11 +56,10 @@ def test_the_known_peak_is_named_and_the_tables_are_largest_first(qtbot, window,
     assert target.best.name == "Compound50"
     shares = [float(win.table.item(r, 3).text()) for r in range(win.table.rowCount())]
     assert shares == sorted(shares, reverse=True) and win.table.rowCount() == len(found.matches)
-    assert 0 < win.summary.rowCount() <= 10
-    assert win.summary.item(0, 3).text()
+    assert not hasattr(win, "summary")                        # one table, largest first: no separate "largest peaks"
     volumes = sorted((m.query.volume for m in found.matches), reverse=True)
     top_t1 = next(m.query.t1 for m in found.matches if m.query.volume == volumes[0])
-    assert win.summary.item(0, 2).text() == f"{top_t1 / 60:.3f}"
+    assert win.table.item(0, 1).text() == f"{top_t1 / 60:.3f}"
 
 
 def test_selecting_a_peak_shows_the_spectra_candidates_and_every_uncertainty(qtbot, window, tmp_path):

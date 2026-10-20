@@ -270,7 +270,10 @@ class MatchState(QtCore.QObject):
         return [c.cls if c.cls and c.tier in ("confident", "probable") else "" for c in result.calls]
 
     # ------------------------------------------------------------- decisions
-    def decide(self, index: int, label: str, action: str, name: str = "", cas: str = "", typed: str = "") -> None:
+    def decide(self, index: int, label: str, action: str, name: str = "", cas: str = "", typed: str = "",
+               formula: str | None = None) -> None:
+        """Record a decision. `formula` is the formula of the name given ("" for a name no library holds, which the
+        chemical-space plots then leave out); `None` leaves it to be read from the candidates."""
         if action not in ACTIONS:
             raise ValueError(f"unknown decision '{action}'")
         found = self.current_for(index)
@@ -278,6 +281,8 @@ class MatchState(QtCore.QObject):
             return
         run = self.project.entries[index].name
         entry = dict(action=action, name=name, cas=cas, signature=found.content_signature)
+        if formula is not None:
+            entry["formula"] = formula
         if typed:
             entry["typed"] = typed                         # what the user typed, before the library spelling was applied
         self.decisions.setdefault(run, {})[label] = entry

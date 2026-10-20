@@ -6,11 +6,14 @@ Read top to bottom:
    "semi-standard non-polar"), which run or runs, and where the alkane ladder comes from. Anything missing is
    one red sentence saying what to do. Column dimensions and the oven programme are *not* needed: a
    retention index is relative to the alkanes run on the same method.
-2. **Largest peaks.** The ten peaks with the most fitted signal, each with its share of the run, its name and
-   how sure the match is, so the peaks that matter are never buried in a long table.
-3. **All peaks**, largest first, with filters. Confidence is a symbol and a word (never colour alone).
+2. **All peaks**, largest first (so the peaks that matter are at the top), with filters. Confidence is a
+   symbol and a word (never colour alone). Double-click a name to type your own.
+3. **The plot explorer** (`gui/match_explorer.py`). By default a miniature 2D chromatogram with the selected
+   peak boxed; other plots help judge a match.
 4. **The selected peak.** The measured spectrum against the library's, head to tail; the top candidates; the
-   retention index of the peak against each candidate's; and every uncertainty as a sentence.
+   retention index of the peak against each candidate's (with a legend); and every uncertainty as a sentence.
+5. **Explore chemical space** opens a separate window (`gui/chemspace_window.py`) plotting the named peaks by
+   their formulae: H/C against O/C, carbon number and so on.
 
 The matching is `core/libmatch.py`. A decision made here (accept, reject, choose another candidate, mark
 unknown) is saved with the project but never raises the confidence shown beside it: a human decision is
@@ -25,11 +28,13 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ..core.libmatch import FLAGS, describe_candidate_rank, largest_peaks, write_identifications_csv
+from ..core.libmatch import FLAGS, describe_candidate_rank, write_identifications_csv
 from ..core.nist_sdf import COLUMN_CLASSES
-from ..core.identify import promote_to_target
+from ..core.identify import LibraryEntry, promote_to_target
 from ..core.targets import write_targets_csv
+from .match_explorer import MatchExplorer, PeakDot, tic_map
 from .match_state import NAMING_ACTIONS
+from .peak_naming import identity_of
 from .theme import fit_to_screen
 
 LEVELS = {"confident": ("●", "#009E73", "Confident"), "probable": ("◐", "#0072B2", "Probable"),
@@ -117,20 +122,25 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         row2.addSpacing(10)
         row2.addWidget(QtWidgets.QLabel("Alkane ladder"))
         row2.addWidget(self.ladder_box)
+        self.ladder_btn = QtWidgets.QPushButton("📏 Draw alkane ladder…")
+        self.ladder_btn.setToolTip("Draw the ladder over this run's 2D chromatogram and drag it onto the alkanes. "
+                                   "The retention indices, and the steps that use them, follow.")
+        self.ladder_btn.clicked.connect(self._edit_ladder)
+        self.space_btn = QtWidgets.QPushButton("🧪 Explore chemical space…")
+        self.space_btn.setToolTip("Plot the named peaks by their formulae: H/C against O/C, carbon number and more")
+        self.space_btn.clicked.connect(self._explore_space)
+        self.chemspace = None
         row3 = QtWidgets.QHBoxLayout()
         row3.addWidget(self.match_btn)
         row3.addWidget(settings_btn)
+        row3.addWidget(self.ladder_btn)
         row3.addStretch(1)
+        row3.addWidget(self.space_btn)
 
-        # ---- largest peaks
-        self.summary = QtWidgets.QTableWidget(0, 5)
-        self.summary.setHorizontalHeaderLabels(["Rank", "Share of the run", "t₁ (min)", "Best match", "Confidence"])
-        self.summary.verticalHeader().setVisible(False)
-        self.summary.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.summary.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.summary.horizontalHeader().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.summary.setMaximumHeight(230)
-        self.summary.itemSelectionChanged.connect(self._summary_selected)
+        # ---- the plot explorer (the 2D map by default)
+        self.explorer = MatchExplorer()
+        self.explorer.peakClicked.connect(self._select_label)
+        self._run_maps: dict = {}                 # TIC images for the 2D map, one run at a time
 
         # ---- all peaks
         self.level_filter = QtWidgets.QComboBox()
@@ -165,6 +175,7 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.table.horizontalHeader().setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.Interactive)
         self.table.setColumnWidth(4, 220)
         self.table.itemSelectionChanged.connect(self._row_selected)
+        self.table.cellDoubleClicked.connect(self._cell_double_clicked)
         self.table_note = QtWidgets.QLabel("")
         self.table_note.setWordWrap(True)
 
@@ -199,15 +210,28 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.ri_plot = pg.PlotWidget()
         self.ri_plot.setMenuEnabled(False)
         self.ri_plot.hideButtons()
-        self.ri_plot.setLabel("bottom", "Retention index")
-        self.ri_plot.hideAxis("left")
-        self.ri_plot.setMaximumHeight(120)
+        self.ri_plot.setLabel("bottom", "Retention index (alkane scale)")
+        self.ri_plot.setLabel("left", "Candidate rank")
+        self.ri_plot.setTitle("Does the library's retention index agree with the peak's?", size="8pt")
+        self.ri_plot.setMaximumHeight(185)
         self.measured_band = pg.LinearRegionItem(values=(0, 0), movable=False, brush=pg.mkBrush(0, 114, 178, 60))
         self.ri_plot.addItem(self.measured_band)
         self.ri_errors = pg.ErrorBarItem(x=[], y=[], left=[], right=[], beam=0.25, pen=pg.mkPen(DOWN, width=2))
         self.ri_points = pg.ScatterPlotItem(size=9, brush=pg.mkBrush(DOWN), pen=pg.mkPen("k"))
+        self.ri_outside = pg.ScatterPlotItem(size=9, brush=None, pen=pg.mkPen(WARN, width=2))
         self.ri_plot.addItem(self.ri_errors)
         self.ri_plot.addItem(self.ri_points)
+        self.ri_plot.addItem(self.ri_outside)
+        # The legend is built from stand-in markers so it reads the same whatever is on the plot.
+        self.ri_legend = self.ri_plot.addLegend(offset=(-4, 4), labelTextSize="8pt")
+        for marker, text in (
+                (pg.ScatterPlotItem(symbol="s", size=10, brush=pg.mkBrush(0, 114, 178, 90), pen=pg.mkPen(UP)),
+                 "Peak's RI ± its uncertainty (blue band)"),
+                (pg.ScatterPlotItem(symbol="o", size=8, brush=pg.mkBrush(DOWN), pen=pg.mkPen("k")),
+                 "Library candidate, bar = its ± uncertainty"),
+                (pg.ScatterPlotItem(symbol="o", size=8, brush=None, pen=pg.mkPen(WARN, width=2)),
+                 "Candidate outside the RI gate (demoted)")):
+            self.ri_legend.addItem(marker, text)
 
         self.accept_btn = QtWidgets.QPushButton("✔ Accept best")
         self.choose_btn = QtWidgets.QPushButton("Use selected candidate")
@@ -236,11 +260,10 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         left = QtWidgets.QWidget()
         left_lay = QtWidgets.QVBoxLayout(left)
         left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.addWidget(QtWidgets.QLabel("<b>Largest peaks</b>"))
-        left_lay.addWidget(self.summary)
-        left_lay.addWidget(QtWidgets.QLabel("<b>All peaks</b>, largest first"))
+        left_lay.addWidget(self.explorer, 3)
+        left_lay.addWidget(QtWidgets.QLabel("<b>Peaks</b>, largest first. Double-click a name to type your own."))
         left_lay.addLayout(filters)
-        left_lay.addWidget(self.table, 1)
+        left_lay.addWidget(self.table, 4)
         left_lay.addWidget(self.table_note)
         right = QtWidgets.QWidget()
         right_lay = QtWidgets.QVBoxLayout(right)
@@ -288,6 +311,9 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
     def set_background(self, colour) -> None:
         self.spectrum_plot.setBackground(colour)
         self.ri_plot.setBackground(colour)
+        self.explorer.set_background(colour)
+        if self.chemspace is not None:
+            self.chemspace.set_background(colour)
 
     # ================================================================ set-up
     def _fill_runs(self) -> None:
@@ -354,6 +380,26 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
             self.state.set_settings(new)
             self._fill_ladders()
 
+    def _explore_space(self) -> None:
+        """Open (or bring forward) the chemical-space window for the run shown here."""
+        from .chemspace_window import ChemSpaceWindow
+        if self.chemspace is None:
+            from .theme import apply_theme
+            self.chemspace = ChemSpaceWindow(self)
+            self.chemspace.peakClicked.connect(self._select_label)
+            apply_theme(self.mw, self.mw.dark)            # background and axis colours for the new window's plot
+        self.chemspace.refresh()
+        self.chemspace.show()
+        self.chemspace.raise_()
+        self.chemspace.activateWindow()
+
+    def _edit_ladder(self) -> None:
+        index = self.run_box.currentData()
+        if index is None:
+            self.table_note.setText("Open and select a run first.")
+            return
+        self.mw.show_ladder_editor(int(index))
+
     def _indices(self) -> list[int]:
         if self.all_runs.isChecked():
             return [i for i in self.project.loaded()
@@ -387,7 +433,6 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         ready = index is not None and not (missing if not self.all_runs.isChecked() else [])
         self.match_btn.setEnabled(bool(ready) and not state.running and not state.loading)
         self.match_btn.setText("Matching…" if state.running else "📚 Match peaks")
-        self._fill_summary()
         self._fill_results()
 
     def _current_matches(self):
@@ -398,28 +443,43 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         index = self.run_box.currentData()
         return {} if index is None else self.state.decisions_for(int(index))
 
-    def _fill_summary(self) -> None:
-        found = self._current_matches()
-        top = largest_peaks(found.matches, 10) if found is not None else []
-        decisions = self._decisions()
-        self.summary.setRowCount(len(top))
-        biggest = max((s for _m, s in top if np.isfinite(s)), default=1.0) or 1.0
-        for r, (match, share) in enumerate(top):
-            bar = "█" * max(1, int(round(14 * share / biggest))) if np.isfinite(share) else ""
-            best = match.best
-            name = self._display_name(match, decisions)
-            cells = (str(r + 1), f"{bar}  {share:.1%}" if np.isfinite(share) else "", f"{match.query.t1 / 60:.3f}",
-                     name if best else "(no candidate)", level_text(match.level))
-            for c, text in enumerate(cells):
-                item = QtWidgets.QTableWidgetItem(text)
-                item.setData(QtCore.Qt.ItemDataRole.UserRole, match.query.label)
-                if c == 4:
-                    item.setForeground(QtGui.QBrush(QtGui.QColor(LEVELS[match.level][1])))
-                self.summary.setItem(r, c, item)
-        self.summary.resizeColumnToContents(1)
+    def _run_map(self, index: int):
+        """The run's TIC as a grey 2D map for the explorer; built once per run, period and phase."""
+        p = self.project
+        run = p.display_run(index)
+        fold = p.fold(index)
+        if run is None or fold is None:
+            return None
+        key = (p.entries[index].name, id(run), p.period, p.entries[index].phase)
+        if key not in self._run_maps:
+            self._run_maps.clear()                        # one run's image at a time: they are large
+            image = fold.image(run.tic)
+            self._run_maps[key] = tic_map(image, float(fold.t1[0]), fold.spec.period, fold.row_pitch, key)
+        return self._run_maps[key]
+
+    def _update_explorer(self, found, decisions, shown_labels) -> None:
+        """Give the explorer every matched peak, those the table's filters hide marked as such."""
+        if found is None:
+            self.explorer.set_data([], None)
+            return
+        decisions = decisions or {}
+        total = sum(max(m.query.volume, 0.0) for m in found.matches)
+        dots = []
+        for m in found.matches:
+            name = identity_of(m, decisions.get(m.query.label))[0] or self._display_name(m, decisions)
+            dots.append(PeakDot(m.query.label, m.query.t1 / 60.0, m.query.t2,
+                                m.query.volume / total if total > 0 else float("nan"), m.level,
+                                m.best.mf if m.best else float("nan"), m.query.ri, name, m.query.label in shown_labels))
+        s = self.state.settings
+        index = int(self.run_box.currentData())
+        self.explorer.selected = self._shown.query.label if self._shown is not None else ""
+        self.explorer.set_data(dots, lambda: self._run_map(index), self._shown,
+                               ((s.mf_confident, f"{s.mf_confident:.0f}"), (s.mf_probable, f"{s.mf_probable:.0f}"),
+                                (s.mf_tentative, f"{s.mf_tentative:.0f}")))
 
     @staticmethod
     def _display_name(match, decisions) -> str:
+        """The name shown for a peak: the user's if they named it, otherwise the best candidate's."""
         d = decisions.get(match.query.label)
         best = match.best
         if d and d["action"] in NAMING_ACTIONS and d.get("name"):
@@ -450,6 +510,7 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         if found is None:
             self.table_note.setText("No matches yet. Press Match peaks.")
             self._show_detail(None)
+            self._update_explorer(None, {}, set())
             return
         decisions = self._decisions()
         blank = self.state.project.blank.current_for(int(self.run_box.currentData()))
@@ -467,7 +528,7 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
             d = decisions.get(m.query.label)
             values = [(str(rank), rank), (f"{m.query.t1 / 60:.3f}", m.query.t1), (f"{m.query.t2:.3f}", m.query.t2),
                       (f"{100 * share:.2f}" if np.isfinite(share) else "", share),
-                      (self._display_name(m, decisions), None), (best.formula if best else "", None),
+                      (self._display_name(m, decisions), None), (self._display_formula(m, d), None),
                       (level_text(m.level), ("confident", "probable", "tentative", "unknown").index(m.level)),
                       (f"{best.mf:.0f}" if best else "", best.mf if best else None),
                       (f"{best.rmf:.0f}" if best else "", best.rmf if best else None),
@@ -484,6 +545,10 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
                 if c == 12 and m.flags:
                     item.setForeground(QtGui.QBrush(QtGui.QColor(WARN)))
                     item.setToolTip("\n".join(FLAGS.get(f, f) for f in m.flags))
+                if c == 4:
+                    item.setToolTip("Double-click to type your own name for this peak")
+                    if d and d.get("action") == "named":
+                        item.setForeground(QtGui.QBrush(QtGui.QColor(LEVELS["confident"][1])))
                 item.setData(QtCore.Qt.ItemDataRole.UserRole, m.query.label)
                 self.table.setItem(r, c, item)
             self._rows.append(m)
@@ -501,6 +566,9 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
                 self._select_label(self._shown.query.label)
         else:
             self._show_detail(None)
+        self._update_explorer(found, decisions, {m.query.label for m in self._rows})
+        if self.chemspace is not None and self.chemspace.isVisible():
+            self.chemspace.refresh()
 
     def _blank_text(self, blank, k) -> str:
         """Where the peak stands against the subtracted blank run, in positive terms; empty if no subtraction was made."""
@@ -522,12 +590,21 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
                 self.table.selectRow(r)
                 return
 
-    def _summary_selected(self) -> None:
-        rows = sorted({i.row() for i in self.summary.selectedIndexes()})
-        if rows:
-            item = self.summary.item(rows[0], 0)
-            if item is not None:
-                self._select_label(item.data(QtCore.Qt.ItemDataRole.UserRole))
+    @staticmethod
+    def _display_formula(match, decision) -> str:
+        """The formula of the name shown: never the best candidate's when the user has typed a different name."""
+        return identity_of(match, decision)[1] if decision and decision.get("action") in NAMING_ACTIONS else (
+            match.best.formula if match.best else "")
+
+    def _cell_double_clicked(self, row: int, column: int) -> None:
+        """Double-clicking the name opens the dialog for typing one's own."""
+        if column != 4:
+            return
+        item = self.table.item(row, 0)
+        index = self.run_box.currentData()
+        if item is not None and index is not None:
+            from .peak_naming import rename_peak
+            rename_peak(self, self.project, int(index), item.data(QtCore.Qt.ItemDataRole.UserRole))
 
     def _row_selected(self) -> None:
         rows = sorted({i.row() for i in self.table.selectedIndexes()})
@@ -549,17 +626,24 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.down_bars.setOpts(x=[], height=[])
         self.ri_errors.setData(x=np.array([]), y=np.array([]), left=np.array([]), right=np.array([]))
         self.ri_points.setData([], [])
-        for b in (self.accept_btn, self.choose_btn, self.rename_btn, self.reject_btn, self.unknown_btn, self.clear_btn,
-                  self.promote_btn):
+        self.ri_outside.setData([], [])
+        for b in (self.accept_btn, self.choose_btn, self.reject_btn, self.unknown_btn):
             b.setEnabled(match is not None and match.best is not None)
+        # a peak the library cannot name can still be named, cleared and promoted by hand
+        for b in (self.rename_btn, self.clear_btn, self.promote_btn):
+            b.setEnabled(match is not None)
         self.export_btn.setEnabled(self._current_matches() is not None)
+        self.explorer.set_selected(match.query.label if match is not None else "", match)
+        if self.chemspace is not None and match is not None:
+            self.chemspace.set_selected(match.query.label)
+        decision =self._decisions().get(match.query.label) if match is not None else None
         if match is None or match.best is None:
-            self.detail_title.setText("Select a peak" if match is None else "No candidate for this peak")
-            self.detail_text.setText("" if match is None else self._flag_html(match))
+            self.detail_title.setText("Select a peak" if match is None else self._title_for(match, decision, "No candidate for this peak"))
+            self.detail_text.setText("" if match is None else self._flag_html(match)
+                                     + (f"<br>Decision: <b>{self._decision_text(match)}</b>" if self._decision_text(match) else ""))
             return
         best = match.best
-        q = match.query
-        self.detail_title.setText(f"{best.name}   {best.formula}   CAS {best.cas or 'unknown'}")
+        self.detail_title.setText(self._title_for(match, decision, f"{best.name}   {best.formula}   CAS {best.cas or 'unknown'}"))
         self.candidates.blockSignals(True)
         self.candidates.setRowCount(len(match.candidates))
         for r, c in enumerate(match.candidates):
@@ -580,6 +664,15 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
             f"<b>{level_text(match.level)}</b> (Schymanski level {match.tier or '3 or lower'}). "
             f"{self._evidence_html(match)}<br>{self._flag_html(match)}"
             + (f"<br>Decision: <b>{self._decision_text(match)}</b>" if self._decision_text(match) else ""))
+
+    @staticmethod
+    def _title_for(match, decision, library_title: str) -> str:
+        """The heading of the detail pane: the user's name when they gave one, with what the library thought beneath."""
+        if not decision or decision.get("action") not in NAMING_ACTIONS or not decision.get("name"):
+            return library_title
+        name, formula, cas = identity_of(match, decision)
+        mine = f"{name}   {formula or 'formula unknown'}   CAS {cas or 'unknown'}   (named by you)"
+        return mine if match.best is None or match.best.name == name else f"{mine}\nLibrary's best match: {match.best.name}"
 
     def _evidence_html(self, match) -> str:
         best, q = match.best, match.query
@@ -633,16 +726,25 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.spectrum_plot.setYRange(-115, 115)
         # Retention index of the peak against each candidate's, in standard deviations of the combined uncertainty.
         self.measured_band.setVisible(bool(np.isfinite(q.ri)))
-        xs, ys, sig = [], [], []
+        xs, ys, sig, inside = [], [], [], []
         if np.isfinite(q.ri):
             self.measured_band.setRegion((q.ri - q.ri_sigma, q.ri + q.ri_sigma))
+        n = len(match.candidates)
         for r, cand in enumerate(match.candidates):
             if np.isfinite(cand.ri_lib):
                 xs.append(cand.ri_lib)
-                ys.append(len(match.candidates) - r)
+                ys.append(n - r)
                 sig.append(cand.ri_sigma_lib)
+                inside.append(bool(cand.in_gate))
         self.ri_errors.setData(x=np.array(xs), y=np.array(ys, dtype=float), left=np.array(sig), right=np.array(sig))
-        self.ri_points.setData(xs, ys)
+        self.ri_points.setData([x for x, ok in zip(xs, inside) if ok], [y for y, ok in zip(ys, inside) if ok])
+        self.ri_outside.setData([x for x, ok in zip(xs, inside) if not ok], [y for y, ok in zip(ys, inside) if not ok])
+        # rank 1, the best candidate, at the top; the axis says so rather than leaving the heights unexplained
+        self.ri_plot.getPlotItem().getAxis("left").setTicks([[(n - r, str(r + 1)) for r in range(n)]])
+        missing = sum(not np.isfinite(c.ri_lib) for c in match.candidates)
+        self.ri_plot.setTitle("Does the library's retention index agree with the peak's?"
+                              + (f"  ({missing} candidate(s) have no library RI)" if missing else "")
+                              + ("" if np.isfinite(q.ri) else "  (this peak has no RI)"), size="8pt")
         if xs or np.isfinite(q.ri):
             allx = xs + ([q.ri] if np.isfinite(q.ri) else [])
             spread = max(max(sig, default=0), q.ri_sigma if np.isfinite(q.ri_sigma) else 0, 30)
@@ -664,7 +766,8 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         if action in ("accepted", "chosen") and cand is None:
             return
         name, cas = (cand.name, cand.cas) if action in ("accepted", "chosen") else ("", "")
-        self.state.decide(int(index), match.query.label, action, name, cas)
+        self.state.decide(int(index), match.query.label, action, name, cas,
+                          formula=cand.formula if action in ("accepted", "chosen") else None)
 
     def _rename(self) -> None:
         index = self.run_box.currentData()
@@ -680,7 +783,11 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         match = self._shown
         d = self._decisions().get(match.query.label) if match else None
         cand = self._selected_candidate() or (match.best if match else None)
-        if match is None or cand is None or self.state.library is None:
+        if match is None:
+            return
+        named = d is not None and d.get("action") in NAMING_ACTIONS and d.get("name")
+        if cand is None and not named:
+            self.table_note.setText("This peak has no candidate and no name: give it a name first (double-click it).")
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self, "Append to a target table", str(self.project.targets_path) if self.project.targets_path else "target_table.csv",
@@ -689,11 +796,27 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
             self.promote_to_file(match, cand, path, d)
 
     def promote_to_file(self, match, cand, path, decision=None) -> None:
-        """The write, separate from the file dialog. The target sits where the peak was found in this run."""
+        """The write, separate from the file dialog. The target sits where the peak was found in this run.
+
+        A peak the user has named, with a name that is not the candidate's (or no candidate at all), becomes a target
+        built from the peak's own strongest ions: there is no library spectrum to take them from."""
         from pathlib import Path
-        entry = self.state.library.entry(cand.index)
-        target = promote_to_target(entry, SimpleNamespace(ri=None if not np.isfinite(match.query.ri) else float(match.query.ri)),
-                                   match.query.t1, match.query.t2)
+        named = decision is not None and decision.get("action") in NAMING_ACTIONS and decision.get("name")
+        q = match.query
+        ri = None if not np.isfinite(q.ri) else float(q.ri)
+        if named and (cand is None or cand.name != decision["name"] or self.state.library is None):
+            keep = np.asarray(q.intensity) > 0
+            entry = LibraryEntry(decision["name"], np.asarray(q.mz)[keep], np.asarray(q.intensity)[keep], ri=ri,
+                                 cas=decision.get("cas", ""))
+            if entry.mz.size == 0:
+                self.table_note.setText(f"{decision['name']} has no spectrum to take ions from, so it cannot become a target.")
+                return
+        elif cand is not None and self.state.library is not None:
+            entry = self.state.library.entry(cand.index)
+        else:
+            self.table_note.setText("Load the library to promote a library match.")
+            return
+        target = promote_to_target(entry, SimpleNamespace(ri=ri), q.t1, q.t2)
         append = Path(path).exists()
         try:
             write_targets_csv([target], path, append=append)

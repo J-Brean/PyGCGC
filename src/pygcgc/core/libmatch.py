@@ -591,7 +591,7 @@ def largest_peaks(matches: list, n: int = 10) -> list:
 IDENTIFICATION_FIELDS = ["run", "rank", "peak", "t1_min", "t2_s", "volume", "percent_of_signal", "name", "formula", "cas",
                          "confidence", "schymanski_level", "mf", "rmf", "ri_measured", "ri_measured_sigma",
                          "ri_library", "ri_library_sigma", "ri_kind", "z", "q_value", "flags", "flag_text",
-                         "runner_up", "decision", "decision_name", "library", "column_class"]
+                         "runner_up", "decision", "decision_name", "decision_formula", "decision_cas", "library", "column_class"]
 
 
 def write_identifications_csv(path, run: str, matches: list, decisions: dict | None = None, library: str = "",
@@ -623,5 +623,6 @@ def write_identifications_csv(path, run: str, matches: list, decisions: dict | N
                 ri_kind=best.ri_kind if best else "", z=num(best.z if best else None, ".2f"), q_value=num(m.q_value, ".3f"),
                 flags=";".join(m.flags), flag_text=" ".join(FLAGS.get(f, f) for f in m.flags),
                 runner_up=runner.name if runner else "", decision=decision.get("action", ""),
-                decision_name=decision.get("name", ""), library=library, column_class=settings.column_class))
+                decision_name=decision.get("name", ""), decision_formula=decision.get("formula") or "",
+                decision_cas=decision.get("cas") or "", library=library, column_class=settings.column_class))
     return path

@@ -20,6 +20,28 @@ LEVEL_RGB = {"confident": (0, 158, 115), "probable": (86, 180, 233), "tentative"
 LEVEL_SYMBOL = {"confident": "●", "probable": "◐", "tentative": "○", "unknown": "✕"}
 
 
+def identity_of(match, decision) -> tuple[str, str, str]:
+    """`(name, formula, CAS)` the peak goes by, any of them possibly empty.
+
+    A decision that names the peak wins. Its formula is the one saved with it, or, for a decision made before
+    formulae were saved, that of the candidate with the same name; a name that is in no library has none, and
+    the best candidate's formula is never lent to a name the user typed. A rejected or unknown peak has no
+    identity. Otherwise it is the best candidate's."""
+    action = (decision or {}).get("action")
+    if action in ("rejected", "unknown"):
+        return "", "", ""
+    if action in NAMING_ACTIONS and decision.get("name"):
+        name = decision["name"]
+        formula, cas = decision.get("formula"), decision.get("cas", "")
+        if formula is None:
+            same = next((c for c in match.candidates if c.name == name), None)
+            formula = same.formula if same is not None else ""
+            cas = cas or (same.cas if same is not None else "")
+        return name, formula or "", cas or ""
+    best = match.best
+    return (best.name, best.formula, best.cas) if best is not None else ("", "", "")
+
+
 def label_for(match, decision) -> tuple[str, tuple]:
     """`(text, rgb)` for a peak's label on the image: its name, how it got it, and how sure the match is."""
     best = match.best
@@ -113,9 +135,9 @@ class PeakNameDialog(QtWidgets.QDialog):
         self.cleared = True
         self.accept()
 
-    def result_name(self) -> tuple[str, str, str]:
-        """`(name to save, CAS, what was typed)`."""
-        return self.check.name, self.check.cas, self.edit.text().strip()
+    def result_name(self) -> tuple[str, str, str, str]:
+        """`(name to save, CAS, what was typed, formula)`; CAS and formula are empty for a name no library holds."""
+        return self.check.name, self.check.cas, self.edit.text().strip(), self.check.formula
 
 
 def rename_peak(parent, project, index: int, label: str) -> bool:
@@ -145,6 +167,6 @@ def rename_peak(parent, project, index: int, label: str) -> bool:
     if dialog.cleared:
         state.clear_decision(index, label)
         return True
-    name, cas, typed = dialog.result_name()
-    state.decide(index, label, "named", name, cas, typed=typed)
+    name, cas, typed, formula = dialog.result_name()
+    state.decide(index, label, "named", name, cas, typed=typed, formula=formula)
     return True
