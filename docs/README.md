@@ -16,11 +16,13 @@ Current guidance was reconciled with the code on 19 October 2026. Start with
 | [Benchmarks](../benchmarks/README.md) | reproduction commands and dataset requirements |
 | [Agent notes](../CLAUDE.md) | workspace rules and current implementation constraints |
 | [Changelog](../CHANGELOG.md) | dated changes and the checks performed at each revision |
+| [Feedback plan, 20 October](plans/feedback-2026-10-20.md) | the plan for the small-screen, anchoring-window, matcher and blank-subtraction round, with James's decisions D1 to D5 |
 
 ## Latest evidence
 
 | Report | What it establishes |
 |---|---|
+| [Library matcher and blank subtraction, 20 October](validation/library-matcher-2026-10-20.md) | NIST SDF reading, the measured bias of NIST's estimated retention index, search speed, a self-match benchmark and a first real blank-and-sample check; thresholds provisional |
 | [Code audit, 19 October](validation/code-audit-2026-10-19.md) | 850 tests passed, 31 optional-data skips; numerical, import and job-state fixes; native and wheel smoke checks |
 | [Anchor workflow, 19 October](validation/anchor-workflow-2026-10-19.md) | guided anchor collection, editing, restart, bounded refinement and four-run native smoke checks |
 | [Guided workflow, 18 October](validation/guided-workflow-2026-10-18.md) | calibration setup, standard exceptions, prerequisites and fitting previews |

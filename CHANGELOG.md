@@ -6,6 +6,29 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Colleague feedback round, 2026-10-20** (branch `feedback-2026-10-20`; plan in `docs/plans/feedback-2026-10-20.md`).
+Four requests, all built.
+
+- *Small screens.* Compact, standard and large text sizes (View → Text size, default from the screen height), windows
+  clamped to their screen, a main window that can shrink below 900 px wide (the Review and Calibration pages had been
+  forcing 1200 px), the Process menu as one submenu per numbered step (it had two "4" sections and a "6" before the "5"),
+  and Tools moved into the menu bar because a drop-down button in a crowded toolbar falls into its overflow arrow.
+- *Anchoring window.* Phase check first (ticks cleared by any phase or period change), a header naming the run ("Run 3 of
+  8", reference or sample), a live count of anchors against what each transform needs, the run's own image with the
+  reference position and snap box drawn on it, an ANCHOR button, and a before/after overlay with offsets, leave-one-out error
+  and image match. Clicks are held (`AlignState.holding`) until ANCHOR, so nothing moves under the mouse and blank layers
+  are not invalidated by every click. Two existing expectations changed deliberately (a click no longer refits at once;
+  picking needs the phases ticked).
+- *📚 Library matcher* on the NIST 2011 SDF files: spectrum plus retention index (column class 5 % phenyl), largest peaks
+  first, every uncertainty a named flag, decoy q-values, decisions saved with a content signature. Column dimensions and the
+  oven programme are not needed. NIST's estimated RI is corrected per column class from the bias measured over 45,000
+  compounds. About 20 ms per peak on 244,000 spectra. Evidence and limits in
+  [the matcher note](docs/validation/library-matcher-2026-10-20.md); thresholds are provisional.
+- *➖ Peak-level blank subtraction* (new Assign sub-step) and **amounts as sample minus factor times blank** in 🧪 (James's
+  decision of 20 October); unknowns' volumes corrected peak by peak before the surrogate curve. Warns when the blank and
+  the sample have different phases and no alignment, found on the real runs below.
+- Test totals: see the end of this entry.
+
 **Documentation reconciliation, 2026-10-19.**
 Added a documentation index, historical-record index and complete input-table reference.
 README, user guide, demo tour, architecture, benchmark instructions, roadmap and agent notes

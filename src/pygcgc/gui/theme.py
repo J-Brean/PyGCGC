@@ -99,6 +99,9 @@ QTableView, QTreeView, QListView, QTableWidget, QListWidget, QTreeWidget {{
     background: {inset}; alternate-background-color: {stripe}; border: 1px solid {line}; border-radius: 6px;
     gridline-color: transparent;
     selection-background-color: {highlight}; selection-color: {onhl}; outline: none; }}
+QTableView::indicator, QListView::indicator {{ width: 14px; height: 14px; border: 1px solid {mid}; border-radius: 3px;
+    background: {base}; }}
+QTableView::indicator:checked, QListView::indicator:checked {{ background: {highlight}; border: 1px solid {highlight}; }}
 QHeaderView::section {{ background: {window}; color: {mid}; border: none;
     border-bottom: 1px solid {line}; padding: {header_pad}; }}
 
