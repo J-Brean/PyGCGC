@@ -28,8 +28,10 @@ These block validation, not development.
    added, and their amounts per tube, for each sequence. See [input tables](docs/input-tables.md).
    On the September 76-minute runs, n-dotriacontane-d66 lay beyond the acquisition and
    di-n-octyl phthalate-d4 was not found *(audit)*.
-3. **A mass-spectral library** (NIST export via `lib2nist`, or MoNA/MassBank). Every 🏷️ threshold
-   is tuned on small synthetic libraries.
+3. **A known mixture to test the 📚 matcher against.** The NIST 2011 SDF files are now read directly
+   (`C:\REAL_DATA_FOR_PYGCGC\nist\SDF`), but every match-factor and retention-index threshold is provisional and has
+   been checked only on library spectra matched to themselves and on the August standards' starter names, not on a
+   mixture of known composition. The old 🏷️ MSP search is still tuned on small synthetic libraries.
 4. **A labelled co-eluting standard pair** (BbF/BkF, benz[a]anthracene/chrysene or
    phenanthrene/anthracene) for the MS-aware peak finder, ✂️ and the retention-index penalty in 🏷️;
    component amounts must not feed quantification until that exists.
@@ -71,9 +73,16 @@ These block validation, not development.
   periods, so their offsets are known only to about 0.05 carbon.
 - **🧬 classes, 🧩 clusters and 🧪 results** are recomputed after reopening (fast once the cached
   blobs are back; settings and decisions are saved).
-- **Blank subtraction** reads the blank through the alignment, but is unchecked on real data, is
+- **Pixel blank subtraction (🧹)** reads the blank through the alignment, but is unchecked on real data, is
   not redone when an alignment changes, is not cached, and is absent from 🗂️ batch and the CLI.
-- **📍 alignment** is unchecked on real drift. Guided clicks now cycle through every loaded
+- **➖ Peak-level blank subtraction** pairs peaks by position and spectrum and takes the blank's amount off each
+  target. It assumes the amounts are additive (blank contribution measured through the same curve), floors a corrected
+  amount at zero, and is absent from 🗂️ batch and the CLI. Its suggested factor is the median sample-to-blank ratio of
+  shared peaks, which real compounds also present in the blank push upwards. Checked on one real blank and sample pair
+  (see the matcher validation note) and on synthetic runs.
+- **📍 alignment** is unchecked on real drift. The anchoring window (phase check, ANCHOR, before and after) is
+  tested on the synthetic runs only; its image-match statistic has no real-data benchmark. Two real runs of one method
+  had phases 0.86 s and 1.37 s from different estimators, which is what the phase check is for. Guided clicks now cycle through every loaded
   run, with bounded intensity-maximum refinement; intensity-weighted centroids remain unbuilt. Batch
   anchor-finding matches each anchor independently rather than by assignment across every peak.
 - **🔍 legacy co-elution flag** (single-linkage on each ion's apex) has never been checked against
@@ -85,8 +94,12 @@ These block validation, not development.
   count (12) are starting points.
 - **🗂️ batch**: the feature-matching radius and gap-fill window are fixed constants; progress is one
   status line.
-- **🏷️ identification**: only Schymanski levels 2a/2b/3 are reachable; MSP parsing is checked only
-  on hand-written files.
+- **📚 library matcher**: only Schymanski levels 2a/2b/3 are reachable. The systematic retention-index
+  allowance of 15 units, the 850/750/650 match-factor thresholds, the 30-point runner-up margin and the 3 and 2
+  standard-deviation gates are provisional (James agreed them on 20 October 2026 as starting values). NIST's
+  estimated index is corrected by the bias measured over 45,000 compounds, but which column class it describes is
+  inferred from that comparison, not from NIST documentation. Isomers with near-identical spectra and indices stay
+  ambiguous. No labels on the 2D image. The older 🏷️ MSP-only search remains, with its original provisional scoring.
 - **✂️**: hand-drawn line and valley splits exist in `core/overlap` with no drawing tool; PARAFAC
   across runs has no GUI; PARAFAC2 was never built; MCR-ALS unimodality is an approximation.
 - **Detector saturation** is the brightest value seen three times; estimating it from flat-topped

@@ -17,11 +17,13 @@ arrangements; current names and routes are given in the text.
 ### Layout
 
 - **Left:** one panel, "Workspace", with tabs. **Runs** is the run list, **Tool** shows the open step's settings and its Go button (its tab is named after the step), **Layers** shows which runs are cleaned or aligned, **Results** holds the 🧪 tables, **Standards** the internal-standard grid, **History** the undo list and **Log** every message in full. Opening a step from the toolbar switches to the Tool tab. Running jobs, with their progress and cancel buttons, appear at the foot of this panel and hide themselves when idle.
-- **Top toolbar:** Load, Align, Background, Peaks, Standards, Assign, Quantify, Export. **Tools** contains specialist tools and separate analysis windows. Below it, the view bar holds the ion box, colour scale, raw/cleaned, zoom and previous/next run; **Display options** holds S/N, overlays, levels, extend t₂ and region selection.
+- **Top toolbar:** Load, Align, Background, Peaks, Standards, Assign, Quantify, Export. The **Tools** menu (in the menu bar, beside Process) contains specialist tools and separate analysis windows, and Process has one submenu per numbered step. Below it, the view bar holds the ion box, colour scale, raw/cleaned, zoom and previous/next run; **Display options** holds S/N, overlays, levels, extend t₂ and region selection.
 - **Centre:** the 2D and 1D views, the 🧪 Review gallery, the Calibration curves and Compare.
 - **Right:** the spectrum.
 
-Every panel can be moved, floated onto a second screen or hidden. To bring one back, use **Panels ▾** (also View → Panels). **Reset layout** in the same menu restores the default arrangement.
+Every panel can be moved, floated onto a second screen or hidden. To bring one back, use View → Panels. **Reset layout** in the same menu restores the default arrangement.
+
+**Small screens and text size.** On a screen under 900 pixels high (a 1366 × 768 laptop, or 1080p scaled to 150 %) the text opens **compact**: 8 pt, tighter buttons, spacing and tabs. View → Text size chooses Compact, Standard or Large at any time; the choice is remembered in `%APPDATA%\PyGCGC\PyGCGC.ini`, applies at once and needs no restart. Windows never open larger than the screen they are on, the main window remembers its size and position, and the Review and Calibration pages no longer force the window wider than 1000 pixels. Menus are split by step so none is taller than a small screen, and the Tools menu is in the menu bar because a drop-down button in a crowded toolbar can slip into its overflow arrow, where it is awkward to open.
 
 **Colours.** The light theme is white panels on a pale grey window with an indigo accent; View → Dark theme switches to near-black with a green accent. The top of the window takes a faint tint of the step that is open. The chromatogram colour map (turbo) is the same in both.
 
@@ -351,13 +353,19 @@ recognised four internal standards ([report](validation/calibration-standards-20
 
 Retention drifts a little from run to run: a few seconds in t1, a few hundredths of a second in t2. Alignment fits a map from one run's true coordinates onto a chosen reference run's, so images can be resampled onto the same grid and compared pixel for pixel.
 
-**Picking a reference.** In the 📍 Align panel, choose the run everything else will be aligned to, or press **Pick anchors across runs** to use the first loaded run. The reference is always shown as itself, never resampled.
+**The anchoring window.** Press **Pick anchors across runs** (or **A**, or **Open the anchoring window…**) and a window opens with three pages.
+
+1. **Phase check.** An anchor records where a peak sits inside its modulation, so a run's phase must be right before anchoring: change it afterwards and every peak in that run moves in the second dimension. The page lists each run with its phase, how it was found and a small picture of its folded TIC (a wrong phase cuts peaks across the top and bottom edges). Tick every run you are happy with, then **Continue**. A tick is removed whenever that run's phase or the period changes. **Open Fold and phase…** takes you to the fix.
+2. **Pick anchors.** The header names the run being clicked ("Run 3 of 8: RUN_C") with a badge saying whether it is the reference or a sample, and a strip of chips shows which runs already have this anchor. A box states how many anchors are complete on every sample and what each transform needs (one for a shift, three for a stretch, six for a curve, and what automatic choice will consider with that many), and warns if the anchors sit in one third of the run or less. The image is the run's own: click a clear peak on the reference, then the same peak on each sample. On a sample the reference position is drawn as an orange cross inside a dashed box, the region a click snaps to the brightest nearby pixel. **Skip this peak in this run** passes over a missing peak; **Finish picking** or **Esc** keeps the clicks and stops. Use TIC or a single ion, and keep the same one for a round.
+3. **Check the result.** Press **ANCHOR**. Until then clicks are only recorded, so nothing moves under your mouse and an applied blank subtraction is not invalidated. ANCHOR fits every run's transform and opens a page with the reference in magenta and the run in green **before** and **after**, and a table for each run: the transform used, the number of anchors, how far apart the anchors were before (t₁ s / t₂ ms), the leave-one-out error after, how alike the two images are before and after (correlation over their brightest pixels, 0 to 1) and a status. "Worse after alignment" means the transform made the images less alike (usually too few anchors or anchors in one part of the run); add anchors across the run and press ANCHOR again. **Back to anchors** keeps every click.
+
+If a run's phase changes after it was anchored, the phase page marks it "anchored with a different phase" and the result table says "Phase changed since anchoring"; pick its anchors again or press ANCHOR to refit. Projects saved before this record how each run was anchored are not flagged.
+
+**Picking a reference.** In the 📍 Align panel, choose the run everything else will be aligned to, or start picking to use the first loaded run. The reference is always shown as itself, never resampled.
 
 ![Guided anchor collection on the small synthetic workflow fixture: saved points remain in the shared table while the reference prompts for the next anchor](images/screenshot_align.png)
 
-**Anchors, by hand.** Press **Pick anchors across runs** (or **A**) and use TIC or a single ion. Click a peak on the reference: it is recorded as P1 immediately, and the view advances to the next loaded chromatogram. Click the same peak there, then on each remaining run in sequence. A shared table keeps every recorded position visible, with the current run's rows in bold; labelled crosses mark saved clicks on the image. Keep the same ion throughout an anchor's round.
-
-After the last run, the view returns to the reference and prompts for a new peak, P2. Repeat with points spread across retention time. **Skip peak in this run** advances past a missing peak without inventing a match. **Finish picking**, **A** or **Esc** ends collection and keeps the points already recorded. Manually switching runs, leaving Align or changing the input data also finishes collection. Picking uses the run's own coordinates, so aligned display is off during collection.
+After the last run, the window returns to the reference and prompts for a new peak, P2. Repeat with points spread across retention time. The main window's 2D view follows along and still accepts clicks, but the window's own image is the place to click. The shared table in the Align panel keeps every recorded position visible, with the current run's rows in bold; labelled crosses mark saved clicks on the image.
 
 **Add, delete or start again.** The visible **Add points (A)** button starts the same guided
 picker; while picking, it becomes **Finish picking (Esc)**. Select one or more table rows
@@ -366,8 +374,9 @@ a reference row also deletes its matching points across the runs. **Start alignm
 clears all alignment points, transforms and transform overrides, keeps your chosen reference,
 and returns to it ready to pick P1 again. It also clears the old completion banner.
 **Ctrl+Z** restores the previous alignment. These controls are outside More alignment options.
+Deleting, restarting, undoing, refining and auto-finding apply at once, as before: only the picking session waits for ANCHOR.
 
-A transform is fitted as points arrive:
+When you press ANCHOR, each run's transform is fitted from its clicks:
 
 - **1 anchor:** a plain shift in t1 and t2.
 - **3 or more:** a straight stretch and shift in t1, plus a t2 offset that can itself vary linearly with t1 (useful when the second dimension drifts differently early and late in the run). Both fits are Huber-weighted, so one bad click doesn't wreck the rest.
@@ -592,23 +601,55 @@ The settings are saved with the project; results are not, so classify again afte
 
 **Not built:** a settings dialog for `ClassSettings`; a rule editor in the panel (edit the file and reload); saving results in the project; a command-line `--classify`; feeding the class into 🏷️ Identify to narrow the library search.
 
-### 🏷️ Identify
+### ðŸ“š Library matcher (Assign â†’ Search a spectral libraryâ€¦)
 
 ![The identifier window: the urban sample's peaks searched against the demonstration library](images/screenshot_identify.png)
 
-Open **Assign → Search a spectral library…** or the corresponding Tools/Process action.
-The identifier searches the selected detector's peak spectra, including full-ion spectra
-from fitted MS-aware components. Reopening refreshes the selected run and retains the
-loaded library. Search results stay in the dialog; the main Export action can include
-available identification results. **Promote to target…** and **Add to in-house library…**
-write files explicitly. Accepted component fitting is handled separately in Resolve overlap.
+The matcher names the detected peaks from the **mass spectrum and the retention index together**, against the NIST library or an MSP file. It is written to make three things plain: what the largest peaks are, how sure each match is, and what is uncertain about it. (The screenshot shows the older MSP-only window, still available under Tools as **Older MSP-only search**.)
 
-- **Load library (MSP)…** reads any plain-text MSP file (NIST via `lib2nist`, MoNA, MassBank, or one built here). "Generate decoys automatically" (on by default) adds a shuffled decoy per real entry, so a target-decoy q-value can be estimated even from a library that doesn't carry its own decoys already.
-- **🏷️ Identify blobs** searches every blob's own apex spectrum (cleaner than the whole-footprint sum, which can pick up a co-eluting neighbour), using the retention index from ⛓️'s own alkane ladder if one's been found on this run (search still works without it, on the spectrum alone). The results table gives each blob's best hit, its score, the query and library retention indices, a simplified confidence tier (2a/2b/3, see [Known limitations](../ROADMAP.md)), and a target-decoy q-value.
-- **Promote to target…** writes the selected hit as a row in a target table CSV (appending to the one already loaded, or starting a new file), with quantifier and qualifier ions read from the library entry's own strongest peaks, at the position the compound was actually found on this run. Reload the target table to use it.
-- **Add to in-house library…** writes the selected blob's own apex spectrum as a new MSP entry (typing a name, since a blob without a confident hit has none of its own), building a real, reusable library from standards run on this instrument over time.
+**What it needs.** The NIST folder (the one holding `mainlib.sdf`, ideally with `replib.sdf` and `nist_ri.sdf`, or its `SDF` subfolder) or an MSP file; fitted peaks in the run (step 4); and your first-dimension **column class**, which for a 5 % phenyl column is *semi-standard non-polar*. For retention indices it also uses an **n-alkane ladder** (â›“ï¸), the run's own or another run's. **Column dimensions and the oven programme are not needed**: a retention index is measured against the alkanes run on the same method, which cancels most of their effect. Without a ladder the match rests on the spectrum alone and every peak says so.
 
-⚙️ edits `IdentifySettings` and **Browse library…** edits a loaded library (see below). **Not built:** genuine Schymanski level 1 (needs a co-injected reference standard) or level 4 (needs an exact-mass molecular formula) confidence -- only 2a/2b/3 are reachable from a unit-mass EI spectrum plus RI. See [Known limitations](../ROADMAP.md) for what else is provisional.
+**Reading the first time.** The library is read once, which takes about a minute for the full NIST files (244,000 spectra and 350,000 literature indices), and is kept in a local cache (`%LOCALAPPDATA%\PyGCGC\libraries`) so later sessions load it in a few seconds. The literature retention indices are cached per column class. Nothing from the library is stored in the project or the repository.
+
+**The window, top to bottom.**
+
+- *Set-up strip.* Library, column class, the run or all 70 eV runs, and where the ladder comes from ("each run's own", or borrow another run's: through the alignment if both are aligned, otherwise with the same times, which the window states). Anything missing is one sentence in red.
+- *Largest peaks.* The ten peaks with the most fitted signal, each with its share of the run, its best match and its confidence.
+- *All peaks,* largest first, with filters (confidence, flagged only, name, minimum share). Confidence is a symbol and a word: â— confident, â— probable, â—‹ tentative, âœ• unknown. The last column says where the peak stands against a subtracted blank.
+- *The selected peak.* The measured spectrum above and the library's below, the candidates with their match factors and retention indices, the peak's retention index against each candidate's with its uncertainty, and every uncertainty as a sentence.
+
+**How a match is judged.** The *match factor* (MF) is 999 times the squared cosine of the two intensity- and mass-weighted spectra (Stein and Scott weighting); the *reverse* factor ignores library ions the entry does not have, so a neighbour's extra ions in the peak do not count against it. These resemble NIST MS Search's values but are not identical; do not read NIST's thresholds across. The retention index is a **gate, not a score**: a candidate whose index is within 3 standard deviations of the peak's is ranked by MF. The deviation combines the peak's own time uncertainty (a quarter of a modulation), the spread of the published values for that compound, and 15 index units for the difference between a GCÃ—GC first dimension and the one-dimensional columns of the literature. A strong spectral match that fails the gate is still shown, demoted, and the peak is flagged `RI_CONFLICT`.
+
+| Level | Rule (provisional) |
+|---|---|
+| Confident (Schymanski 2a) | MF â‰¥ 850, a measured library RI within 2 standard deviations, no close runner-up, no more than 5 % estimated false discovery rate |
+| Probable (2b) | MF â‰¥ 750 and within 3 standard deviations; or confident apart from an estimated-only RI, or no RI to check |
+| Tentative (3) | MF â‰¥ 650 |
+| Unknown | anything else; the best candidate is still shown |
+
+**Where the library's retention index comes from.** The experimental median for your column class from `nist_ri.sdf` (temperature-programmed records only), linked by CAS number, NIST number or name; n-alkanes take 100 Ã— carbon number by definition. Where there is no measurement, NIST's *estimated* index is used, corrected for your column class. Checked against the measured values on 20 October 2026, that estimate describes a standard non-polar column (median error 0, spread 62 units) and reads 21 units low on a 5 % phenyl column (spread 89); on a polar column it is useless, and estimates NIST itself gives an error of 120 or more were wrong by hundreds of units, so neither is used. Evidence in the [matcher validation](validation/library-matcher-2026-10-20.md).
+
+**Uncertainty flags.** Each is a code with a sentence, shown in the table, the detail pane and the export: `RI_MISSING`, `RI_ESTIMATED`, `RI_LIBRARY_MISSING`, `RI_EXTRAPOLATED` (outside the ladder), `RI_BORROWED`, `RI_TENSION` (more than 2 standard deviations), `RI_CONFLICT`, `ISOMER_AMBIGUOUS` and `CLOSE_RUNNER_UP` (another compound within 30 MF points inside the gate), `FEW_IONS`, `COELUTION`, `HIGH_FDR` and `CLASS_DISAGREES` (the ðŸ§¬ class contradicts the library formula). A flag can lower the level but never raise it. Isomers with near-identical spectra and retention indices (phenanthrene and anthracene, for example) are honestly left as "probable, isomer ambiguous"; only a standard separates them.
+
+**False discovery rate.** Every library spectrum has a decoy with the same ions and retention index but shuffled intensities. A peak whose best match scores no better than its best decoy is not believed; the rate at each peak's score is estimated across the run. It needs at least 20 peaks to mean anything, and is blank below that.
+
+**Your decisions.** *Accept best*, *Use selected candidate*, *Reject* and *Mark unknown* are saved with the project, together with a signature of the evidence they were made on (the run's fitted peaks, the library, the settings, the ladder, the fold). They show only while that evidence is unchanged, and a decision never raises the confidence shown beside it. **Promote to targetâ€¦** writes the chosen candidate as a target-table row at the position the peak was found. **Export identificationsâ€¦** writes one CSV row per peak with every doubt as a code and a sentence; the main Export action writes `identifications_NNN.csv` per run and the settings in provenance.
+
+**Not built.** Level 1 identification (needs a co-injected standard); labels on the 2D image; the in-house library builder from the older window; MS/MS libraries. All thresholds above are provisional and unvalidated against a known mixture beyond the checks in the validation note.
+
+### ðŸ·ï¸ Older MSP-only search
+
+The previous identifier remains under **Tools** for MSP files. Open **Tools â†’ Older MSP-only search** to use it: **Load library (MSP)â€¦**, **Identify blobs**, **Promote to targetâ€¦**, **Add to in-house libraryâ€¦** and **Browse libraryâ€¦** work as before. Its scoring is the weighted dot product with a retention-index penalty and a simplified confidence tier (2a/2b/3); the matcher above replaces it for the NIST library.
+
+### âž– Subtract a run's peaks (Assign â†’ Subtract a run's peaksâ€¦)
+
+Use this when a blank (or any run whose signal you want to remove) has a messy baseline, so that subtracting it pixel by pixel would subtract noise from noise. Fitted peaks are summed over many pixels, so subtracting the blank's *peaks* is far less noisy.
+
+1. Choose the **blank run** and a **factor**: the amount of blank each sample carries. 1 means the sample saw exactly the blank's contamination; less if it was sampled for a shorter time or diluted.
+2. Press **Subtract the blank**. Every other run's peaks are paired one to one with the blank's: a blank peak must lie within 12 s in tâ‚ and 0.2 s in tâ‚‚ of the sample peak (after mapping through the alignment if the runs are aligned) and its mass spectrum must match (squared weighted cosine at least 0.7, the measure âš–ï¸ Compare uses). The blank's volume times the factor is taken off the sample peak's volume, never below zero. Peaks with no partner are untouched.
+3. Read the table for any run. Each peak is marked **above blank** when its volume is at least 3 times the blank's contribution (or the blank has no such peak) and **near blank** otherwise. The panel suggests a factor, the median sample-to-blank volume ratio of the shared peaks, but never applies it: if real compounds also sit in the blank the ratios run high, so the lower end is the safer guide.
+
+**Quantified amounts.** While *Also take the blank's amounts off the quantified amounts* is ticked (the default), ðŸ§ª reports each target as the sample's amount **minus the factor times the blank run's amount of that compound** (a compound the blank did not show counts as zero). The corrected amount is never below zero; one at or below the blank is set to zero and flagged "at or below blank". The uncertainties are combined. The Results table gains **before blank**, **blank amount** and **against blank** columns, and the unknown peaks' semi-quantitative amounts are read off their corrected volumes. Calibration runs, internal standards and the blank itself are left alone, because a calibration curve is built from responses that a blank does not touch. Press Quantify again after changing the blank or factor. The matcher shows each peak's standing against the blank, and the main Export writes `peak_blank_NNN.csv` and the settings.
 
 ### 🏷️ Internal standards
 

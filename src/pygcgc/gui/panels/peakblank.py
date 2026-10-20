@@ -193,8 +193,10 @@ class PeakBlankPanel(QtWidgets.QWidget):
         index = int(index)
         problems = self.state.why_not(index)
         found = self.state.results_for(index)
+        warning = self.state.phase_note(index)
         if found is None:
-            self.status.setText(" ".join(problems) if problems else "Press Subtract to take the blank off this run.")
+            self.status.setText(" ".join(problems + ([warning] if warning else [])) if (problems or warning)
+                                else "Press Subtract to take the blank off this run.")
             self.suggestion.setText("")
             return
         current = self.state.current_for(index) is not None
@@ -202,7 +204,8 @@ class PeakBlankPanel(QtWidgets.QWidget):
         self.status.setText(
             f"{s['peaks']} peaks: {s['above']} above blank, {s['near']} near blank; {s['matched']} have a partner in the blank, "
             f"{s['removed']} removed entirely, {s['reduced']} reduced; {s['signal_removed']:.1%} of the run's signal removed."
-            + ("" if current else " <out of date: the peaks, alignment or settings have changed since>"))
+            + ("" if current else " <out of date: the peaks, alignment or settings have changed since>")
+            + (" " + warning if warning else ""))
         hint = found.suggestion
         if hint["n"]:
             self.suggestion.setText(

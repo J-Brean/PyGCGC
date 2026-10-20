@@ -143,6 +143,27 @@ def test_the_main_export_writes_the_subtraction_and_its_settings(qtbot, window, 
     assert provenance["settings"]["peak_blank"]["applied_to_quantification"] is True
 
 
+def test_different_phases_without_an_alignment_are_called_out_because_peaks_would_not_pair(qtbot, window):
+    w = window
+    state = w.project.blank
+    a, b = w.project.index_of("RUN_A"), w.project.index_of("RUN_B")
+    w.project.set_phase(a, 0.2)
+    w.project.set_phase(b, 0.2)
+    state.set_settings(PeakBlankSettings(blank_run="RUN_B"))
+    assert state.phase_note(a) == ""
+    w.project.set_phase(b, 0.9)
+    note = state.phase_note(a)
+    assert "differ by 0.70 s" in note and "Use for all runs" in note
+    w.blank_panel.set_shown_run(a)
+    w.blank_panel.refresh()
+    assert "differ by 0.70 s" in w.blank_panel.status.text()
+    assert state.phase_note(b) == ""                                           # the blank itself needs no warning
+    # an alignment of both runs absorbs the difference
+    w.set_reference("RUN_A")
+    w.align.add_anchor("RUN_B", "P1", 100.0, 1.0, 100.0, 0.3, 50)
+    assert state.phase_note(a) == ""
+
+
 def test_removing_the_blank_run_clears_the_choice_everywhere(qtbot, window):
     w = window
     state = w.project.blank

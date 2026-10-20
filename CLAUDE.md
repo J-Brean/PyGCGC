@@ -38,6 +38,19 @@ on cancellation. Calibration must solve the scaled weighted design directly, ret
 unit invariance; do not form normal equations. Target-table appends preserve arbitrary
 valid header order and extra columns, reject duplicates, and replace files atomically.
 
+The 20 October feedback round added four things; read the notes in docs/architecture.md section 5 before
+touching them. **Text size and screens:** `theme.DENSITY`, `prefs.py`, `fit_to_screen`; tests point
+`PYGCGC_SETTINGS` at a temporary INI. **Anchoring** is a window (`gui/anchor_window.py`) over the main
+window's unchanged picking machinery; clicks are held (`AlignState.holding`) until ANCHOR, and picking needs
+every run's phase ticked. **📚 Library matcher** (`core/nist_sdf.py`, `core/libmatch.py`, `gui/match_state.py`,
+`gui/library_matcher.py`): the NIST files are licensed to James, so never commit, copy or ship them or anything
+parsed from them (tests use the invented files in `tests/nist_fixture.py`; `PYGCGC_NIST_SDF` and
+`PYGCGC_LIBRARY_CACHE` are for the opt-in real checks); the 5 % phenyl column class and the 850/750/650
+thresholds are James's choices of 20 October and still provisional. **➖ Peak-level blank subtraction**
+(`core/peak_blank.py`, `QuantSettings.blank_*`): James decided quantified amounts must be sample minus factor times
+blank. `C:\REAL_DATA_FOR_PYGCGC\background_removal` holds one blank-like run (9003, Dilutor) and one sample (9002);
+the autosave writes beside the data, so scripts must switch `Project._autosave` off.
+
 The user authorised **tilted Gaussian as the default** on 18 October 2026, after the
 eight-method comparison. `ComponentDetectionSettings` uses `model="tilt"`, independent widths
 and automatic component-count pursuit. Both Gaussian models must retain pursuit and window

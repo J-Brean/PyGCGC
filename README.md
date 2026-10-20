@@ -28,13 +28,13 @@ The latest [code audit](docs/validation/code-audit-2026-10-19.md) passed 850 tes
 |---|---|---|
 | Read | native `.lsc` (70 eV, 14 eV, vendor DBC) and ANDI | Decodes every scan of the supplied files in 1 to 3 s each; vendor comparison of spectra and times still pending |
 | 1 Load | native or ANDI data; automatic period and phase, with manual checks under Load | Period found unaided on four runs (8.0000 s, as set in the method); anchor-free phase within 0.2 s of the hand-set value |
-| 2 📍 Align | guided anchor collection across runs, local-maximum refinement, shift/affine/smooth transforms, compare modes | Not yet checked on real drift; bounded refinement checked on four native calibration runs |
+| 2 📍 Align | an anchoring window: phase check, guided clicks across runs, ANCHOR, before and after; local-maximum refinement; shift/affine/smooth transforms; compare modes | Not yet checked on real drift; bounded refinement checked on four native calibration runs |
 | 3 🧹 Background | bleed, stripes, spikes, noise map, blank subtraction | Used on every real run; blank subtraction unchecked |
 | 4 🔍 Peaks | MS-aware overlapping tilted Gaussian components (default) or legacy blobs | Independent widths and tilt; eight methods compared on 32 real windows, plus known-area recovery in measured backgrounds. See the [fitting check](docs/validation/peak-fitting-2026-10-18.md) |
 | 4a 🫧 Siloxane filterer (in Peaks) | score blobs against bleed and cyclic references; block their siloxane ions, or fit per pixel | Defaults chosen on two runs: every siloxane-like blob caught, none of the hydrocarbon signal removed |
 | ⛓️ Hydrocarbon assignment (under Assign) | n-alkane ladder (straight, smooth or polynomial), peak assignment, stencils, homologous series | Ladder from two clicks reaches C9–C30 on four runs; one or two carbons wrong per run. Assignment and ladder shapes not yet checked on real data |
 | 5 🏷️ IS | label internal standards, find them on every run, write them to the target table | September spectral matches used five provisional identities; three August calibration IS names match the supplied inventory. Isomer identities and spike amounts still need confirmation |
-| 6 Assign | target tables, hydrocarbon assignment, compound classes, spectral library search and clustering | Class and cluster methods checked on one earlier run; no independent spectral library check yet |
+| 6 Assign | target tables, hydrocarbon assignment, compound classes, 📚 NIST library matching by spectrum and retention index, ➖ blank-run peak subtraction, clustering | Class and cluster methods checked on one earlier run; the matcher on library self-matches and the real runs in the [matcher note](docs/validation/library-matcher-2026-10-20.md), thresholds provisional |
 | 7 🧪 Quantify | targets, internal standards, weighted calibration, bracketing | Planted standards in real matrix: within a few % on selective ions, 15–60% off on busy ones |
 | 8 Export | all available tables, assignments, project snapshot and provenance in one folder | Freshness flags and fit warnings are preserved; raw files remain at their source paths |
 | 📈 Calibrate | separate window: standard runs, compounds from a table or clicks, IS-normalised peaks, curves edited point by point | Four filename-labelled levels: 59 calibrant and four IS candidates suggested, phases lined up and response bending observed; actual amounts and identities remain unconfirmed |
@@ -66,9 +66,12 @@ beside the runs (`project.pygcgc.json`) and offers to resume next time; backgrou
 peak detections are cached on local disk, so reopening does not recompute them. The
 [user guide](docs/user-guide.md) covers every step.
 
-**Align collects one anchor across the sequence at a time.** Press **Pick anchors across
-runs**, click the peak on the reference and then on each chromatogram as the view advances.
-After the last run, it returns to the reference for the next point. The shared table keeps
+**Align happens in its own window.** Press **Pick anchors across runs**: the window first asks you to
+check and tick each run's phase (anchors are only valid for the phase they were picked with), then
+shows one run at a time under a header that says which ("Run 3 of 8") and how many anchors the
+alignment needs. Click the peak on the reference and then on each sample; after the last run it
+returns to the reference for the next point. Press **ANCHOR** to fit the transforms and see the
+reference and each run overlaid before and after, with numbers. The shared table keeps
 the clicks visible; skip missing peaks or finish with Esc. **Refine anchors to local maxima**
 then adjusts the saved points on their original ion or TIC, including the reference, in one
 undoable action. Search limits (default ±1 modulation and ±0.150 s in t2) and transform
@@ -76,6 +79,15 @@ diagnostics are under **More alignment options**.
 Visible **Add points**, **Delete selected points** and **Start alignment over** buttons
 let you extend, edit or restart alignment. Deletion and restarting are undoable; restarting
 keeps the reference and returns to P1.
+
+**Small screens.** The text opens compact on a screen under 900 pixels high; View → Text size
+chooses compact, standard or large at any time.
+
+**📚 Library matcher.** Under Assign, point it at the NIST SDF folder and choose your column class (5 %
+phenyl is semi-standard non-polar). It names each detected peak from its mass spectrum and its
+retention index (from the n-alkane ladder; no column dimensions or oven programme are needed), lists the
+largest peaks first and flags every uncertainty. **➖ Subtract a run's peaks** takes a blank's peaks away
+from the others by a factor you choose, and quantified amounts become sample minus blank.
 
 **Peaks uses tilted Gaussian fitting by default**, including automatic selection of the number
 of overlapping components. Click **▶ How it works** in the Peaks panel or the manual refit

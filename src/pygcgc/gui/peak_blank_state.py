@@ -90,6 +90,27 @@ class PeakBlankState(QtCore.QObject):
                 out.append(f"The blank is {e2} eV and this run {e1} eV: use runs of the same ionisation energy.")
         return out
 
+    def phase_note(self, index: int) -> str:
+        """A warning when the blank and this run have different phases and are not aligned.
+
+        A peak's t₂ is measured from its run's phase, so the same compound sits at t₂ values that differ by the
+        difference of the phases. Peaks then fall outside the matching window and are not paired, however good
+        the blank is. Empty when the phases agree, or when both runs are aligned (the mapping absorbs it)."""
+        p, b = self.project, self.blank_index()
+        if b is None or index == b or not 0 <= index < len(p.entries):
+            return ""
+        sample, blank = p.entries[index], p.entries[b]
+        reference = p.align.reference
+        aligned = all(e.name == reference or e.name in p.align.transforms for e in (sample, blank)) and bool(reference)
+        period = float(p.period)
+        delta = abs(float(sample.phase) - float(blank.phase)) % period
+        delta = min(delta, period - delta)
+        if aligned or delta <= self.settings.max_dt2:
+            return ""
+        return (f"The blank's phase ({blank.phase:.2f} s) and this run's ({sample.phase:.2f} s) differ by {delta:.2f} s, more "
+                f"than the {self.settings.max_dt2:.2f} s window, so the same peak sits at different t₂ and will not pair. "
+                "Give both runs the same phase (Fold → Use for all runs) or align them first.")
+
     def runtime_signature(self, index: int) -> tuple:
         p, b = self.project, self.blank_index()
         sample, blank = p.entries[index], p.entries[b] if b is not None else None

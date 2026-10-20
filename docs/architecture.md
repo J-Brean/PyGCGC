@@ -56,9 +56,13 @@ src/pygcgc/
     quant.py            targets across a sequence, learned positions and qualifier ratios, bracketing, all signals, IS table
     targets.py          target table and calibration levels
     istd.py             🏷️ internal-standard library, click-labelled references, cross-run matching, to target rows
-    align.py            anchor fitting, bounded maximum refinement, cross-validation, propagation, resampling
+    align.py            anchor fitting, bounded maximum refinement, cross-validation, propagation, resampling,
+                        anchor requirements, offsets and image similarity for the anchoring window
     hydrocarbons.py     ⛓️ n-alkane ladder, homologous series, group-type stencils, markers
-    identify.py         🏷️ MSP import/export, weighted dot-product search, target-decoy confidence
+    identify.py         🏷️ MSP import/export, weighted dot-product search, target-decoy confidence (older, MSP only)
+    nist_sdf.py         📚 streaming NIST SDF reader, compact sparse library with a local cache, literature RI table
+    libmatch.py         📚 spectrum + retention-index matching: RI gate, MF/RMF, decoy q-values, flags, levels, CSV
+    peak_blank.py       ➖ pair a blank run's peaks with a sample's, subtract times a factor; above/near blank
     chemclass.py        🧬 compound classes from blob spectra: TOML rules, fuzzy criteria, 14 eV soft features
     cluster.py          🧩 PeakTable, spectral tree and density clustering, cross-run tables, PQN, PERMANOVA
     segment.py          🧩 pixel regions: truncated SVD and k-means on every bright scan, no peak detection
@@ -79,6 +83,9 @@ src/pygcgc/
     class_state.py      🧬; cluster_state.py 🧩; istd_state.py 🏷️ internal standards
     overlap_dialog.py   ✂️ pick a group or blob, 3D surface, splits, fits, MCR-ALS
     fitting_help.py     local 16-second explanation: detector pulse train, cycle enlargement and folded 2D map
+    prefs.py            per-user INI preferences: text size, window geometry (`PYGCGC_SETTINGS` overrides)
+    anchor_window.py    📍 phase check, picking, ANCHOR and before/after pages
+    library_matcher.py  📚 the matcher window; match_state.py its state; peak_blank_state.py and panels/peakblank.py ➖
     calibration_setup.py  four-page transactional setup for named targets, runs, amounts and units
     standard_review.py  exceptions queue with candidate spectra and fitted-profile comparisons
     workflow_assistant.py  prerequisites, direct repair actions and freshness/completion guidance
@@ -101,6 +108,38 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
 ```
 
 ## 5. Architecture and rules
+
+- **Text size and window fit.** `theme.DENSITY` holds three sets of sizes (compact, standard, large) that fill the
+  stylesheet, the application font, layout spacing and the workflow title. The default follows the primary screen
+  (compact under 900 px high) unless `prefs` holds a choice; `apply_theme(window, dark, density=None)` applies it and calls
+  `window.apply_text_scale`. A layout's requested spacing is remembered (`_orig_spacing`) so a tighter size can go back
+  down. Every top-level window sizes itself with `theme.fit_to_screen`. Tests point `PYGCGC_SETTINGS` at a temporary file
+  with the standard size, because the offscreen screen is small. Pages that ask for more than ~1000 px (Review,
+  Calibration) use an Ignored size policy so they do not set the window's minimum width. Drop-down menus belong in the
+  menu bar, not in toolbar buttons, which fall into the overflow arrow when crowded.
+- **Clicks and transforms are separate while anchors are picked.** `AlignState.holding` is on from `start_add_anchor`
+  until ANCHOR (`apply_hold`), `restore`, `set_reference` or `from_dict`; while it is on `_recompute` does nothing, so no
+  transform moves and `Project._alignment_changed_under_blank` stays quiet. `applied_points` is what the transforms were
+  fitted from (`pending_runs()` compares it with `points`). `phase_at_anchor` records each run's phase at fitting
+  (`stale_phase_runs()`), and `phase_checked` is the set of runs whose phase the user ticked; both are saved in the project
+  when present, and a foldChanged clears the ticks of the runs concerned. The picking sequence itself is still the main
+  window's (`_anchor_stage`, `_anchor_pending`); `AnchorWindow` is its face and calls `anchor_pane_click`,
+  `skip_anchor_run`, `cancel_pick` and `apply_anchors`.
+- **📚 matching has two halves, like 🧪.** `core/nist_sdf.py` and `core/libmatch.py` know nothing of Qt. A library is one
+  `CompactLibrary` (a sparse unit-mass matrix plus metadata columns); `libmatch._weighted_library` keeps the weighted
+  copy for the run's m/z range (and a shuffled-decoy copy), about 200 MB each, only for the latest range. Queries go
+  through it 32 at a time as a sparse-by-dense product (measured 20 ms per peak on 244,000 spectra, against 100 ms one at
+  a time). `MatchState` (on `Project.matcher`) holds settings, library, results and decisions; decisions carry a content
+  signature (no object identities) and show only while the run's current matches have the same one. Results are never
+  saved; a library is never saved or copied beside a project. `BlobState.full_spectrum_peaks` caches the all-ion component
+  spectra for 📚, ➖ and the internal standards. NIST's estimated RI is corrected per column class with the bias measured
+  in `nist_sdf.ESTIMATE_BIAS`; the evidence is in `docs/validation/library-matcher-2026-10-20.md`.
+- **➖ blank subtraction lives in two places that must agree.** The panel and `PeakBlankState` (on `Project.blank`) own the
+  user's choices and the per-run peak tables; `QuantSettings.blank_run` and `blank_*` carry the same pair into
+  quantification, where `quantify_sequence` corrects amounts (`blank_correct_amounts`) and `all_signals` corrects volumes
+  peak by peak. `PeakBlankState._push_to_quant` keeps them equal while "apply to quantified amounts" is ticked and empties
+  `blank_run` when it is not. Amounts are corrected after the calibration curve, as amount minus factor times the blank's
+  amount, never below zero.
 
 - **Calibration input is transactional.** `core/calibration_inputs.py` validates named targets,
   used levels and explicit constant IS additions. `gui/calibration_setup.py` owns a draft until
