@@ -140,16 +140,22 @@ class PeakBlankPanel(QtWidgets.QWidget):
             if e.run is not None:
                 self.blank_box.addItem(e.name, e.name)
                 self.show_box.addItem(e.name, i)
-        self.blank_box.setCurrentIndex(max(self.blank_box.findData(s.blank_run), 0))
         self.show_box.setCurrentIndex(max(self.show_box.findData(current_show), 0))
-        self.factor.setValue(s.factor)
-        self.dt1.setValue(s.max_dt1)
-        self.dt2.setValue(s.max_dt2)
-        self.similarity.setValue(s.min_similarity)
-        self.significance.setValue(s.significance)
+        self._updating = False
+        self._sync_widgets()
+        self._fill_table()
+
+    def _sync_widgets(self) -> None:
+        """Show the state's settings, however they got there (this panel, a loaded project, quantification)."""
+        s = self.state.settings
+        self._updating = True
+        self.blank_box.setCurrentIndex(max(self.blank_box.findData(s.blank_run), 0))
+        for widget, value in ((self.factor, s.factor), (self.dt1, s.max_dt1), (self.dt2, s.max_dt2),
+                              (self.similarity, s.min_similarity), (self.significance, s.significance)):
+            if abs(widget.value() - value) > 1e-9:
+                widget.setValue(value)
         self.apply_quant.setChecked(self.state.apply_to_quant)
         self._updating = False
-        self._fill_table()
 
     def set_shown_run(self, index: int) -> None:
         at = self.show_box.findData(index)
@@ -177,6 +183,8 @@ class PeakBlankPanel(QtWidgets.QWidget):
 
     # ------------------------------------------------------------- the table
     def refresh(self) -> None:
+        if self.state is not None:
+            self._sync_widgets()
         self._fill_table()
 
     def _fill_table(self, *_a) -> None:

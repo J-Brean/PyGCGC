@@ -115,6 +115,17 @@ def test_the_blank_and_factor_are_shared_with_quantification_while_linked(qtbot,
     assert w.project.quant.settings.blank_run == "RUN_B"
 
 
+def test_the_panel_follows_settings_changed_elsewhere_such_as_a_loaded_project(qtbot, window):
+    w = window
+    w.blank_panel.refresh_runs(w.project.entries)
+    state = w.project.blank
+    state.from_dict({"settings": {"blank_run": "RUN_B", "factor": 0.35, "max_dt1": 7.0}, "apply_to_quant": False})
+    panel = w.blank_panel
+    assert panel.blank_box.currentData() == "RUN_B" and panel.factor.value() == pytest.approx(0.35)
+    assert panel.dt1.value() == 7.0 and not panel.apply_quant.isChecked()
+    assert state.settings.factor == 0.35                    # syncing the widgets did not write anything back
+
+
 def test_settings_are_saved_and_the_results_are_recomputed(qtbot, window):
     w = window
     state = w.project.blank

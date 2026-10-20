@@ -208,6 +208,9 @@ def test_all_signals_use_the_peak_level_correction_before_reading_the_curve():
     assert fixed.blank_volume > 0 and fixed.corrected_volume == pytest.approx(raw.volume - fixed.blank_volume)
     assert fixed.amount == pytest.approx(SAMPLE_AMOUNTS["S1"]["A"] - 0.5, rel=0.1)
     assert fixed.blank_status == ABOVE and raw.blank_status == "" and np.isnan(raw.corrected_volume)
+    # a spiked internal standard is in the blank-corrected sample on purpose: its peak is not reduced
+    spiked = next(r for r in corrected.signals if r.run == "S1" and r.target == "IS")
+    assert spiked.blank_status == "" and np.isnan(spiked.corrected_volume)
     # the blank's own and the calibration runs' rows are not corrected
     assert all(np.isnan(r.corrected_volume) for r in corrected.signals if r.run == "BLANK" or r.run.startswith("CAL_"))
     assert replace(QuantSettings(), blank_run="BLANK").blank_run == "BLANK" and CAL_LEVELS and CAL_TARGETS and Target

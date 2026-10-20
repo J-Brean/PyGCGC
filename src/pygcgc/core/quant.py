@@ -781,6 +781,7 @@ def all_signals(seq: list[SequenceRun], targets: list[Target], fits: dict,
     blank_q = (next((x.quant for x in seq if x.name == s.blank_run and x.quant is not None), None)
                if s.blank_run else None)
     ps, calibration_names = s.blank_settings(), {x.name for x in seq if x.is_calibration}
+    istd_names = {t.compound for t in targets if t.is_istd}
     for i, r in enumerate(seq):
         q = r.quant
         if q is None:
@@ -792,7 +793,9 @@ def all_signals(seq: list[SequenceRun], targets: list[Target], fits: dict,
                   if blank_q is not None and r.name != s.blank_run and r.name not in calibration_names else None)
         for b in range(len(q.blobs)):
             t1, t2, raw_vol = float(q.blobs.t1[b]), float(q.blobs.t2[b]), float(q.blobs.volume[b])
-            vol = paired[b].corrected if paired is not None else raw_vol
+            # A spiked internal standard is in the sample on purpose, so the blank is never taken off it.
+            spiked = owner.get(b) in istd_names
+            vol = paired[b].corrected if paired is not None and not spiked else raw_vol
             ref = q.nearest_istd(t1, t2, s.t1_scale, s.t2_scale)
             ratio = vol / ref.tic_volume if (ref is not None and ref.tic_volume > 0) else float("nan")
             sur, dist, amount = "", float("nan"), float("nan")
@@ -822,9 +825,9 @@ def all_signals(seq: list[SequenceRun], targets: list[Target], fits: dict,
             rows.append(SignalRow(r.name, b, t1, t2, float(q.blobs.snr[b]), raw_vol,
                                   ref.compound if ref else "", ref.tic_volume if ref else float("nan"),
                                   ratio, owner.get(b, ""), sur, dist, amount, conc, note,
-                                  blank_volume=paired[b].blank_volume if paired is not None else float("nan"),
-                                  corrected_volume=vol if paired is not None else float("nan"),
-                                  blank_status=blank_status(paired[b], ps) if paired is not None else ""))
+                                  blank_volume=paired[b].blank_volume if paired is not None and not spiked else float("nan"),
+                                  corrected_volume=vol if paired is not None and not spiked else float("nan"),
+                                  blank_status=blank_status(paired[b], ps) if paired is not None and not spiked else ""))
     return rows
 
 

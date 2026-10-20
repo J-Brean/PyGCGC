@@ -27,7 +27,11 @@ Four requests, all built.
 - *➖ Peak-level blank subtraction* (new Assign sub-step) and **amounts as sample minus factor times blank** in 🧪 (James's
   decision of 20 October); unknowns' volumes corrected peak by peak before the surrogate curve. Warns when the blank and
   the sample have different phases and no alignment, found on the real runs below.
-- Test totals: see the end of this entry.
+- Checks: baseline 867 passed, 31 skipped before the work; 972 passed, 32 skipped after (one new opt-in real-library
+  test). Real data: the NIST files parsed and searched (see the matcher note), and a 10-minute window of the two new
+  `background_removal` runs fitted, subtracted and matched. Only 5 of 234 peaks paired with the blank at the runs' own
+  automatic phases (0.86 s and 1.37 s) against 18 at a common phase, which produced the phase warning. Not checked: the
+  anchoring window on real drift, the matcher against a known mixture, whole-run fits of the new runs.
 
 **Documentation reconciliation, 2026-10-19.**
 Added a documentation index, historical-record index and complete input-table reference.
