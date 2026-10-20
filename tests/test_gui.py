@@ -772,22 +772,67 @@ def test_aligned_view_shows_resampled_image(qtbot, window):
     qtbot.waitUntil(lambda: not w.view2d.result.aligned, timeout=TIMEOUT)
 
 
+def _open_compare(w, qtbot, a="RUN_A", b="RUN_B"):
+    w.act_compare.trigger()
+    cw = w.compare_window
+    cw.set_pair(a, b)
+    qtbot.wait(80)
+    return cw
+
+
 def test_compare_view_modes(qtbot, window):
     w = window
     w.set_ion_expression("50")
     _setup_alignment(w)
-    w.set_run(w.project.index_of("RUN_B"))
-    w.tabs.setCurrentWidget(w.compare)
-    qtbot.wait(80)
-    assert w.compare.current_mode() == "blink"
-    assert w.compare.info.text() == ""
-    w.compare.mode.setCurrentIndex(w.compare.mode.findData("overlay"))
-    assert w.compare.single.image.image is not None
-    w.compare.mode.setCurrentIndex(w.compare.mode.findData("difference"))
-    assert "robust brightness match" in w.compare.info.text()
-    w.compare.mode.setCurrentIndex(w.compare.mode.findData("grid"))
-    assert w.compare.grid_canvas.isVisible()
-    assert not w.compare.blink_timer.isActive()
+    cw = _open_compare(w, qtbot)
+    view = cw.images
+    assert cw.isVisible() and "Aligned" in cw.align_label.text()
+    assert view.current_mode() == "blink"
+    assert view.info.text() == ""
+    view.mode.setCurrentIndex(view.mode.findData("overlay"))
+    assert view.single.image.image is not None
+    view.mode.setCurrentIndex(view.mode.findData("difference"))
+    assert "robust brightness match" in view.info.text()
+    view.mode.setCurrentIndex(view.mode.findData("grid"))
+    assert view.grid_canvas.isVisible()
+    assert not view.blink_timer.isActive()
+
+
+def test_compare_works_without_alignment(qtbot, window):
+    # The Compare tab used to show nothing until a 📍 reference was set and the run aligned.
+    w = window
+    w.set_ion_expression("50")
+    assert w.align.reference is None
+    cw = _open_compare(w, qtbot)
+    assert "Not aligned" in cw.align_label.text()
+    assert cw.images.info.text() == ""
+    cw.show_images("overlay")
+    rgb = cw.images.single.image.image
+    assert rgb is not None and rgb.ndim == 3 and rgb[..., 1].max() > 0.5   # B (green) is there
+
+
+def test_compare_uses_alignment_when_both_runs_have_it(qtbot, window):
+    w = window
+    w.set_ion_expression("50")
+    _setup_alignment(w)
+    cw = _open_compare(w, qtbot)
+    i_a, i_b = w.project.index_of("RUN_A"), w.project.index_of("RUN_B")
+    img_a, img_b = cw._image(i_a)[0], cw._image(i_b)[0]
+    _, c_a = np.unravel_index(np.argmax(img_a), img_a.shape)
+    _, c_b = np.unravel_index(np.argmax(img_b), img_b.shape)
+    assert abs(int(c_a) - int(c_b)) <= 1
+
+
+def test_blink_keeps_one_colour_scale(qtbot, window):
+    # Each blink frame used to rescale itself, hiding a difference in amount (RUN_B holds 0.7 of RUN_A).
+    w = window
+    w.set_ion_expression("50")
+    cw = _open_compare(w, qtbot)
+    cw.show_images("blink")
+    view = cw.images
+    first = tuple(view.single.image.levels)
+    view._blink_tick()
+    assert tuple(view.single.image.levels) == pytest.approx(first)
 
 
 def test_compare_overlay_after_difference_is_not_washed_out(qtbot, window):
@@ -797,24 +842,87 @@ def test_compare_overlay_after_difference_is_not_washed_out(qtbot, window):
     w = window
     w.set_ion_expression("50")
     _setup_alignment(w)
-    w.set_run(w.project.index_of("RUN_B"))
-    w.tabs.setCurrentWidget(w.compare)
-    qtbot.wait(80)
-    w.compare.mode.setCurrentIndex(w.compare.mode.findData("difference"))
-    w.compare.mode.setCurrentIndex(w.compare.mode.findData("overlay"))
-    rgb = w.compare.single.image.image
+    cw = _open_compare(w, qtbot)
+    view = cw.images
+    view.mode.setCurrentIndex(view.mode.findData("difference"))
+    view.mode.setCurrentIndex(view.mode.findData("overlay"))
+    rgb = view.single.image.image
     assert rgb is not None and rgb.ndim == 3
     assert rgb[..., :2].std() > 0.01   # varies; not flattened to one grey value
 
 
-def test_go_blink_shortcut_switches_tab_and_mode(qtbot, window):
+def test_blink_shortcut_opens_compare_in_blink_mode(qtbot, window):
     w = window
     w.set_ion_expression("50")
-    _setup_alignment(w)
-    w.tabs.setCurrentWidget(w.view2d)
+    from PySide6 import QtWidgets
+    assert "⚖️ Compare" in [a.text() for a in w.findChild(QtWidgets.QToolBar, "toolbar_main").actions()]
     w.act_blink.trigger()
-    assert w.tabs.currentWidget() is w.compare
-    assert w.compare.current_mode() == "blink"
+    assert w.compare_window.isVisible()
+    assert w.compare_window.images.current_mode() == "blink"
+    assert w.tabs.count() == 4                     # the old Compare tab is gone from the main window
+
+
+def test_compare_pixel_spectra_and_similarity_map(qtbot, window):
+    w = window
+    cw = _open_compare(w, qtbot)
+    cw.tabs.setCurrentIndex(1)
+    i_a = w.project.index_of("RUN_A")
+    f = w.project.fold(i_a)
+    t1, t2, ion, _ = GUI_PEAKS[1]
+    col = int((t1 - f.t1[0]) // f.spec.period)
+    assert cw.show_pixel(float(f.t1[col]), t2) == pytest.approx(1.0, abs=0.05)   # same compound in both
+    cw.compute_similarity()
+    qtbot.waitUntil(lambda: cw.sim is not None, timeout=TIMEOUT)
+    row = int(round(t2 / f.row_pitch))
+    assert cw.sim.similarity[row, col] > 0.9
+    assert cw.sim_image.image is not None and cw.sim_bar.isVisible()
+
+
+def test_compare_class_shares(qtbot, window):
+    w = window
+    cw = _open_compare(w, qtbot)
+    cw.tabs.setCurrentIndex(3)
+    assert "Classify both runs" in cw.class_status.text()
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.was_run, timeout=TIMEOUT)
+    for name in ("RUN_A", "RUN_B"):
+        i = w.project.index_of(name)
+        w.set_run(i)
+        w.start_classify()
+        qtbot.waitUntil(lambda: w.classes.result_for(i) is not None and not w.classes.running, timeout=TIMEOUT)
+    cw.tabs.setCurrentIndex(0)
+    cw.tabs.setCurrentIndex(3)
+    t = cw.class_table
+    assert t.rowCount() >= 1
+    assert sum(float(t.item(r, 3).text()) for r in range(t.rowCount())) == pytest.approx(100.0, abs=0.5)
+
+
+def test_compare_pairs_peaks_by_identity_and_position(qtbot, window):
+    w = window
+    w.run_blobs()
+    qtbot.waitUntil(lambda: not w.blobs.running and w.blobs.was_run, timeout=TIMEOUT)
+    b = w.blobs.blobs_for(w.project.index_of("RUN_B"))
+    k = int(np.argmax(b.volume))
+    w.project.identifications["RUN_B"] = [(float(b.t1[k]), float(b.t2[k]), "compound X")]
+    a = w.blobs.blobs_for(w.project.index_of("RUN_A"))
+    ka = int(np.argmin(np.hypot((a.t1 - b.t1[k]) / 60.0, (a.t2 - b.t2[k]) / 0.5)))
+    w.project.identifications["RUN_A"] = [(float(a.t1[ka]), float(a.t2[ka]), "compound X")]
+    cw = _open_compare(w, qtbot)
+    cw.tabs.setCurrentIndex(2)
+    cw.match()
+    qtbot.waitUntil(lambda: bool(cw._current_pairs()), timeout=TIMEOUT)
+    pairs = cw._current_pairs()
+    named = [p for p in pairs if p.name == "compound X"]
+    assert len(named) == 1 and named[0].how == "name"
+    # The fixture's real peaks (the bleed on m/z 54 also gives many small noise blobs)
+    big = [p for p in pairs if p.status == "both" and p.volume_a > 1e5]
+    assert len(big) >= len(GUI_PEAKS) - 1
+    for p in big:
+        assert abs(p.dt1) < 4.0 and abs(p.dt2) < 0.05 and p.similarity > 0.99
+        assert np.log2(0.6) < p.log2_ratio < 0     # RUN_B was made at 0.7 × RUN_A, plus the same noise
+    assert cw.peak_table.rowCount() == len(pairs)
+    cw.filter_box.setCurrentIndex(cw.filter_box.findData("named"))
+    assert cw.peak_table.rowCount() == 1
 
 
 def test_align_saved_and_reloaded(qtbot, window, tmp_path):

@@ -383,15 +383,11 @@ Auto (the default) picks the simplest tier that already fits the anchors well; y
 
 **Seeing it.** 📍 Show aligned (in the panel, or the toolbar) resamples the current run onto the reference's grid in the 2D and 1D views, so the ion box, colour scale and everything else keep working as normal, just on the reference's axes.
 
-**Compare tab (5).** Once at least one run has a transform:
-- **Blink** alternates the reference and the current run at a steady rate, so anything that moved (or didn't) jumps out.
-- **Grid** tiles every aligned run (up to 12) on a shared colour scale with linked pan and zoom.
-- **Difference** shows the reference minus the current run, scaled by the median ratio of their brightest shared pixels (a brightness match, not a concentration ratio), on a diverging colour scale.
-- **Overlay** puts the reference in magenta and the current run in green, so shared peaks look white and differences show colour.
+To check an alignment by eye, open ⚖️ Compare (5) with the reference as A and an aligned run as B; the overlay should show shared peaks white, not as magenta and green pairs. The window is described under ⚖️ Compare runs below.
 
 **Undo.** Every anchor added, removed or cleared, every refinement, and every reference or transform-kind change, is undoable. Removal acts on the selected table row, even when another run is displayed. Removing a reference row removes that anchor's matching rows across all runs as one undoable edit. Completed clicks, including reference-only points, are saved in the project; an unfinished picking session itself is not resumed on reopening.
 
-![Compare tab: the urban sample in green overlaid on the reference CAL_L3_20ng in magenta, aligned on seven anchors](images/screenshot_align_overlay.png)
+![⚖️ Compare overlay: the urban sample in green overlaid on the reference CAL_L3_20ng in magenta, aligned on seven anchors](images/screenshot_align_overlay.png)
 
 **Not built:** intensity-weighted centroid refinement; the batch search still matches anchors independently rather than with a full Hungarian-plus-RANSAC pass across every blob; and there is no small-multiples gallery of one target across every run yet.
 
@@ -704,6 +700,23 @@ The “Made of” column compares clusters with any available class assignments.
 
 **Not built:** normalisation of the run table to an internal standard or by centred log-ratio (CLR is negative, which the existing PCA's log transform cannot take) and QC-based drift correction; saving cluster results and names in the project file; pooled pixel regions that align retention first (regions are spectral only, so they do not need it, but the label images are per run); a spatially aware region method (each pixel is grouped on its own spectrum, then smoothed, rather than with its neighbours in the model); choosing the number of regions automatically (k-means needs it given); a bounded landmark/subsample density fit for very large pools (the optional density method currently fits all usable peaks).
 
+### ⚖️ Compare runs
+
+⚖️ Compare on the toolbar (key 5, or B to open it blinking) opens a separate window for comparing two runs. Choose run A and run B at the top; ⇄ swaps them. Everything is drawn on A's grid. When both runs are 📍 aligned (one the reference, or both with a transform), B is read through the alignment; otherwise B is read at A's own retention times, which is fine for runs whose drift is smaller than a peak. The line beside the run boxes says which. Nothing in the window changes a run, so there is nothing to undo or save.
+
+The Images tab shows the ion expression from the main window four ways:
+
+- Blink alternates A and B on one colour scale (A's), so a peak that moved or changed in size jumps out.
+- Grid tiles every loaded run (up to 12) on A's grid, on one colour scale, with linked pan and zoom.
+- Difference shows A minus B, with B scaled by the median ratio of their brightest shared pixels (a brightness match, not a concentration ratio), on a diverging colour scale.
+- Overlay puts A in magenta and B in green, so shared peaks look white and differences show colour.
+
+The Spectra tab compares the mass spectra themselves. Click any point of the image to see A's spectrum (up) and B's (down) at that point, three scans summed, with their similarity. Map spectral similarity scores A against B at every pixel over all shared m/z, using the weighted cosine that 🏷️ library search uses (intensity to the power 0.6 times m/z cubed, squared), so 1 means the same spectrum whatever the amount, and 0 means nothing in common. Pixels whose signal in the brighter run is below the Hide below share of the brightest pixel are left blank. The map picks out co-elution and compounds present in one run only, which an intensity difference cannot separate from a change in amount.
+
+The Peaks tab pairs the detected peaks (🔍, on both runs) one to one. Peaks carrying the same identity in both runs pair first, wherever they are: a 🏷️ internal standard found on both, or a tier 2a or 2b 🏷️ library hit (the identifier records these for each run it searches, for the session). The remaining peaks pair by position and spectrum: B's peaks within Δt₁ and Δt₂ of an A peak (after 📍, if used) and at least the chosen spectral similarity, most similar first. The defaults are 12 s, 0.2 s and 0.7. The table lists every pair with its 🧬 classes, shifts, similarity, both volumes and log₂ of B over A, then the peaks found in one run only; Show filters it (identified only, only in A, and so on), a double-click jumps the main window to the peak, and Export CSV writes it. The plot shows log₁₀ volume in B against A for the shared peaks, identified ones as squares, with the 1:1 line.
+
+The Classes tab puts each 🧬 compound class's share of A's and B's total peak volume side by side, once both runs are classified.
+
 ### 🗂️ Batch
 
 ![🗂️ Batch on the demonstration folder: PCA of the seven runs](images/screenshot_batch.png)
@@ -808,9 +821,10 @@ The project saves itself beside the runs (`project.pygcgc.json`) and offers to r
 | R | region box |
 | Space | raw / cleaned |
 | O | 🧪 peak overlay |
-| 3 / 4 / 5 | 🧪 Review / Calibration / 📍 Compare |
+| 3 / 4 | 🧪 Review / Calibration |
+| 5 | ⚖️ Compare runs |
 | A | 📍 start or finish guided anchor picking across all loaded runs |
-| B | jump to Compare in blink mode |
+| B | ⚖️ Compare in blink mode |
 | G | 🔍 merge the selected blobs |
 | Y / N / U | accept / reject / clear (Review and Results) |
 | P | pick another peak (Review) |

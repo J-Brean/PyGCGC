@@ -314,6 +314,7 @@ class IdentifyDialog(QtWidgets.QDialog):
         def done(results):
             self.results = results
             self._fill_table()
+            self._record_identifications()
             self._refresh_identify_enabled()
             n_hit = sum(1 for r in results if r.best is not None)
             source = "component" if components is not None and components.components else "legacy blob"
@@ -342,6 +343,17 @@ class IdentifyDialog(QtWidgets.QDialog):
                           best.tier or "", "" if best.q_value is None else f"{best.q_value:.3f}"]
             for c, v in enumerate(values):
                 self.table.setItem(r, c, QtWidgets.QTableWidgetItem(v))
+
+    def _record_identifications(self) -> None:
+        """Leave this run's confident hits (tier 2a or 2b, never a decoy) on the
+        project, where ⚖️ Compare uses them to pair peaks by identity."""
+        if not self._name:
+            return
+        features = self._feature_list()
+        self.project.identifications[self._name] = [
+            (float(features[r.blob_index]["t1"]), float(features[r.blob_index]["t2"]), r.best.name)
+            for r in self.results
+            if r.best is not None and not r.best.is_decoy and r.best.tier in ("2a", "2b")]
 
     def _feature_list(self) -> list[dict]:
         if self._components is not None and self._components.components:

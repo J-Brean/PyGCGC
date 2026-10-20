@@ -1,9 +1,9 @@
-"""📍 Compare view: blink, grid, difference and overlay.
+"""⚖️ Image comparison: blink, grid, difference and overlay.
 
-All four work on images already resampled onto the reference run's grid
-(`AlignState.image_for`), so the same pixel means the same (t1, t2)
-everywhere. Nothing here refits or resamples; it only displays what it is
-given.
+All four work on images already read onto run A's grid (through 📍 when
+both runs are aligned, at the same retention times otherwise; see
+`core/compare.py`), so the same pixel means the same (t1, t2) everywhere.
+Nothing here refits or resamples; it only displays what it is given.
 """
 
 from __future__ import annotations
@@ -101,22 +101,22 @@ class _ImagePane(QtWidgets.QWidget):
 
 class CompareView(QtWidgets.QWidget):
     """`image_source(index) -> (image, t1, pitch, period, label) | None` is
-    how this view gets an aligned image for a run index without knowing
-    anything about folds or the render cache itself."""
+    how this view gets a run's image on A's grid without knowing anything
+    about folds or alignment itself."""
 
-    def __init__(self, align, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.align = align
-        self.image_source = None       # set by the main window
-        self.current_index = -1
-        self.reference_index = -1
+        self.image_source = None       # set by the compare window
+        self.index_a = -1
+        self.index_b = -1
+        self.grid_indices: list[int] = []
         self._blink_show_ref = True
 
         self.mode = QtWidgets.QComboBox()
         for m in MODES:
             self.mode.addItem(MODE_NAMES[m], m)
         self.mode.currentIndexChanged.connect(self._mode_changed)
-        self.info = QtWidgets.QLabel("Set a reference and align at least one run to compare it")
+        self.info = QtWidgets.QLabel("Choose two runs to compare")
         self.info.setWordWrap(True)
 
         self.single = _ImagePane()
@@ -146,9 +146,11 @@ class CompareView(QtWidgets.QWidget):
         self.grid_canvas.setBackground(colour)
 
     # ------------------------------------------------------------- driving
-    def set_runs(self, current_index: int, reference_index: int) -> None:
-        self.current_index = current_index
-        self.reference_index = reference_index
+    def set_runs(self, index_a: int, index_b: int, grid_indices: list[int] | None = None) -> None:
+        """A (the grid everything is drawn on), B, and the runs the grid mode tiles."""
+        self.index_a = index_a
+        self.index_b = index_b
+        self.grid_indices = list(grid_indices or [])
         self.refresh()
 
     def _mode_changed(self) -> None:
@@ -162,18 +164,19 @@ class CompareView(QtWidgets.QWidget):
         mode = self.current_mode()
         self.single.setVisible(mode != "grid")
         self.grid_canvas.setVisible(mode == "grid")
-        if self.image_source is None or self.reference_index < 0:
-            self.info.setText("Set a reference to compare against (📍 Align)")
+        if self.image_source is None or self.index_a < 0:
+            self.info.setText("Choose two runs to compare")
             self.blink_timer.stop()
             return
         if mode == "grid":
+            self.blink_timer.stop()
             self._refresh_grid()
             return
-        ref = self.image_source(self.reference_index)
-        cur = self.image_source(self.current_index)
+        ref = self.image_source(self.index_a)
+        cur = self.image_source(self.index_b)
         if ref is None or cur is None:
-            missing = "the current run" if ref is not None else "the reference run"
-            self.info.setText(f"No image for {missing} yet (align it, or check it's loaded)")
+            missing = "run B" if ref is not None else "run A"
+            self.info.setText(f"No image for {missing} (is it loaded?)")
             self.blink_timer.stop()
             return
         self.info.setText("")
@@ -194,8 +197,11 @@ class CompareView(QtWidgets.QWidget):
 
     def _blink_tick(self) -> None:
         img, t1, pitch, period, label = self._blink_ref if self._blink_show_ref else self._blink_cur
-        lo, hi = _levels(np.log10(np.clip(self._blink_ref[0], 1e-9, None)))
-        self.single.show_mono(img, t1, pitch, period, "magma")
+        # One colour scale for both frames, from A, or a change of amount would
+        # be hidden by each frame rescaling itself.
+        ref = self._blink_ref[0]
+        levels = _levels(np.log10(np.clip(ref, max(np.nanmax(ref), 1e-9) * 1e-4, None)))
+        self.single.show_mono(img, t1, pitch, period, "magma", levels=levels)
         self.blink_label.setText(label)
         self.blink_label.setPos(t1[0] / 60.0, img.shape[0] * pitch)
         self._blink_show_ref = not self._blink_show_ref
@@ -230,32 +236,21 @@ class CompareView(QtWidgets.QWidget):
     # ----------------------------------------------------------------- grid
     def _refresh_grid(self) -> None:
         self.grid_canvas.clear()
-        names_wanted = ([self.align.reference] if self.align.reference else []) + list(self.align.transforms)
-        indices = []
-        for name in dict.fromkeys(names_wanted):     # de-duplicated, order preserved
-            i = self.align.project.index_of(name)
-            if i is not None:
-                indices.append(i)
-        indices = indices[:GRID_MAX_TILES]
-        if not indices:
-            self.info.setText("No aligned runs yet: add a few anchors, or 📍 Auto-find on all runs")
-            return
-        self.info.setText(f"{len(indices)} run{'s' if len(indices) != 1 else ''}, same colour scale")
-        images = [self.image_source(i) for i in indices]
-        peak = max((float(np.nanmax(im[0])) for im in images if im is not None), default=1.0)
+        indices = list(dict.fromkeys([self.index_a, *self.grid_indices]))[:GRID_MAX_TILES]
+        tiles = [(i, src) for i in indices if (src := self.image_source(i)) is not None]
+        self.info.setText(f"{len(tiles)} run{'s' if len(tiles) != 1 else ''} on A's grid, same colour scale"
+                          + (f" (the first {GRID_MAX_TILES})" if len(self.grid_indices) >= GRID_MAX_TILES else ""))
+        peak = max((float(np.nanmax(src[0])) for _i, src in tiles), default=1.0)
         lo, hi = 0.0, np.sqrt(peak) or 1.0
-        cols = int(np.ceil(np.sqrt(len(indices))))
-        for k, (i, src) in enumerate(zip(indices, images)):
+        cols = int(np.ceil(np.sqrt(len(tiles))))
+        for k, (i, src) in enumerate(tiles):
             r, c = divmod(k, cols)
             plot = self.grid_canvas.addPlot(row=r, col=c)
             plot.hideAxis("left")
             plot.hideAxis("bottom")
             plot.setMenuEnabled(False)
             plot.hideButtons()
-            title = self.align.project.entries[i].name if src is None else src[4]
-            plot.setTitle(title + (" (ref)" if i == self.reference_index else ""), size="8pt")
-            if src is None:
-                continue
+            plot.setTitle(src[4] + (" (A)" if i == self.index_a else ""), size="8pt")
             img, t1, pitch, period, _ = src
             item = pg.ImageItem(np.sqrt(np.clip(img, 0, None)))
             item.setColorMap(pg.colormap.get("magma"))

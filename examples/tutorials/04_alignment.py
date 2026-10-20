@@ -33,14 +33,14 @@ for r in transform.residuals():
     print(f"  {r['name']:<20s} resid t1 {r['resid_t1']:+.2f} s   resid t2 {r['resid_t2'] * 1e3:+.0f} ms")
 
 # Resample the urban sample's TIC image onto CAL_L3_20ng's grid, so they can be compared
-# pixel for pixel (this is what the Compare tab's blink/difference/overlay
+# pixel for pixel (this is what the ⚖️ Compare window's blink/difference/overlay
 # modes are built on).
 run_tic = run_fold.tic_image(run)
 aligned = g.resample_to_reference(run_tic, run_fold, ref_fold, transform)
 ref_tic = ref_fold.tic_image(ref)
 print(f"reference image {ref_tic.shape}, aligned image {aligned.shape}")
 
-# A robust brightness-matched difference, the same idea the Compare tab's
+# A robust brightness-matched difference, the same idea the ⚖️ Compare window's
 # Difference mode uses (see gui/views/compare.robust_scale): match on the
 # median ratio of the two images' brightest shared pixels, so a run that
 # is simply more concentrated doesn't look like a wall of difference.
