@@ -14,6 +14,7 @@ from ..core.components import write_components_csv
 from ..core.chemclass import write_classes_csv
 from ..core.cluster import write_clusters_csv
 from ..core.istd import write_istd_report_csv
+from ..core.libmatch import write_identifications_csv
 from ..core.report import build_provenance, write_feature_table_csv
 from ..core.targets import write_targets_csv
 
@@ -109,6 +110,13 @@ def export_project(project, folder, *, identifications=None) -> list[Path]:
                                   blobs.snr[j], bool(blobs.co_elution[j])] for j in range(len(blobs)))
             paths.append(path)
             row["peaks"] = path.name
+        matched = project.matcher.results_for(i)
+        if matched is not None and matched.matches:
+            library = project.matcher.library.label if project.matcher.library is not None else ""
+            paths.append(write_identifications_csv(folder / f"identifications_{i + 1:03d}.csv", entry.name, matched.matches,
+                                                   project.matcher.decisions_for(i), library, project.matcher.settings))
+            row["identifications"] = f"identifications_{i + 1:03d}.csv"
+            row["identifications_stale"] = project.matcher.current_for(i) is None
         classes = project.classes.result_for(i)
         classified_peaks = project.classes.blobs_classified(i)
         if classes is not None and classified_peaks is not None:
@@ -146,7 +154,9 @@ def export_project(project, folder, *, identifications=None) -> list[Path]:
         __version__, period=project.period,
         method={"modulation_period_confirmed": project.period_confirmed},
         settings={"background": project.bg_settings.to_dict(), "quant": project.quant.settings.to_dict(),
-                  "peaks": project.blobs.component_settings.to_dict()},
+                  "peaks": project.blobs.component_settings.to_dict(),
+                  "library_match": dict(project.matcher.settings.to_dict(), library=project.matcher.source,
+                                        alkane_ladder_run=project.matcher.ladder_run or "each run's own")},
         blob_edits=project.blobs.edits, quant_decisions=project.quant.decisions,
         stencils=project.hydrocarbons.stencils,
         runs=[entry.run for entry in project.entries if entry.run is not None])

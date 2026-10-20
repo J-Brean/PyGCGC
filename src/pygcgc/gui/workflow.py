@@ -375,9 +375,10 @@ class IdentifyStepPanel(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         text = QtWidgets.QLabel(
-            "Searches every 🔍 blob on the current run against an MSP library, using the retention "
-            "index from the ⛓️ ladder if one exists.\n\nGo opens the identifier window. Load a library "
-            "there, then press 🏷️ Identify blobs.")
+            "Matches every detected peak on the current run against the NIST library (or an MSP file) by "
+            "mass spectrum and retention index, the index coming from the ⛓️ alkane ladder.\n\nGo opens the "
+            "matcher. Load the library there, choose your column class (5 % phenyl is semi-standard "
+            "non-polar), then press Match peaks.")
         text.setWordWrap(True)
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)

@@ -9,9 +9,9 @@ as 📍's `AlignState`.
 Peaks: like 🧬's `ClassState`, this wants full spectra. If the legacy
 detector's blobs are there (`blobs_for`), they're used directly; otherwise,
 for the MS-aware default, a run's components are re-solved on every ion via
-`core.peaktable.respectrum_components`. Nothing is cached across calls --
-each label or propagate re-resolves the one run it needs, inside its own
-background job, the same cost model `ClassState.classify` already accepts.
+`core.peaktable.respectrum_components`, through `BlobState.full_spectrum_peaks`,
+which keeps the last few until a run's components, layer or fold change. It is
+called inside each label or propagate's own background job.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from PySide6 import QtCore
 
 from ..core.istd import (NO_PEAKS, IstdLibraryEntry, IstdMatch, IstdMatchSettings, IstdReference,
                          load_library, match_run, peak_spectrum, save_library)
-from ..core.peaktable import respectrum_components
 from .blob_state import MS_AWARE
 
 
@@ -166,20 +165,10 @@ class IstdState(QtCore.QObject):
         """This run's peaks with full spectra, however they were found --
         `None` if peak detection hasn't been run on it at all. Only ever
         called from inside a background job's `work()`."""
-        p = self.project
-        if not 0 <= index < len(p.entries):
-            return None
         # The selected method decides, as it does for the click that picks the peak: legacy
         # blobs also exist on an MS-aware project once 🫧 or ⛓️ has found them, and a
         # component id cannot be looked up among them.
-        if p.blobs.method == MS_AWARE:
-            component_set = p.blobs.components_for(index)
-            if component_set is None:
-                return None
-            base_run, fold = p.base_run(index), p.fold(index)
-            peaks, _model, _footprint = respectrum_components(base_run, fold, component_set)
-            return peaks
-        return p.blobs.blobs_for(index)
+        return self.project.blobs.full_spectrum_peaks(index)
 
     @staticmethod
     def _resolve_index(peaks, peak_ref) -> int | None:

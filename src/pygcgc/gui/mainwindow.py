@@ -154,6 +154,7 @@ class MainWindow(QtWidgets.QMainWindow):
             page.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Ignored)
         self.compare_window: CompareWindow | None = None     # built on first use (⚖️)
         self.anchor_window = None                            # built on first use (📍)
+        self.library_matcher = None                          # built on first use (📚)
         self.setCentralWidget(self.tabs)
 
         # ---- docks
@@ -289,12 +290,12 @@ class MainWindow(QtWidgets.QMainWindow):
             "a polarity axis when there is one. It comes before library identification because "
             "it needs no library and can tell you what to expect.",
             self.class_panel, "Classify blobs", parent="assign")
-        add("identify", "🏷️ Identify", "Identify blobs",
-            "Matches each blob's spectrum to a mass spectral library (MSP) and reports a confidence "
-            "tier. Go opens the identifier window.",
-            "It searches the blobs from step 4 and uses the retention index from the alkane ladder when "
-            "one exists, so identification comes after both.",
-            self.identify_step, "Open identifier", parent="assign")
+        add("identify", "📚 Library match", "Match peaks to a library",
+            "Names each detected peak from the NIST library (or an MSP file) using its mass spectrum and its "
+            "retention index. The largest peaks come first and every uncertainty is flagged. Go opens the matcher.",
+            "It matches the peaks from step 4 and uses the retention index from the alkane ladder when one "
+            "exists, so matching comes after both. No column dimensions or oven programme are needed.",
+            self.identify_step, "Open the library matcher", parent="assign")
         add("cluster", "🧩 Cluster", "Peak clusters",
             "Groups peaks by the shape of their mass spectra, with no rules and no library, so the chromatogram "
             "divides into chemically similar regions. Cluster the selected run, or pool every 70 eV run so each "
@@ -481,7 +482,10 @@ class MainWindow(QtWidgets.QMainWindow):
                               "Compound class of every peak from its spectrum (uses the 14 eV run if one is loaded)")
         self.act_cluster = A("🧩 Cluster peaks", self.start_cluster, None,
                              "Group peaks by mass spectrum: this run, or every 70 eV run pooled (see step 9)")
-        self.act_identify = A("🏷️ Identify", self.show_identify_dialog, None,
+        self.act_identify = A("📚 Library matcher", lambda: self.show_library_matcher(), None,
+                              "Name the detected peaks from the NIST library (or an MSP file) using the mass "
+                              "spectrum and the retention index; the largest peaks and every uncertainty are shown")
+        self.act_identify_msp = A("🏷️ Older MSP-only search", self.show_identify_dialog, None,
                              "Search 🔍 blobs against an MSP library: retention index, weighted dot "
                              "product, target-decoy confidence")
         self.act_batch = A("🗂️ Batch", self.show_batch_dialog, None,
@@ -567,7 +571,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.tools_menu.addAction(self.workflow.step_info(key)["label"],
                                       lambda _checked=False, k=key: self.workflow.show_step(k))
         self.tools_menu.addSeparator()
-        for action in (self.act_compare, self.act_overlap, self.act_calibrate, self.act_batch):
+        for action in (self.act_compare, self.act_overlap, self.act_calibrate, self.act_batch, self.act_identify_msp):
             self.tools_menu.addAction(action)
         for dock, tip in ((self.workspace_dock, "Show or hide the Runs / Tool / Layers panel"),
                           (self.spectrum_dock, "Show or hide the spectrum panel")):
@@ -870,7 +874,7 @@ class MainWindow(QtWidgets.QMainWindow):
             act.setIconText(plain(mark + self._step_names[key]))
 
     def _go_identify(self):
-        self.show_identify_dialog()
+        self.show_library_matcher()
 
     def _accept_assignments(self):
         self.workflow.mark_done("assign", "Assignments reviewed. Supply calibration amounts to quantify them.")
@@ -1084,7 +1088,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "fold": lambda: self.workflow.show_step("fold")}[key]())
         self.assign_step.chosen.connect(lambda key: self.show_calibration_setup() if key == "setup"
                                         else self.load_targets_dialog() if key == "targets"
-                                        else self.show_identify_dialog() if key == "identify"
+                                        else self.show_library_matcher() if key == "identify"
                                         else self.workflow.show_step(key))
         self.export_step.chosen.connect(lambda _key: self.export_figure())
         self.project.runsChanged.connect(self._workflow_status)
@@ -1716,7 +1720,7 @@ class MainWindow(QtWidgets.QMainWindow):
         from .export import export_project
         dialog = getattr(self, "identify_dialog", None)
         identifications = ({"run": dialog._name, "results": list(dialog.results)}
-                           if dialog is not None and dialog.results else None)
+                           if dialog is not None and dialog.results else None)    # the older MSP-only dialog
         self.workflow.set_busy("export", True)
 
         def finished(paths):
@@ -3404,6 +3408,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.overlap_dialog.activateWindow()
 
     # ================================================================ 🏷️
+    def show_library_matcher(self):
+        """📚 The library matcher: spectrum and retention index against the NIST library or an MSP file."""
+        if self.library_matcher is None:
+            from .library_matcher import LibraryMatcherWindow
+            self.library_matcher = LibraryMatcherWindow(self, parent=self)
+            apply_theme(self, self.dark)
+        self.library_matcher.open_window(self.index if self.index >= 0 else None)
+
     def show_identify_dialog(self):
         if getattr(self, "identify_dialog", None) is None:
             self.identify_dialog = IdentifyDialog(self.project, parent=self)

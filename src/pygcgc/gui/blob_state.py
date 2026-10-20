@@ -27,6 +27,7 @@ from ..core.batch import _hash_key
 from ..core.candidates import CandidateSettings
 from ..core.components import (ComponentDetectionSettings, ComponentGroup, ComponentSet,
                                detect_components)
+from ..core.peaktable import respectrum_components
 from ..core.peaks import (BlobSet, PeakSettings, add_blob_at, delete_blobs, find_blobs,
                           merge_blobs)
 
@@ -58,6 +59,7 @@ class BlobState(QtCore.QObject):
         self.running = False
         self.was_run = False
         self.candidates_were_run = False
+        self._full_spectrum_cache: dict = {}
 
     def forget_runs(self, entries) -> None:
         for e in entries:
@@ -131,6 +133,39 @@ class BlobState(QtCore.QObject):
         if not 0 <= index < len(p.entries):
             return None
         return self.component_sets_by_name.get(p.entries[index].name)
+
+    def component_signature(self, index: int) -> tuple | None:
+        """What identifies a run's fitted components: changes whenever one is added, moved or re-fitted."""
+        component_set = self.components_for(index)
+        if component_set is None:
+            return None
+        return tuple((c.id, round(float(c.t1), 4), round(float(c.t2), 4), round(float(c.volume), 6))
+                     for c in component_set.components)
+
+    def full_spectrum_peaks(self, index: int):
+        """This run's peaks with a mass spectrum on every ion, however they were found, or None if peak
+        detection has not been run on it. The selected method decides: fitted components are re-solved on all
+        ions with their shapes held fixed (a minute for a busy run), so the result is kept until the run's
+        components, background layer or fold change. Slow: call from a job."""
+        p = self.project
+        if not 0 <= index < len(p.entries):
+            return None
+        if self.method != MS_AWARE:
+            return self.blobs_for(index)
+        component_set = self.components_for(index)
+        if component_set is None:
+            return None
+        entry = p.entries[index]
+        base_run, fold = p.base_run(index), p.fold(index)
+        key = (entry.name, self.component_signature(index), id(base_run), p.period, entry.phase)
+        cached = self._full_spectrum_cache.get(key)
+        if cached is not None:
+            return cached
+        peaks, _model, _footprint = respectrum_components(base_run, fold, component_set)
+        if len(self._full_spectrum_cache) >= 12:
+            self._full_spectrum_cache.pop(next(iter(self._full_spectrum_cache)))
+        self._full_spectrum_cache[key] = peaks
+        return peaks
 
     def accept_component_group(self, index: int, group: ComponentGroup) -> None:
         p = self.project

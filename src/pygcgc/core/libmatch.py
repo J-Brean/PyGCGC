@@ -42,7 +42,10 @@ Nothing here reaches Schymanski level 1: that needs a co-injected standard.
 
 from __future__ import annotations
 
+import csv
+import re
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 import numpy as np
 import scipy.sparse as sp
@@ -118,6 +121,32 @@ class Query:
     t2: float = float("nan")
     volume: float = 0.0
     label: str = ""                     # component id, for display and decisions
+    class_label: str = ""               # the 🧬 compound class from the spectrum, if one was found with confidence
+
+
+# The elements a compound of each 🧬 class must (or, for hydrocarbons, may only) contain. A library formula that breaks
+# this contradicts the class, which usually means the library hit is a look-alike.
+HYDROCARBON_CLASSES = {"alkane", "alkene", "cycloalkane", "alkylbenzene", "indane / indene / tetralin", "naphthalene", "PAH"}
+CLASS_NEEDS = {"N-heteroaromatic": "N", "aliphatic amine": "N", "alcohol / ether": "O", "ketone / aldehyde": "O",
+               "carboxylic acid": "O", "ester": "O", "aromatic oxygenate": "O", "S-heteroaromatic": "S",
+               "siloxane": "Si", "phthalate": "O"}
+
+
+def formula_elements(formula: str) -> set:
+    """The element symbols in a formula such as `C10H22O` or `C6H18O3Si3`."""
+    return set(re.findall(r"[A-Z][a-z]?", formula or ""))
+
+
+def class_conflict(class_label: str, formula: str) -> bool:
+    """True when the library formula cannot belong to the 🧬 class (a hydrocarbon class with a heteroatom, or
+    a heteroatom class without that heteroatom). An empty class or formula never conflicts."""
+    if not class_label or not formula:
+        return False
+    elements = formula_elements(formula)
+    if class_label in HYDROCARBON_CLASSES:
+        return bool(elements - {"C", "H"})
+    need = CLASS_NEEDS.get(class_label)
+    return bool(need) and need not in elements
 
 
 def peak_ri(series, t1: float, sigma_t1: float) -> tuple[float, float, bool]:
@@ -134,11 +163,13 @@ def peak_ri(series, t1: float, sigma_t1: float) -> tuple[float, float, bool]:
 
 
 def queries_from_peaks(peaks, series=None, period: float = 8.0, settings: MatchSettings = MatchSettings(),
-                       borrowed: bool = False, labels: list | None = None) -> list:
+                       borrowed: bool = False, labels: list | None = None, t1_map=None,
+                       class_labels: list | None = None) -> list:
     """`Query` objects for a `ComponentPeaks`-shaped object (t1, t2, volume, mz, spectra, co_elution).
 
-    `series` is an `AlkaneSeries` or None. `borrowed` marks a ladder taken
-    from another run."""
+    `series` is an `AlkaneSeries` or None. `borrowed` marks a ladder taken from another run; `t1_map`, if
+    given, takes a peak's first-dimension time in this run to the time it would have in the ladder's run
+    (through the alignment). `class_labels` gives each peak's 🧬 class, or "" for none."""
     out = []
     sigma_t1 = settings.sigma_t1_fraction * period
     has_ladder = series is not None and len(series) >= 2
@@ -149,7 +180,8 @@ def queries_from_peaks(peaks, series=None, period: float = 8.0, settings: MatchS
         ri = sigma = float("nan")
         if has_ladder:
             try:
-                ri, sigma, extrapolated = peak_ri(series, float(peaks.t1[i]), sigma_t1)
+                ladder_t1 = float(peaks.t1[i]) if t1_map is None else float(t1_map(float(peaks.t1[i]), float(peaks.t2[i])))
+                ri, sigma, extrapolated = peak_ri(series, ladder_t1, sigma_t1)
                 if extrapolated:
                     flags.append("RI_EXTRAPOLATED")
                 if borrowed:
@@ -163,7 +195,8 @@ def queries_from_peaks(peaks, series=None, period: float = 8.0, settings: MatchS
         out.append(Query(mz=np.asarray(peaks.mz, dtype=np.int64), intensity=np.asarray(peaks.spectra[i], dtype=np.float64),
                          ri=ri, ri_sigma=sigma, flags=tuple(flags), t1=float(peaks.t1[i]), t2=float(peaks.t2[i]),
                          volume=float(peaks.volume[i]),
-                         label=labels[i] if labels is not None else (str(ids[i]) if i < len(ids) else str(i))))
+                         label=labels[i] if labels is not None else (str(ids[i]) if i < len(ids) else str(i)),
+                         class_label=class_labels[i] if class_labels is not None and i < len(class_labels) else ""))
     return out
 
 
@@ -508,6 +541,8 @@ def _grade(match: PeakMatch, lib: CompactLibrary, settings: MatchSettings) -> No
     if runner:
         same_formula = any(c.formula and c.formula == best.formula for c in runner)
         flags.append("ISOMER_AMBIGUOUS" if same_formula else "CLOSE_RUNNER_UP")
+    if class_conflict(match.query.class_label, best.formula):
+        flags.append("CLASS_DISAGREES")
     high_fdr = np.isfinite(match.q_value) and match.q_value > settings.q_max
     if high_fdr:
         flags.append("HIGH_FDR")
@@ -543,3 +578,50 @@ def describe_candidate_rank(match: PeakMatch, k: int) -> str:
     if not c.in_gate:
         parts.append("outside the RI gate")
     return "; ".join(parts)
+
+# ------------------------------------------------------------------ summaries and export
+def largest_peaks(matches: list, n: int = 10) -> list:
+    """The `n` peaks with the most fitted signal, largest first, as `(match, share)` where `share` is the
+    fraction of all the peaks' volume."""
+    total = sum(max(m.query.volume, 0.0) for m in matches)
+    ranked = sorted(matches, key=lambda m: m.query.volume, reverse=True)[:n]
+    return [(m, (m.query.volume / total) if total > 0 else float("nan")) for m in ranked]
+
+
+IDENTIFICATION_FIELDS = ["run", "rank", "peak", "t1_min", "t2_s", "volume", "percent_of_signal", "name", "formula", "cas",
+                         "confidence", "schymanski_level", "mf", "rmf", "ri_measured", "ri_measured_sigma",
+                         "ri_library", "ri_library_sigma", "ri_kind", "z", "q_value", "flags", "flag_text",
+                         "runner_up", "decision", "decision_name", "library", "column_class"]
+
+
+def write_identifications_csv(path, run: str, matches: list, decisions: dict | None = None, library: str = "",
+                              settings: MatchSettings = MatchSettings()) -> Path:
+    """One row per peak, largest first: the best candidate, every doubt as a code and as a sentence, and the
+    user's decision. `decisions` maps a peak's label to `{"action": ..., "name": ...}`."""
+    decisions = decisions or {}
+    path = Path(path)
+    total = sum(max(m.query.volume, 0.0) for m in matches)
+    ranked = sorted(matches, key=lambda m: m.query.volume, reverse=True)
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=IDENTIFICATION_FIELDS)
+        writer.writeheader()
+        for rank, m in enumerate(ranked, start=1):
+            best = m.best
+            runner = m.candidates[1] if len(m.candidates) > 1 and m.candidates[1].in_gate else None
+            decision = decisions.get(m.query.label, {})
+
+            def num(x, fmt):
+                return "" if x is None or not np.isfinite(x) else format(x, fmt)
+            writer.writerow(dict(
+                run=run, rank=rank, peak=m.query.label, t1_min=num(m.query.t1 / 60.0, ".3f"), t2_s=num(m.query.t2, ".3f"),
+                volume=num(m.query.volume, ".6g"), percent_of_signal=num(100.0 * m.query.volume / total if total > 0 else float("nan"), ".3f"),
+                name=best.name if best else "", formula=best.formula if best else "", cas=best.cas if best else "",
+                confidence=m.level, schymanski_level=m.tier,
+                mf=num(best.mf if best else None, ".0f"), rmf=num(best.rmf if best else None, ".0f"),
+                ri_measured=num(m.query.ri, ".1f"), ri_measured_sigma=num(m.query.ri_sigma, ".1f"),
+                ri_library=num(best.ri_lib if best else None, ".1f"), ri_library_sigma=num(best.ri_sigma_lib if best else None, ".1f"),
+                ri_kind=best.ri_kind if best else "", z=num(best.z if best else None, ".2f"), q_value=num(m.q_value, ".3f"),
+                flags=";".join(m.flags), flag_text=" ".join(FLAGS.get(f, f) for f in m.flags),
+                runner_up=runner.name if runner else "", decision=decision.get("action", ""),
+                decision_name=decision.get("name", ""), library=library, column_class=settings.column_class))
+    return path

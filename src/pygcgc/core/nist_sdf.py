@@ -176,6 +176,7 @@ class CompactLibrary:
     ri_link: list = field(default=None)     # how the experimental RI was linked: "", "cas", "nistno" or "name"
     label: str = ""
     key: str = ""
+    ri_counts: dict = field(default_factory=dict)    # how many entries got a literature RI, by link route
     _cache: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
@@ -487,3 +488,51 @@ def find_nist_files(folder) -> dict:
             if p.suffix.lower() == ".sdf" and stem in ("mainlib", "replib", "nist_ri"):
                 found[stem] = p
     return found
+
+LINK_CODES = ("", "cas", "nistno", "name", "library")
+
+
+def open_library(folder, column_class: str = DEFAULT_COLUMN_CLASS, include_replicates: bool = True,
+                 progress=None, cancel=None, cache_root=None) -> CompactLibrary:
+    """The NIST library in `folder` (or its `SDF` subfolder) with literature retention indices for `column_class`.
+
+    The spectra come from the local cache when the files are unchanged (see `open_ei_library`); the indices are
+    cached per column class too, so changing the class later takes a moment, not a minute.
+    `progress(fraction, text)` and `cancel()` are as for the readers."""
+    files = find_nist_files(folder)
+    if "mainlib" not in files:
+        raise FileNotFoundError(f"mainlib.sdf not found in {folder} (or {Path(folder) / 'SDF'})")
+    ei = [files["mainlib"]] + ([files["replib"]] if include_replicates and "replib" in files else [])
+
+    def stage(lo, hi):
+        return (lambda f, text="": progress(lo + (hi - lo) * f, text)) if progress else None
+
+    lib = open_ei_library(ei, stage(0.0, 0.7), cancel, cache_root)
+    lib.label = "NIST " + ", ".join(p.name for p in ei)
+    if "nist_ri" not in files:
+        return lib
+    ri_path = files["nist_ri"]
+    slug = re.sub(r"[^a-z0-9]+", "_", column_class.lower()).strip("_")
+    cache = Path(cache_root or library_cache_dir()) / ("ei_" + lib.key) / f"ri_{source_key([ri_path])}_{slug}.npz"
+    try:
+        with np.load(cache) as saved:
+            if saved["ri_exp"].shape[0] == len(lib):
+                lib.ri_exp, lib.ri_exp_sigma, lib.ri_exp_n = saved["ri_exp"], saved["ri_exp_sigma"], saved["ri_exp_n"]
+                lib.ri_link = [LINK_CODES[int(c)] for c in saved["link"]]
+                lib._cache.clear()
+                counts = {k: lib.ri_link.count(k) for k in ("cas", "nistno", "name")}
+                lib.ri_counts = dict(counts, none=lib.ri_link.count(""))
+                return lib
+    except (OSError, KeyError, ValueError):
+        pass
+    records = read_ri_records(ri_path, stage(0.7, 0.95), cancel)
+    lib.ri_counts = attach_experimental_ri(lib, records, column_class)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        np.savez(cache, ri_exp=lib.ri_exp, ri_exp_sigma=lib.ri_exp_sigma, ri_exp_n=lib.ri_exp_n,
+                 link=np.array([LINK_CODES.index(k) for k in lib.ri_link], dtype=np.uint8))
+    except OSError:
+        pass
+    if progress:
+        progress(1.0, "Done")
+    return lib
