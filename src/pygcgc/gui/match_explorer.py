@@ -70,6 +70,26 @@ def tic_map(image: np.ndarray, t1_start: float, period: float, pitch: float, key
                   period, key)
 
 
+def plain_axes(plot) -> None:
+    """Show axis numbers as they are: pyqtgraph's SI prefixes turn an O/C of 0.17 into '170 (x0.001)'."""
+    for side in ("bottom", "left"):
+        plot.getPlotItem().getAxis(side).enableAutoSIPrefix(False)
+
+
+def ink_for(background) -> tuple:
+    """Dark text on a light plot background, light text on a dark one (legends take their own colour)."""
+    c = pg.mkColor(background)
+    return (30, 30, 30) if 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue() > 128 else (225, 225, 225)
+
+
+def ink_legend(legend, background) -> None:
+    """Colour a legend's text for the plot background, for the entries it has and the ones it will get."""
+    ink = ink_for(background)
+    legend.setLabelTextColor(ink)
+    for _sample, label in legend.items:
+        label.setText(label.text, color=pg.mkColor(ink))       # the labels are drawn again only when their text is set
+
+
 def _size(share: float, biggest: float) -> float:
     if not np.isfinite(share) or biggest <= 0:
         return 6.0
@@ -104,6 +124,8 @@ class MatchExplorer(QtWidgets.QWidget):
             p.setMenuEnabled(False)
             p.hideButtons()
             p.setMinimumHeight(190)
+        plain_axes(self.map_plot)
+        plain_axes(self.plot)
         self.map_plot.setLabel("bottom", "t₁ (min)")
         self.map_plot.setLabel("left", "t₂ (s)")
         self.image = pg.ImageItem()
@@ -149,6 +171,8 @@ class MatchExplorer(QtWidgets.QWidget):
     def set_background(self, colour) -> None:
         self.map_plot.setBackground(colour)
         self.plot.setBackground(colour)
+        for plot in (self.map_plot, self.plot):
+            ink_legend(plot.getPlotItem().legend, colour)
 
     def current_kind(self) -> str:
         return self.kind.currentData()

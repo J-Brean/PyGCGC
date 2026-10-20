@@ -245,6 +245,29 @@ class EditHydrocarbons(QUndoCommand):
         self.hydro.restore_stencils(self.before)
 
 
+class EditLadder(QUndoCommand):
+    """A run's alkane ladder drawn, dragged, stretched or snapped. Applied already when pushed; redo is a no-op the
+    first time. `before` and `after` are copies of the ladder (or None for no ladder)."""
+
+    def __init__(self, hydro, index: int, before, after, text: str):
+        super().__init__(text)
+        self.hydro, self.index, self.before, self.after = hydro, index, before, after
+        self._first = True
+
+    def _set(self, series) -> None:
+        # a copy, so the ladder kept in the undo step is never the one still being edited
+        self.hydro.set_series(self.index, None if series is None else series.copy())
+
+    def redo(self) -> None:
+        if self._first:
+            self._first = False
+            return
+        self._set(self.after)
+
+    def undo(self) -> None:
+        self._set(self.before)
+
+
 class SetReference(QUndoCommand):
     """Choosing a reference run clears every anchor (they were relative to
     the old one), so this is its own command rather than an EditAlignment."""

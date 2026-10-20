@@ -86,6 +86,8 @@ src/pygcgc/
     prefs.py            per-user INI preferences: text size, window geometry (`PYGCGC_SETTINGS` overrides)
     anchor_window.py    📍 phase check, picking, ANCHOR and before/after pages
     library_matcher.py  📚 the matcher window; match_state.py its state; peak_blank_state.py and panels/peakblank.py ➖
+    match_explorer.py   the matcher's plot explorer (2D map by default); chemspace_window.py 🧪 chemical-space plots
+    ladder_editor.py    📏 the alkane ladder drawn on the 2D view (overlay, panel, controller); peak_naming.py names
     calibration_setup.py  four-page transactional setup for named targets, runs, amounts and units
     standard_review.py  exceptions queue with candidate spectra and fitted-profile comparisons
     workflow_assistant.py  prerequisites, direct repair actions and freshness/completion guidance
@@ -242,6 +244,26 @@ CLAUDE.md, ROADMAP.md, CHANGELOG.md   agent notes, what is left, what changed
   or propagating a ladder is a detection operation and is not undoable. Stencil edits
   use `EditHydrocarbons` snapshots. Stencil vertices are carbon number and offset from
   the current run's ladder, so they transfer through that ladder without global alignment.
+  The state works with either peak finder. `positions_for(index)` is the legacy blobs or
+  `core.peaktable.component_positions` (positions and fitted volumes, instant: used by
+  stencil totals and markers); `spectra_for(index)` is the cached all-ion `ComponentPeaks`
+  (`BlobState.cached_full_spectrum_peaks`, built by the `prepare_full_spectrum_peaks` job and
+  shared with the matcher), needed by `assign_hydrocarbons` and the homologous-series
+  finder. Never call `BlobState.full_spectrum_peaks` on the GUI thread: it re-solves every
+  ion. `set_series(index, series)` is how a ladder changes by hand or by snapping: it redoes
+  the assignments when the spectra are ready, drops them otherwise, saves, and emits
+  `changed`, which marks the matcher's results out of date (the ladder is part of their
+  content signature) and moves stencils and markers. Each hand edit is one `EditLadder`
+  undo step holding copies (`AlkaneSeries.copy`).
+- **📏 is `gui/ladder_editor`.** `LadderOverlay` holds control points `[carbon, t1 s, t2 s]`
+  and nothing else; items are pyqtgraph `TargetItem`s in the 2D view's data coordinates
+  (minutes, seconds), so the run must be shown unaligned. The geometry is core and Qt-free
+  (`ladder_from_control_points`, `sample_ladder`, `control_points_of`, `snap_ladder` in
+  `core/hydrocarbons.py`): the path between control points is PCHIP, the hits are one per
+  whole carbon, marked `seeded` and with no height or ratios. t₁ must increase with carbon
+  by at least `MIN_STEP_S`; the drag logic clamps rather than lets a ladder run backwards.
+  `LadderEditor` stores on release (not during the drag), follows external changes through
+  `HydrocarbonState.changed`, and re-opens on the new run when the main window changes run.
 - **🏷️ lives directly as a self-contained GUI dialog (`gui/identify_dialog.IdentifyDialog`), not part of `Project` state, the same reasoning as ✂️ and 🗂️.** The loaded `Library` is dialog-local (not per-run, not saved with the project -- reload the MSP file next session); the search results are a plain list shown in a table, nothing to undo. Its two write actions (`promote_to_file`, `add_to_inhouse_file`) don't touch the Project directly either: they write a target-table CSV or an MSP file to disk and tell the user to reload it, the same "write a file, don't mutate live state" shape 📤's report export already uses, rather than reaching into `Project`/`QuantState` to add a target on the fly.
 - **🗂️ lives directly as a self-contained GUI dialog (`gui/batch_dialog.BatchDialog`), not part of `Project` state at all.** Unlike 🧪/📍/🔍/⛓️, it isn't a per-run layer with an undo history or a save/reopen story to fit into `Project.to_dict` -- it's a one-shot, folder-level analysis (pick a folder, run it, look at the results) with nothing to persist or undo. Its only touch point with the rest of the app is `navigateRequested`, a signal `MainWindow._batch_navigate` uses to jump the main window to a run and t1/t2 the user double-clicked or point-clicked inside the dialog, exactly the same "reach back into the main window" shape 🧪's Review gallery and the ⚖️ Compare window (`gui/compare_window.CompareWindow`, another dialog with nothing to save or undo) use.
 - **📈 is `gui/calibrate_window.CalibrationWindow`**, with its own `Project`,

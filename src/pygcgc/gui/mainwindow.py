@@ -156,6 +156,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.compare_window: CompareWindow | None = None     # built on first use (⚖️)
         self.anchor_window = None                            # built on first use (📍)
         self.library_matcher = None                          # built on first use (📚)
+        self.ladder_editor = None                            # built on first use (📏)
         self.setCentralWidget(self.tabs)
 
         # ---- docks
@@ -265,10 +266,11 @@ class MainWindow(QtWidgets.QMainWindow):
             "Assignments define what will be quantified. A spectral match is a suggestion to review.",
             self.assign_step, "Use assignments and continue")
         add("hydro", "⛓️ Hydrocarbon identifier", "Hydrocarbon identifier",
-            "Anchors the n-alkane ladder (click two n-alkanes and type their carbon numbers), then assigns "
-            "every blob to the hydrocarbon it is: n-alkane, branched alkane, cycloalkane, alkylbenzene or "
-            "naphthalene, with a carbon number. The ladder can follow a curved, uneven path. Stencils "
-            "(lumped classes) transfer between runs.",
+            "Anchors the n-alkane ladder (click two n-alkanes and type their carbon numbers, or draw it over the "
+            "image with 📏 and drag it onto the alkanes), then assigns every peak to the hydrocarbon it is: "
+            "n-alkane, branched alkane, cycloalkane, alkylbenzene or naphthalene, with a carbon number. The "
+            "ladder can follow a curved, uneven path. Stencils (lumped classes) transfer between runs. Works "
+            "with either peak finder.",
             "The ladder is searched for on clean data. It gives the retention index that identification "
             "uses, and the t2-above-the-alkane-line axis that classification uses.",
             self.hydro_panel, "Find alkane series", parent="assign")
@@ -1037,6 +1039,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hydrocarbons.changed.connect(self._hydrocarbons_changed)
         self.hydrocarbons.runningChanged.connect(self._hydrocarbons_running)
         self.hydro_panel.findRequested.connect(self.start_find_alkanes)
+        self.hydro_panel.drawLadderRequested.connect(lambda: self.show_ladder_editor())
+        self.hydro_panel.assignActivated.connect(self.goto_hydrocarbon_peak)
         self.hydro_panel.propagateRequested.connect(self.propagate_alkanes)
         self.hydro_panel.drawRequested.connect(self.view2d.start_stencil_draw)
         self.hydro_panel.cancelDrawRequested.connect(self.view2d.cancel_stencil_draw)
@@ -1045,13 +1049,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.hydro_panel.responseFactorEdited.connect(self.edit_response_factor)
         self.hydro_panel.settingsRequested.connect(self.edit_hydro_settings)
         self.hydro_panel.findHomologRequested.connect(self.find_homologs)
-        self.hydro_panel.homologActivated.connect(self.goto_blob)
+        self.hydro_panel.homologActivated.connect(self.goto_hydrocarbon_peak)
         self.hydro_panel.editStencilRequested.connect(self.edit_stencil)
         self.hydro_panel.qualifiersChanged.connect(self._qualifiers_edited)
         self.hydro_panel.pickQualifiersToggled.connect(self._qual_pick_toggled)
         self.hydro_panel.ladderShapeChanged.connect(self._ladder_shape_edited)
         self.hydro_panel.assignRequested.connect(self.assign_hydrocarbons)
-        self.hydro_panel.assignActivated.connect(self.goto_blob)
         self.hydro_panel.set_qualifiers(self.hydrocarbons.settings)
         self.classes.changed.connect(self._classes_changed)
         self.classes.runningChanged.connect(self._classes_running)
@@ -1356,6 +1359,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._istd_changed()
         self.blank_panel.set_shown_run(index)
         self._update_peak_labels()
+        if self.ladder_editor is not None:
+            self.ladder_editor.run_changed()
         if self.bg_panel.preview.isChecked():
             self.start_preview()
         if self._last_click is not None:
@@ -2729,6 +2734,14 @@ class MainWindow(QtWidgets.QMainWindow):
             blobs.mz, spectrum,
             f"{name}: blob at t₁ {blobs.t1[row] / 60:.3f} min, t₂ {blobs.t2[row]:.3f} s ({kind} spectrum)")
 
+    def goto_hydrocarbon_peak(self, i: int):
+        """Centre the 2D view on peak `i` of the hydrocarbon tables, which index the run's blobs or fitted components."""
+        peaks = self.hydrocarbons.positions_for(self.index) if self.index >= 0 else None
+        if peaks is None or not (0 <= i < len(peaks)):
+            return
+        self.tabs.setCurrentIndex(0)
+        self.view2d.centre_on(float(peaks.t1[i]), float(peaks.t2[i]))
+
     def goto_blob(self, row: int):
         if self.blobs.method == MS_AWARE:
             component = self.blobs_panel.component_for_row(row)
@@ -2881,13 +2894,37 @@ class MainWindow(QtWidgets.QMainWindow):
         if not loaded:
             self.say("Open some runs first")
             return
-        done, skipped = self.hydrocarbons.assign(loaded)
-        if not done:
-            self.say("⛓️ Nothing assigned: each run needs its alkane ladder and its peaks (🔍 legacy blobs)")
+        word = self.hydrocarbons.peak_word()
+
+        def finished(done, skipped):
+            if not done:
+                self.say(f"⛓️ Nothing assigned: each run needs its alkane ladder and its peaks (🔍 {word})")
+                return
+            note = f" Skipped (no ladder or peaks): {', '.join(skipped)}." if skipped else ""
+            self.say(f"⛓️ Peaks assigned to hydrocarbons on {done} run{'s' if done != 1 else ''}.{note}")
+            self.workflow.mark_done("hydro", f"Peaks assigned on {done} run{'s' if done != 1 else ''}.{note}")
+
+        hydro = self.hydrocarbons
+        slow = [i for i in loaded if not hydro.can_assign(i) and hydro.spectra_for(i) is None]
+        if slow:
+            self.say(f"⛓️ Solving every ion for the peaks of {len(slow)} run{'s' if len(slow) != 1 else ''}: about a "
+                     "minute for a busy run, then kept for next time")
+        hydro.assign_async(loaded, on_done=finished)
+
+    def show_ladder_editor(self, index: int | None = None):
+        """📏 Draw the alkane ladder over the 2D view of a run and pull it onto the alkanes."""
+        index = self.index if index is None else int(index)
+        if not (0 <= index < len(self.project)) or self.project.entries[index].run is None:
+            self.say("Select a loaded run first")
             return
-        note = f" Skipped (no ladder or peaks): {', '.join(skipped)}." if skipped else ""
-        self.say(f"⛓️ Peaks assigned to hydrocarbons on {done} run{'s' if done != 1 else ''}.{note}")
-        self.workflow.mark_done("hydro", f"Peaks assigned on {done} run{'s' if done != 1 else ''}.{note}")
+        if self.ladder_editor is None:
+            from .ladder_editor import LadderEditor
+            self.ladder_editor = LadderEditor(self)
+            apply_theme(self, self.dark)
+        if index != self.index:
+            self.set_run(index)
+        self.cancel_pick()
+        self.ladder_editor.open(index)
 
     def _ladder_shape_edited(self, shape: str, degree: int):
         st = self.hydrocarbons
@@ -2997,21 +3034,35 @@ class MainWindow(QtWidgets.QMainWindow):
             self.say("⛓️ Settings changed. Find or propagate the alkane series again to use them.")
 
     def find_homologs(self, major: int, minor: int, name: str):
-        blobs = self.blobs.blobs_for(self.index) if self.index >= 0 else None
-        series = self.hydrocarbons.series_for(self.index) if self.index >= 0 else None
-        if blobs is None or len(blobs) == 0:
-            self.hydro_panel.set_homologs(None, "Find 🔍 blobs on this run first.")
+        index = self.index
+        hydro = self.hydrocarbons
+        positions = hydro.positions_for(index) if index >= 0 else None
+        series = hydro.series_for(index) if index >= 0 else None
+        if positions is None or len(positions) == 0:
+            self.hydro_panel.set_homologs(None, f"Find 🔍 {hydro.peak_word()} on this run first.")
             return
         if series is None or len(series) < 2:
             self.hydro_panel.set_homologs(None, "Find the alkane series on this run first.")
             return
-        hs = find_homologous_series(blobs, (major, minor), series, name, self.hydrocarbons.settings)
-        if hs is None:
-            self.hydro_panel.set_homologs(None, f"No evenly spaced series carrying m/z {major} and {minor} "
-                                                "(one member per carbon, consistent t2). Try a lower diagnostic "
-                                                "share in the ⚙️ settings.")
+
+        def search():
+            peaks = hydro.spectra_for(index)
+            if peaks is None or self.index != index:
+                return
+            hs = find_homologous_series(peaks, (major, minor), series, name, hydro.settings)
+            if hs is None:
+                self.hydro_panel.set_homologs(None, f"No evenly spaced series carrying m/z {major} and {minor} "
+                                                    "(one member per carbon, consistent t2). Try a lower diagnostic "
+                                                    "share in the ⚙️ settings.")
+            else:
+                self.hydro_panel.set_homologs(hs, f"{len(hs.members)} members. Double-click a row to go to it.")
+
+        if hydro.spectra_for(index) is None:
+            self.hydro_panel.set_homologs(None, "Solving every ion for this run's peaks first (about a minute)…")
+            self.blobs.prepare_full_spectrum_peaks(index, on_done=search,
+                                                   on_fail=lambda m: self.hydro_panel.set_homologs(None, f"Could not prepare the spectra: {m}"))
         else:
-            self.hydro_panel.set_homologs(hs, f"{len(hs.members)} members. Double-click a row to go to it.")
+            search()
 
     def edit_stencil(self, name: str):
         series = self.hydrocarbons.series_for(self.index) if self.index >= 0 else None
@@ -3066,7 +3117,7 @@ class MainWindow(QtWidgets.QMainWindow):
         series = self.hydrocarbons.series_for(self.index) if self.index >= 0 else None
         self.hydro_panel.set_current_run(name, series, self.hydrocarbons.running)
         calls = self.hydrocarbons.calls_for(self.index) if self.index >= 0 else None
-        blobs = self.blobs.blobs_for(self.index) if self.index >= 0 else None
+        blobs = self.hydrocarbons.positions_for(self.index) if self.index >= 0 else None
         counts = {}
         for c in calls or []:
             counts[c.kind] = counts.get(c.kind, 0) + 1

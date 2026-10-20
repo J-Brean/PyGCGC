@@ -60,11 +60,12 @@ These block validation, not development.
   held-out error in 32 real windows, but some real mixtures remain unresolved and no
   independent chemical truth is available. See the [fitting comparison](docs/validation/peak-fitting-2026-10-18.md).
 
-- **MS-aware peaks do not reach every tool.** 🫧 blocking, ⛓️ stencil totals and series, 🗂️ batch
-  still use legacy blobs. The 14 eV evidence path of 🧬 needs legacy pixel footprints and
+- **MS-aware peaks do not reach every tool.** 🫧 blocking and 🗂️ batch still use legacy blobs
+  (⛓️ ladder, assignment, stencil totals, markers and homologous series now work with either finder,
+  from 20 October). The 14 eV evidence path of 🧬 needs legacy pixel footprints and
   is unavailable when classifying fitted MS-aware components. Legacy footprints cover most of the
-  image on these busy runs, so anything summed over footprints (stencil totals, all-signals
-  ratios) inherits that.
+  image on these busy runs, so anything summed over footprints (all-signals ratios) inherits that.
+  MS-aware stencil totals use each fitted peak's own intensity, not a footprint sum.
 - **The ladder can take a wrong isomer.** One or two carbons per run are off by a modulation or
   more, typically at C11 and C22–C23 where a branched alkane with alkane-like ratios sits close by;
   once one carbon is wrong, the next predictions lean on it *(audit)*. A spacing check and a

@@ -6,6 +6,37 @@ not checked). This was section 2 of the old docs/history/handover-2026-09-21.md.
 
 ## State of play
 
+**Matcher explorer, drawn ladder and chemical space, 2026-10-20 (third round, branch `matcher-ladder-chemspace`).**
+Six requests on the 📚 matcher, all built.
+
+- The "largest peaks" table is gone (one table, largest first). In its place a plot explorer
+  (`gui/match_explorer.py`): a miniature 2D map with the selected peak boxed (default), a close-up, RI against t₂, match
+  factor against signal, cumulative signal and the candidates' spectrum-against-RI scores. Dots carry confidence by colour
+  and shape. The RI plot now has a legend and a rank axis.
+- Double-click a name to type one. A name in no library keeps no CAS and no formula (decisions now store the formula),
+  a peak with no candidate can be named, cleared and promoted (the target is built from the peak's own ions), and the
+  export gains `decision_formula` and `decision_cas`. Decisions saved before formulae were kept read the formula from
+  their candidate.
+- 🧪 *Explore chemical space* (`gui/chemspace_window.py`, `core/chemspace.py`): van Krevelen, H/C, O/C and DBE against
+  carbon number, RI/100 against carbon number, Kendrick mass defect, 2D map, signal by heteroatom family and carbon
+  number. Only peaks with a name and a readable formula are placed; the rest are counted with the reason.
+- 📏 The alkane ladder is drawn on the 2D image (`gui/ladder_editor.py`): end dots stretch or turn it, middle dots bend
+  it, a diamond moves it, double-click adds a dot, right-click removes or renumbers, and *Snap to peaks* moves each
+  carbon onto the real m/z 57 apex (`core/hydrocarbons.snap_ladder`). Each release is one undo step. The ladder, peak
+  assignment, stencil totals, markers and homologous series now work with MS-aware peaks (before, only legacy blobs).
+  MS-aware assignment first solves every ion for the fitted peaks in a job (shared with the matcher); stencil totals use
+  the fitted peak intensity.
+- Consequence to know: a ladder edit changes the matcher's content signature, so matches are marked out of date and
+  decisions made on the old ladder stop showing. Deliberate.
+- Bug found by the suite: a new `goto_peak` shadowed the existing quantification method of that name; renamed.
+- Checks: suite 1039 passed, 32 skipped (one stale legend string fixed after the full run, affected files rerun: 166
+  passed). Real data, 8 s diesel run ATWC (70 eV): the program's own ladder found C13 to C27 (13 carbons); three rough
+  drawings (shifted 10 to 20 s in t₁ and 0.1 to 0.15 s in t₂, two with a 0.2 s bend, 15 control carbons including
+  extrapolated ends) snapped to 12 to 13 carbons, median t₁ error 11 to 20 s before and 0 s after, 11 to 12 of the 13
+  common carbons identical to the program's ladder and all but one or two within a modulation. Carbons beyond the
+  data stayed as drawn. Not checked: dragging by hand on a real screen (offscreen screenshots only), the drawn ladder
+  on the 10 s calibration runs, MS-aware assignment on a whole real run (about a minute per run, untimed).
+
 **Peak names on the image and blank-subtraction limits, 2026-10-20 (second round).** Hover a matched peak in the 2D view
 for its name, confidence and match factor (on by default; optional labels for every peak); double-click to suggest
 another name, checked so that capitals, commas, dashes, spaces and comma-part order do not create a new compound, with

@@ -95,6 +95,14 @@ requested by the user. Delete selected rows in one undo command; deleting a refe
 removes its matching pairs. Restart retains the reference but clears points and kind overrides
 and resumes P1. Undo must stop that new picker before restored P1 can be overwritten.
 
+The alkane ladder can be drawn and dragged on the 2D view (`gui/ladder_editor.py`, geometry in
+`core/hydrocarbons.py`) and every hydrocarbon tool works with either peak finder. The matcher's
+content signature includes the ladder, so any ladder edit marks matches out of date and drops
+decisions made on the old one: that is deliberate, not a bug. Never build MS-aware all-ion spectra
+on the GUI thread (`BlobState.prepare_full_spectrum_peaks` is the job). The matcher has no
+"largest peaks" table (its one table is largest first); names a user types that no library holds
+carry no formula, and the chemical-space window must never borrow the best candidate's.
+
 | | |
 |---|---|
 | `src/pygcgc/core/` | all the science, no Qt; one module per method, each opening with an explanation |

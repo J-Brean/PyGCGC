@@ -28,6 +28,7 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
     qualifiersChanged = QtCore.Signal()
     pickQualifiersToggled = QtCore.Signal(bool)
     findRequested = QtCore.Signal()
+    drawLadderRequested = QtCore.Signal()
     propagateRequested = QtCore.Signal()
     drawRequested = QtCore.Signal()
     saveStencilRequested = QtCore.Signal(str, float)          # name, response factor
@@ -75,6 +76,10 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
         self.find_btn = QtWidgets.QPushButton("➕ Find alkane series")
         self.find_btn.setToolTip("Click two n-alkanes in the 2D view and type their carbon numbers")
         self.find_btn.clicked.connect(self.findRequested)
+        self.draw_ladder_btn = QtWidgets.QPushButton("📏 Draw / edit ladder")
+        self.draw_ladder_btn.setToolTip("Draw the ladder over the 2D view and drag it onto the alkanes: stretch, shorten or "
+                                        "bend it, then snap it to the peaks. Works with either peak finder.")
+        self.draw_ladder_btn.clicked.connect(self.drawLadderRequested)
         self.propagate_btn = QtWidgets.QPushButton("⛓️ Propagate to other runs")
         self.propagate_btn.setToolTip("Search every other loaded run for this run's confirmed alkanes")
         self.propagate_btn.clicked.connect(self.propagateRequested)
@@ -165,7 +170,7 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
         self.pair_combo.setEditable(True)
         for text in PAIR_PRESETS:
             self.pair_combo.addItem(text)
-        self.pair_combo.setToolTip("Major/minor diagnostic ions, e.g. 91/105. Needs 🔍 blobs and an alkane series "
+        self.pair_combo.setToolTip("Major/minor diagnostic ions, e.g. 91/105. Needs 🔍 peaks and an alkane series "
                                    "on this run. Unvalidated on real data except 57/71.")
         self.find_homolog_btn = QtWidgets.QPushButton("🔗 Find series")
         self.find_homolog_btn.clicked.connect(self._find_homolog_clicked)
@@ -183,6 +188,7 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
         lay.setContentsMargins(6, 6, 6, 6)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self.find_btn)
+        row.addWidget(self.draw_ladder_btn)
         row.addWidget(self.propagate_btn)
         lay.addLayout(row)
         lay.addWidget(self.qual_box)
@@ -395,6 +401,7 @@ class HydrocarbonsPanel(QtWidgets.QWidget):
 
     def _refresh_buttons(self) -> None:
         self.find_btn.setEnabled(self.current_run is not None)
+        self.draw_ladder_btn.setEnabled(self.current_run is not None)
 
     def _draw_toggled(self, on: bool) -> None:
         self.save_btn.setEnabled(on)

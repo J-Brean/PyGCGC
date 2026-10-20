@@ -196,6 +196,11 @@ class AlkaneSeries:
     def __len__(self) -> int:
         return len(self.hits)
 
+    def copy(self) -> "AlkaneSeries":
+        """An independent copy, for undo steps and for editing without touching the original."""
+        return AlkaneSeries(hits={c: AlkaneHit(h.carbon, h.t1, h.t2, h.height, tuple(h.qual_ratios), h.seeded, h.qual_ok)
+                                  for c, h in self.hits.items()}, shape=self.shape, degree=self.degree)
+
     def carbons(self) -> np.ndarray:
         return np.array(sorted(self.hits), dtype=np.int64)
 
@@ -404,6 +409,103 @@ def propagate_alkane_series(reference: AlkaneSeries, run: Run, fold: Fold,
         if hit is not None:
             series.hits[carbon] = hit
     return series
+
+
+# ------------------------------------------------------- a ladder drawn by hand
+# The ladder editor (`gui/ladder_editor.py`) lets a person pull the ladder over the alkanes on the 2D image. What
+# they pull are a few *control points*, `(carbon, t1, t2)`, and the ladder is the curve through them. These
+# functions turn control points into an `AlkaneSeries` the rest of the program reads, pick control points from an
+# existing series, and snap a drawn ladder onto the real m/z 57 apexes.
+MIN_STEP_S = 0.5              # control points must keep this much t1 between neighbours, so the ladder runs forwards
+
+
+def _checked_points(points) -> list[tuple[float, float, float]]:
+    pts = sorted((float(c), float(t1), float(t2)) for c, t1, t2 in points)
+    if len(pts) < 2:
+        raise ValueError("a ladder needs at least two control points")
+    carbons = [p[0] for p in pts]
+    if len(set(carbons)) != len(carbons) or any(c != int(c) for c in carbons):
+        raise ValueError("control points need different whole carbon numbers")
+    if any(b[1] - a[1] < MIN_STEP_S for a, b in zip(pts, pts[1:])):
+        raise ValueError(f"control points must be at least {MIN_STEP_S:g} s apart in t1 and in carbon order")
+    return pts
+
+
+def sample_ladder(points, carbons, shape: str = "smooth", degree: int = 3) -> tuple[np.ndarray, np.ndarray]:
+    """`(t1, t2)` of the ladder through `points` at each of `carbons` (any real numbers, also beyond the ends).
+
+    The same path as `AlkaneSeries.t1_of` and `t2_of` give for hits at the control points, computed for many
+    carbons at once so a curve can be redrawn while it is being dragged."""
+    pts = _checked_points(points)
+    xp = np.array([p[0] for p in pts])
+    c = np.atleast_1d(np.asarray(carbons, dtype=float))
+    out = []
+    for column in (1, 2):
+        fp = np.array([p[column] for p in pts])
+        if shape == "smooth" and xp.size >= 3:
+            spline = PchipInterpolator(xp, fp)
+            inside = spline(np.clip(c, xp[0], xp[-1]))
+            slope = np.where(c < xp[0], float(spline.derivative()(xp[0])), np.where(c > xp[-1], float(spline.derivative()(xp[-1])), 0.0))
+            edge = np.where(c < xp[0], xp[0], np.where(c > xp[-1], xp[-1], c))
+            out.append(inside + slope * (c - edge))
+        else:
+            out.append(np.array([_curve_value(float(x), xp, fp, shape, degree) for x in c]))
+    return out[0], out[1]
+
+
+def ladder_from_control_points(points, shape: str = "smooth", degree: int = 3) -> AlkaneSeries:
+    """An `AlkaneSeries` with one hit per whole carbon from the first control point's carbon to the last's.
+
+    `points` are `(carbon, t1, t2)` with increasing carbon and increasing t1. Between them the path follows
+    `shape` (see `_curve_value`): straight, a smooth curve through every point, or a polynomial. The hits are
+    marked as given by the user (`seeded`), carry no height and no ion ratios, because nothing was measured."""
+    pts = _checked_points(points)
+    carbons = np.arange(int(pts[0][0]), int(pts[-1][0]) + 1)
+    t1, t2 = sample_ladder(pts, carbons, shape, degree)
+    return AlkaneSeries(hits={int(c): AlkaneHit(int(c), float(a), float(b), 0.0, (), seeded=True)
+                              for c, a, b in zip(carbons, t1, t2)}, shape=shape, degree=degree)
+
+
+def control_points_of(series: AlkaneSeries, count: int | None = None) -> list[tuple[int, float, float]]:
+    """Control points for editing a series: every hit (`count` None), or about `count` of them spread evenly
+    over the carbons, always including both ends."""
+    cs = series.carbons()
+    if count is None or cs.size <= max(count, 2):
+        chosen = list(cs)
+    else:
+        picks = np.unique(np.round(np.linspace(0, cs.size - 1, max(count, 2))).astype(int))
+        chosen = [cs[i] for i in picks]
+    return [(int(c), series.hits[int(c)].t1, series.hits[int(c)].t2) for c in chosen]
+
+
+def snap_ladder(run: Run, fold: Fold, series: AlkaneSeries, settings: HydrocarbonSettings = HydrocarbonSettings(),
+                cancel=None) -> tuple[AlkaneSeries, list[int]]:
+    """Move each carbon of a drawn ladder onto the tallest m/z 57 pulse near it whose ion ratios fit an n-alkane.
+
+    The search window is the same as when the program finds the ladder itself: up to `t1_window_s` in t1 but never
+    as far as the next carbon, and `t2_window_s` in t2. A carbon with no such pulse keeps where it was drawn. Returns
+    the new series (found hits are measured, the others stay as drawn) and the carbons that were snapped."""
+    if len(series) < 2:
+        raise ValueError("draw a ladder of at least two carbons first")
+    step = series.step_s()
+    window = min(settings.t1_window_s, 0.45 * abs(step))
+    out = AlkaneSeries(shape=series.shape, degree=series.degree)
+    snapped: list[int] = []
+    taken: list[float] = []
+    for c in series.carbons():
+        if cancel is not None:
+            cancel()
+        h = series.hits[int(c)]
+        hit = _search_carbon(run, fold, int(c), h.t1, h.t2, window, settings.t2_window_s, settings,
+                             avoid=taken, avoid_tol=0.4 * abs(step))
+        if hit is not None:
+            out.hits[int(c)] = hit
+            taken.append(hit.t1)
+            snapped.append(int(c))
+        else:
+            out.hits[int(c)] = AlkaneHit(int(c), h.t1, h.t2, h.height, h.qual_ratios, seeded=True, qual_ok=h.qual_ok)
+            taken.append(h.t1)
+    return out, snapped
 
 
 # ------------------------------------------------------------- homologues

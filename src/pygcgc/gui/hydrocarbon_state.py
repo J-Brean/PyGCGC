@@ -16,8 +16,10 @@ from PySide6 import QtCore
 
 from ..core.hcassign import HydrocarbonCall, assign_hydrocarbons
 from ..core.hydrocarbons import (AlkaneHit, AlkaneSeries, HydrocarbonSettings, StencilSet,
-                                 find_alkane_series, find_markers, propagate_alkane_series,
+                                 find_alkane_series, find_markers, propagate_alkane_series, snap_ladder,
                                  stencil_from_polygon)
+from ..core.peaktable import component_positions
+from .blob_state import MS_AWARE
 
 
 class HydrocarbonState(QtCore.QObject):
@@ -48,38 +50,165 @@ class HydrocarbonState(QtCore.QObject):
         for s in self.series.values():
             s.shape, s.degree = self.settings.ladder_shape, self.settings.ladder_degree
 
+    # ------------------------------------------------------------ the peaks
+    # Both peak finders work here. Legacy blobs carry everything. MS-aware components give positions and
+    # volumes at once; their all-ion spectra (needed to say what kind of hydrocarbon a peak is) take a job,
+    # which `prepare` runs and `spectra_for` then reads from the cache.
+    def positions_for(self, index: int):
+        """The run's peaks with positions and volumes: its legacy blobs, or its fitted components. None if neither."""
+        p = self.project
+        if not 0 <= index < len(p.entries):
+            return None
+        if p.blobs.method == MS_AWARE:
+            components = p.blobs.components_for(index)
+            return component_positions(components) if components is not None else None
+        return p.blobs.blobs_for(index)
+
+    def spectra_for(self, index: int):
+        """The run's peaks with a mass spectrum on every ion, if they are ready (never starts any work)."""
+        return self.project.blobs.cached_full_spectrum_peaks(index)
+
+    def peak_word(self) -> str:
+        return "MS-aware peaks" if self.project.blobs.method == MS_AWARE else "legacy blobs"
+
     # ------------------------------------------------------------ assigning
     def calls_for(self, index: int) -> list[HydrocarbonCall] | None:
-        """The run's assignments, or None if there are none or the blobs have changed since."""
+        """The run's assignments, or None if there are none or the peaks have changed since."""
         p = self.project
         if not 0 <= index < len(p.entries):
             return None
         calls = self.calls.get(p.entries[index].name)
-        blobs = p.blobs.blobs_for(index)
-        return calls if calls is not None and blobs is not None and len(calls) == len(blobs) else None
+        peaks = self.positions_for(index)
+        return calls if calls is not None and peaks is not None and len(calls) == len(peaks) else None
+
+    def can_assign(self, index: int) -> str:
+        """Empty if run `index` can be assigned now, else what is missing, in a sentence."""
+        series = self.series_for(index)
+        if series is None or len(series) < 2:
+            return "no alkane ladder (two alkanes or more)"
+        peaks = self.positions_for(index)
+        if peaks is None or len(peaks) == 0:
+            return f"no peaks (find the {self.peak_word()} first)"
+        return ""
 
     def assign(self, indices) -> tuple[int, list[str]]:
-        """Assign the blobs of each run that has both a ladder (two alkanes or more) and blobs.
-        Returns the number of runs done and the names of the runs that lacked something."""
+        """Assign the peaks of each run that has a ladder (two alkanes or more), peaks and, for MS-aware peaks, their
+        all-ion spectra already prepared. Returns the number of runs done and the names of the runs that lacked
+        something; `assign_async` prepares the spectra first."""
         p = self.project
         done, skipped = 0, []
         for i in indices:
             name = p.entries[i].name
-            series, blobs = self.series.get(name), p.blobs.blobs_for(i)
-            if series is None or len(series) < 2 or blobs is None or len(blobs) == 0:
+            peaks = self.spectra_for(i)
+            if self.can_assign(i) or peaks is None or len(peaks) == 0:
                 skipped.append(name)
                 continue
-            self.calls[name] = assign_hydrocarbons(blobs, series, self.settings)
+            self.calls[name] = assign_hydrocarbons(peaks, self.series[name], self.settings)
             done += 1
         if done:
             self.changed.emit()
         return done, skipped
+
+    def assign_async(self, indices, on_done=None) -> int:
+        """`assign` for runs whose spectra may not be ready: prepare each in a job, then assign. `on_done(done, skipped)`
+        runs at the end. Returns the number of runs being worked on."""
+        p = self.project
+        wanted = [i for i in indices if not self.can_assign(i)]
+        skipped = [p.entries[i].name for i in indices if self.can_assign(i)]
+        pending = set(wanted)
+        failed: list[str] = []
+
+        def settle(i, ok):
+            pending.discard(i)
+            if not ok:
+                failed.append(p.entries[i].name)
+            if pending:
+                return
+            done, short = self.assign([j for j in wanted if p.entries[j].name not in failed])
+            if on_done:
+                on_done(done, skipped + failed + short)
+
+        if not wanted and on_done:
+            on_done(0, skipped)
+        for i in wanted:
+            if not p.blobs.prepare_full_spectrum_peaks(i, on_done=lambda i=i: settle(i, True),
+                                                       on_fail=lambda _m, i=i: settle(i, False)):
+                settle(i, False)
+        return len(wanted)
+
+    def refresh_calls(self, index: int) -> None:
+        """Re-assign a run whose assignments exist and whose spectra are ready (the ladder moved under them)."""
+        name = self.project.entries[index].name
+        peaks = self.spectra_for(index)
+        if name in self.calls and peaks is not None and len(peaks) and not self.can_assign(index):
+            self.calls[name] = assign_hydrocarbons(peaks, self.series[name], self.settings)
+        else:
+            self.calls.pop(name, None)
 
     def series_for(self, index: int):
         p = self.project
         if not 0 <= index < len(p.entries):
             return None
         return self.series.get(p.entries[index].name)
+
+    # ------------------------------------------------------------ a ladder drawn or snapped by hand
+    def snapshot_series(self, index: int):
+        """A run's ladder as it is now (a copy, or None), for undo."""
+        series = self.series_for(index)
+        return None if series is None else series.copy()
+
+    def set_series(self, index: int, series: AlkaneSeries | None) -> None:
+        """Replace (or, with None, remove) a run's ladder. Everything that reads the ladder follows: the assignments
+        are redone if their spectra are ready, the stencils are lifted onto the new line and the library matcher's
+        results are marked out of date, because the retention indices moved."""
+        p = self.project
+        name = p.entries[index].name
+        if series is None:
+            self.series.pop(name, None)
+            self.calls.pop(name, None)
+        else:
+            series.shape, series.degree = self.settings.ladder_shape, self.settings.ladder_degree
+            self.series[name] = series
+            self.refresh_calls(index)
+        p.request_autosave()
+        self.changed.emit()
+
+    def snap(self, index: int, on_done=None, on_fail=None) -> bool:
+        """Move a drawn ladder onto the real alkane apexes, in a job. `on_done(series, snapped_carbons)` receives
+        the result, which is not stored: the caller decides (so it can be undone as one step). `on_fail(message)`
+        hears of a search that could not run, for example a run without the alkane ion."""
+        if self.running:
+            return False
+        p = self.project
+        series = self.series_for(index)
+        if series is None or len(series) < 2:
+            p.message.emit("Draw a ladder of at least two carbons first")
+            return False
+        run, fold = p.display_run(index), p.fold(index)
+        settings, name = self.settings, p.entries[index].name
+        inputs = p.analysis_inputs()
+        self._set_running(True)
+
+        def work(token, progress):
+            progress(0, 0, "Snapping the ladder to the alkane apexes")
+            return snap_ladder(run, fold, series, settings, cancel=token.check)
+
+        def done(result):
+            self._set_running(False)
+            if inputs != p.analysis_inputs() or settings != self.settings or self.series_for(index) is not series:
+                p.message.emit("Snapping discarded: the run, settings or ladder changed while it ran")
+                return
+            if on_done:
+                on_done(*result)
+
+        def failed(message):
+            self._set_running(False)
+            p.message.emit(f"⛓️ {name}: {message}")
+            if on_fail:
+                on_fail(message)
+
+        p.jobs.submit(f"⛓️ Snapping the ladder: {name}", work, done, failed, on_cancel=lambda: self._set_running(False))
+        return True
 
     def _set_running(self, on: bool) -> None:
         self.running = on
@@ -210,17 +339,17 @@ class HydrocarbonState(QtCore.QObject):
 
     def totals(self, index: int) -> dict:
         series = self.series_for(index)
-        blobs = self.project.blobs.blobs_for(index)
-        if series is None or blobs is None or not self.stencils.stencils:
+        peaks = self.positions_for(index)
+        if series is None or len(series) < 2 or peaks is None or not self.stencils.stencils:
             return {}
-        return self.stencils.totals(series, blobs)
+        return self.stencils.totals(series, peaks)
 
     def markers(self, index: int) -> dict:
         series = self.series_for(index)
-        blobs = self.project.blobs.blobs_for(index)
-        if series is None or blobs is None:
+        peaks = self.positions_for(index)
+        if series is None or len(series) < 2 or peaks is None:
             return {}
-        return find_markers(blobs, series)
+        return find_markers(peaks, series)
 
     # -------------------------------------------------------------- files
     def to_dict(self) -> dict:

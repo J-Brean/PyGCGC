@@ -155,17 +155,65 @@ class BlobState(QtCore.QObject):
         component_set = self.components_for(index)
         if component_set is None:
             return None
-        entry = p.entries[index]
-        base_run, fold = p.base_run(index), p.fold(index)
-        key = (entry.name, self.component_signature(index), id(base_run), p.period, entry.phase)
+        key = self._full_spectrum_key(index)
         cached = self._full_spectrum_cache.get(key)
         if cached is not None:
             return cached
-        peaks, _model, _footprint = respectrum_components(base_run, fold, component_set)
+        peaks, _model, _footprint = respectrum_components(p.base_run(index), p.fold(index), component_set)
         if len(self._full_spectrum_cache) >= 12:
             self._full_spectrum_cache.pop(next(iter(self._full_spectrum_cache)))
         self._full_spectrum_cache[key] = peaks
         return peaks
+
+    def _full_spectrum_key(self, index: int) -> tuple:
+        p = self.project
+        entry = p.entries[index]
+        return (entry.name, self.component_signature(index), id(p.base_run(index)), p.period, entry.phase)
+
+    def cached_full_spectrum_peaks(self, index: int):
+        """`full_spectrum_peaks` if it is already known (always, for legacy blobs), else None. Instant."""
+        p = self.project
+        if not 0 <= index < len(p.entries):
+            return None
+        if self.method != MS_AWARE:
+            return self.blobs_for(index)
+        if self.components_for(index) is None:
+            return None
+        return self._full_spectrum_cache.get(self._full_spectrum_key(index))
+
+    def prepare_full_spectrum_peaks(self, index: int, on_done=None, on_fail=None) -> bool:
+        """Build a run's all-ion spectra in a job, so later calls to `cached_full_spectrum_peaks` are instant.
+        `on_done()` runs when they are ready (at once if they already are); False if there are no peaks to do."""
+        p = self.project
+        if not 0 <= index < len(p.entries) or (self.method == MS_AWARE and self.components_for(index) is None) \
+                or (self.method != MS_AWARE and self.blobs_for(index) is None):
+            return False
+        if self.cached_full_spectrum_peaks(index) is not None:
+            if on_done:
+                on_done()
+            return True
+        key = self._full_spectrum_key(index)
+
+        def work(token, progress):
+            progress(0, 0, "Solving every ion for each fitted peak")
+            return self.full_spectrum_peaks(index)
+
+        def done(_peaks):
+            if key != self._full_spectrum_key(index):
+                p.message.emit("The peaks changed while their spectra were being prepared; try again.")
+                if on_fail:
+                    on_fail("changed")
+                return
+            if on_done:
+                on_done()
+
+        def failed(message):
+            p.message.emit(f"Preparing the peaks' spectra failed: {message}")
+            if on_fail:
+                on_fail(message)
+
+        p.jobs.submit(f"Preparing spectra: {p.entries[index].name}", work, done, failed)
+        return True
 
     def accept_component_group(self, index: int, group: ComponentGroup) -> None:
         p = self.project

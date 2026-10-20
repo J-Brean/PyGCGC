@@ -48,6 +48,33 @@ class ComponentPeaks:
         """Outline for drawing, in the same (start, end, NaN) format as BlobSet.outline_times."""
         return self.contours[i]
 
+    @property
+    def height(self) -> np.ndarray:
+        """The strongest single ion of each component: what a blob's apex height stands in for."""
+        return np.asarray(self.spectra, dtype=float).max(axis=1) if np.size(self.spectra) else np.zeros(len(self))
+
+    def nearest(self, t1: float, t2: float, t1_scale: float = 60.0, t2_scale: float = 0.5) -> int | None:
+        """The component nearest a point, with t1 and t2 distances in units of `t1_scale` and `t2_scale` seconds."""
+        if len(self) == 0:
+            return None
+        d = np.hypot((self.t1 - t1) / t1_scale, (self.t2 - t2) / t2_scale)
+        return int(np.argmin(d))
+
+
+def component_positions(component_set) -> ComponentPeaks:
+    """Where every fitted component is and how much signal it carries, with no spectra.
+
+    Enough for anything that only needs positions and volumes (stencil totals, the nearest peak to a place), and
+    instant, where `respectrum_components` re-solves every ion. Order is the component set's, the same as the full
+    spectra's."""
+    parts = component_set.components
+    n = len(parts)
+    return ComponentPeaks(
+        t1=np.array([c.t1 for c in parts], dtype=float), t2=np.array([c.t2 for c in parts], dtype=float),
+        volume=np.array([c.volume for c in parts], dtype=float), mz=np.zeros(0), spectra=np.zeros((n, 0)),
+        co_elution=np.zeros(n, dtype=bool), component_id=[c.id for c in parts],
+        unresolved=np.zeros(n, dtype=bool), contours=[(np.zeros(0), np.zeros(0))] * n)
+
 
 def respectrum_components(run, fold, component_set: ComponentSet, wrap_below_s: float = 0.5,
                           background_order: int = 1, progress=None, cancel=None

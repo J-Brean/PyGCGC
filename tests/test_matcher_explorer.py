@@ -120,7 +120,7 @@ def test_the_ri_plot_has_a_legend_and_a_rank_axis(qtbot, window, tmp_path):
     w = window
     win, state = ready(qtbot, w, tmp_path)
     labels = [label.text for _s, label in win.ri_legend.items]
-    assert len(labels) == 3 and any("Peak's RI" in t for t in labels) and any("outside the RI gate" in t for t in labels)
+    assert len(labels) == 3 and any("Peak's RI" in t for t in labels) and any("Outside the RI gate" in t for t in labels)
     assert "Candidate rank" in win.ri_plot.getPlotItem().getAxis("left").labelText
 
 
@@ -202,7 +202,19 @@ def test_a_rejected_or_unknown_peak_has_no_identity():
         candidates = []
         best = None
     assert identity_of(Match(), {"action": "rejected"}) == ("", "", "")
+    assert identity_of(Match(), {"action": "unknown"}) == ("", "", "")
     assert identity_of(Match(), None) == ("", "", "")
+
+
+def test_a_decision_saved_before_formulae_were_kept_reads_the_formula_from_its_candidate():
+    from types import SimpleNamespace as NS
+    candidate = NS(name="Toluene", formula="C7H8", cas="108883")
+    match = NS(candidates=[candidate], best=candidate)
+    old = {"action": "accepted", "name": "Toluene", "cas": "108883"}               # no "formula" key
+    assert identity_of(match, old) == ("Toluene", "C7H8", "108883")
+    typed_other = {"action": "named", "name": "my own thing", "cas": ""}            # not the best candidate's formula
+    assert identity_of(match, typed_other) == ("my own thing", "", "")
+    assert identity_of(match, None) == ("Toluene", "C7H8", "108883")
 
 
 # ---------------------------------------------------------------- chemical space

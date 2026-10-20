@@ -21,6 +21,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
 from ..core.chemspace import Space, space_of
+from .match_explorer import ink_legend, plain_axes
 from .peak_naming import identity_of
 from .theme import fit_to_screen
 
@@ -128,6 +129,7 @@ class ChemSpaceWindow(QtWidgets.QDialog):
         self.plot.setMenuEnabled(False)
         self.plot.hideButtons()
         self.plot.setMinimumHeight(360)
+        plain_axes(self.plot)
         self.legend = self.plot.addLegend(offset=(-4, 4), labelTextSize="8pt")
         self.bar = QtWidgets.QLabel("")
         self.bar.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
@@ -156,6 +158,7 @@ class ChemSpaceWindow(QtWidgets.QDialog):
     # ================================================================ data in
     def set_background(self, colour) -> None:
         self.plot.setBackground(colour)
+        ink_legend(self.legend, colour)
 
     def refresh(self) -> None:
         """Rebuild from the matcher's current run and decisions."""

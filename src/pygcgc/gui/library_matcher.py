@@ -32,7 +32,7 @@ from ..core.libmatch import FLAGS, describe_candidate_rank, write_identification
 from ..core.nist_sdf import COLUMN_CLASSES
 from ..core.identify import LibraryEntry, promote_to_target
 from ..core.targets import write_targets_csv
-from .match_explorer import MatchExplorer, PeakDot, tic_map
+from .match_explorer import MatchExplorer, PeakDot, ink_legend, plain_axes, tic_map
 from .match_state import NAMING_ACTIONS
 from .peak_naming import identity_of
 from .theme import fit_to_screen
@@ -212,8 +212,9 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.ri_plot.hideButtons()
         self.ri_plot.setLabel("bottom", "Retention index (alkane scale)")
         self.ri_plot.setLabel("left", "Candidate rank")
-        self.ri_plot.setTitle("Does the library's retention index agree with the peak's?", size="8pt")
+        self.ri_plot.setTitle("Retention index: peak against its candidates", size="8pt")
         self.ri_plot.setMaximumHeight(185)
+        plain_axes(self.ri_plot)
         self.measured_band = pg.LinearRegionItem(values=(0, 0), movable=False, brush=pg.mkBrush(0, 114, 178, 60))
         self.ri_plot.addItem(self.measured_band)
         self.ri_errors = pg.ErrorBarItem(x=[], y=[], left=[], right=[], beam=0.25, pen=pg.mkPen(DOWN, width=2))
@@ -226,11 +227,11 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.ri_legend = self.ri_plot.addLegend(offset=(-4, 4), labelTextSize="8pt")
         for marker, text in (
                 (pg.ScatterPlotItem(symbol="s", size=10, brush=pg.mkBrush(0, 114, 178, 90), pen=pg.mkPen(UP)),
-                 "Peak's RI ± its uncertainty (blue band)"),
+                 "Peak's RI ± σ (band)"),
                 (pg.ScatterPlotItem(symbol="o", size=8, brush=pg.mkBrush(DOWN), pen=pg.mkPen("k")),
-                 "Library candidate, bar = its ± uncertainty"),
+                 "Library RI ± σ (bar)"),
                 (pg.ScatterPlotItem(symbol="o", size=8, brush=None, pen=pg.mkPen(WARN, width=2)),
-                 "Candidate outside the RI gate (demoted)")):
+                 "Outside the RI gate")):
             self.ri_legend.addItem(marker, text)
 
         self.accept_btn = QtWidgets.QPushButton("✔ Accept best")
@@ -257,14 +258,21 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         buttons.addWidget(self.promote_btn)
         buttons.addWidget(self.export_btn)
 
-        left = QtWidgets.QWidget()
-        left_lay = QtWidgets.QVBoxLayout(left)
-        left_lay.setContentsMargins(0, 0, 0, 0)
-        left_lay.addWidget(self.explorer, 3)
-        left_lay.addWidget(QtWidgets.QLabel("<b>Peaks</b>, largest first. Double-click a name to type your own."))
-        left_lay.addLayout(filters)
-        left_lay.addWidget(self.table, 4)
-        left_lay.addWidget(self.table_note)
+        # The explorer and the table share the left side; drag the bar between them to give either more room.
+        below = QtWidgets.QWidget()
+        below_lay = QtWidgets.QVBoxLayout(below)
+        below_lay.setContentsMargins(0, 0, 0, 0)
+        below_lay.addWidget(QtWidgets.QLabel("<b>Peaks</b>, largest first. Double-click a name to type your own."))
+        below_lay.addLayout(filters)
+        below_lay.addWidget(self.table, 1)
+        below_lay.addWidget(self.table_note)
+        left = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        left.addWidget(self.explorer)
+        left.addWidget(below)
+        left.setStretchFactor(0, 2)
+        left.setStretchFactor(1, 3)
+        left.setChildrenCollapsible(False)
+        self.left_split = left
         right = QtWidgets.QWidget()
         right_lay = QtWidgets.QVBoxLayout(right)
         right_lay.setContentsMargins(0, 0, 0, 0)
@@ -292,7 +300,7 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         self.state.runningChanged.connect(self._refresh_all)
         self.project.runsChanged.connect(self._fill_runs)
         self.project.blobs.changed.connect(self._refresh_all)
-        self.project.hydrocarbons.changed.connect(self._fill_ladders)
+        self.project.hydrocarbons.changed.connect(self._ladders_changed)
         self._fill_runs()
 
     # ================================================================ opening
@@ -311,6 +319,7 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
     def set_background(self, colour) -> None:
         self.spectrum_plot.setBackground(colour)
         self.ri_plot.setBackground(colour)
+        ink_legend(self.ri_legend, colour)
         self.explorer.set_background(colour)
         if self.chemspace is not None:
             self.chemspace.set_background(colour)
@@ -325,6 +334,11 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         at = self.run_box.findData(current if current is not None else self.mw.index)
         self.run_box.setCurrentIndex(max(at, 0))
         self._updating = False
+        self._fill_ladders()
+        self._refresh_all()
+
+    def _ladders_changed(self) -> None:
+        """A ladder was found, drawn or moved: offer it, and say whether the matches were made on an earlier one."""
         self._fill_ladders()
         self._refresh_all()
 
@@ -742,9 +756,9 @@ class LibraryMatcherWindow(QtWidgets.QDialog):
         # rank 1, the best candidate, at the top; the axis says so rather than leaving the heights unexplained
         self.ri_plot.getPlotItem().getAxis("left").setTicks([[(n - r, str(r + 1)) for r in range(n)]])
         missing = sum(not np.isfinite(c.ri_lib) for c in match.candidates)
-        self.ri_plot.setTitle("Does the library's retention index agree with the peak's?"
-                              + (f"  ({missing} candidate(s) have no library RI)" if missing else "")
-                              + ("" if np.isfinite(q.ri) else "  (this peak has no RI)"), size="8pt")
+        self.ri_plot.setTitle("Retention index: peak against its candidates"
+                              + (f" ({missing} without a library RI)" if missing else "")
+                              + ("" if np.isfinite(q.ri) else " (this peak has none)"), size="8pt")
         if xs or np.isfinite(q.ri):
             allx = xs + ([q.ri] if np.isfinite(q.ri) else [])
             spread = max(max(sig, default=0), q.ri_sigma if np.isfinite(q.ri_sigma) else 0, 30)
