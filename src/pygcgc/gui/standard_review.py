@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
+from .theme import fit_to_screen
 
 from ..core.components import component_profiles_from_durable
 from ..core.istd import peak_spectrum, review_candidates
@@ -20,7 +21,7 @@ class StandardReviewDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.state = state
         self.setWindowTitle("Review standard exceptions")
-        self.resize(1150, 850)
+        fit_to_screen(self, 1150, 850)
         self._pair = None
         self._generation = 0
         self._job = None

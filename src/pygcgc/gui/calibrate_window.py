@@ -33,6 +33,7 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
+from .theme import fit_to_screen
 
 from ..core import BackgroundSettings, CalibrationFit, PeakSettings
 from ..core.io import discover_runs
@@ -543,7 +544,7 @@ class SuggestDialog(QtWidgets.QDialog):
                  settings: SuggestSettings = SuggestSettings(), parent=None, usable: dict | None = None):
         super().__init__(parent)
         self.setWindowTitle("🔎 Suggest compounds from the standards")
-        self.resize(900, 640)
+        fit_to_screen(self, 900, 640)
         self.runs, self.blobs_by_run, self.settings, self.usable = runs, blobs_by_run, settings, usable
         self.found = []
         self.levels = QtWidgets.QTableWidget(len(runs), 2)
@@ -809,7 +810,7 @@ class CalibrationWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("📈 Calibration builder")
         self.setWindowFlag(QtCore.Qt.WindowType.Window, True)
-        self.resize(1400, 900)
+        fit_to_screen(self, 1400, 900)
         self.main_project = main_project
         self.jobs = JobManager(self)
         self.project = _CalProject(self.jobs, self)

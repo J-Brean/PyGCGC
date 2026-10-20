@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
+from .theme import fit_to_screen
 
 from .. import __version__
 from ..core.batch import BatchConfig, BatchSettings, pca, run_batch, volcano, westgard_flags
@@ -29,7 +30,7 @@ class BatchDialog(QtWidgets.QDialog):
     def __init__(self, project, default_folder=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🗂️ Batch")
-        self.resize(900, 620)
+        fit_to_screen(self, 900, 620)
         self.project = project
         self.result = None
         self._active_job_id: int | None = None

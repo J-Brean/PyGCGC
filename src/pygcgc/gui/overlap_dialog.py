@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
+from .theme import fit_to_screen
 from skimage.measure import find_contours
 
 from ..core.background import storage_threshold
@@ -104,7 +105,7 @@ class OverlapDialog(QtWidgets.QDialog):
     def __init__(self, project, parent=None):
         super().__init__(parent)
         self.setWindowTitle("✂️ Overlap")
-        self.resize(880, 640)
+        fit_to_screen(self, 880, 640)
         self.project = project
         self._name = None
         self._run = None

@@ -33,16 +33,13 @@ class WorkflowPanel(QtWidgets.QWidget):
         self.back_btn.setVisible(False)
         self.title = QtWidgets.QLabel("")
         self.title.setWordWrap(True)
-        f = self.title.font()
-        f.setPointSizeF(f.pointSizeF() * 1.9)
-        f.setBold(True)
-        self.title.setFont(f)
         self.blurb = QtWidgets.QLabel("")
         self.blurb.setWordWrap(True)
+        self.set_text_scale(1.9, 10.0, 9.0)
         self.why = QtWidgets.QLabel("")
         self.why.setWordWrap(True)
         self.why.setStyleSheet("color: palette(mid);")
-        self.blurb.setStyleSheet("font-size: 10pt;")
+
         self.stack = QtWidgets.QStackedWidget()
         self.stack.currentChanged.connect(lambda _i: fade_in(self.stack.currentWidget()))
 
@@ -96,6 +93,14 @@ class WorkflowPanel(QtWidgets.QWidget):
 
     def minimumSizeHint(self) -> QtCore.QSize:
         return QtCore.QSize(320, super().minimumSizeHint().height())
+
+    def set_text_scale(self, title_scale: float, blurb_pt: float, base_pt: float) -> None:
+        """Title and explanatory text sizes, set from the text-size choice (View > Text size)."""
+        f = self.title.font()
+        f.setPointSizeF(base_pt * title_scale)
+        f.setBold(True)
+        self.title.setFont(f)
+        self.blurb.setStyleSheet(f"font-size: {blurb_pt:g}pt;")
 
     # ---------------------------------------------------------------- setup
     def add_step(self, key: str, label: str, title: str, blurb: str, why: str,

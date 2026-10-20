@@ -14,7 +14,7 @@ def test_main_windows_get_an_opaque_background(theme):
     # dark text on it; MainWindow paints its gradient in paintEvent and needs no rule.
     from pygcgc.gui import theme as t
     colours = getattr(t, theme)
-    qss = t._QSS.format(font=t.FONT, **colours)
+    qss = t._QSS.format(font=t.FONT, **colours, **t.DENSITY["standard"])
     rule = next(line for line in qss.splitlines() if line.startswith("QMainWindow {"))
     assert "transparent" not in rule
     assert colours["window"] in rule

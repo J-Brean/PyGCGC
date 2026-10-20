@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
+from .theme import fit_to_screen
 
 from ..core.compare import (MAX_DT1, MAX_DT2, MIN_SIMILARITY, class_shares, common_axis, match_peaks,
                             attach_labels, pair_mapping, pixel_spectrum, resample, similarity,
@@ -67,7 +68,7 @@ class CompareWindow(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("⚖️ Compare runs")
         self.setWindowFlag(QtCore.Qt.WindowType.WindowMaximizeButtonHint, True)
-        self.resize(1200, 820)
+        fit_to_screen(self, 1200, 820)
         self.project = project
         self.align = project.align
         self.expr_source = expr_source       # () -> the main window's IonExpr

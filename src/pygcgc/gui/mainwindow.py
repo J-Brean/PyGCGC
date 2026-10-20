@@ -46,7 +46,8 @@ from .panels.siloxane import SiloxanePanel
 from .project import Project, SIDECAR_NAME
 from .render import Renderer
 from .icons import make_icon, plain
-from .theme import DARK, LIGHT, FadeTabWidget, apply_theme
+from . import prefs
+from .theme import DARK, LIGHT, FadeTabWidget, apply_theme, current_density, fit_to_screen, set_density
 from .workflow import IdentifyStepPanel, QuantStepPanel, ToolChoicesPanel, WorkflowPanel
 from .compare_window import CompareWindow
 from .views.image2d import SCALE_NAMES, SCALES, ChromatogramView
@@ -97,7 +98,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, dark: bool = False):
         super().__init__()
         self.setWindowTitle(f"PyGCGC {__version__}")
-        self.resize(1500, 920)
+        # Never larger than the screen it opens on: a 1366 x 768 laptop cannot show 1500 x 920.
+        fit_to_screen(self, 1500, 920, fraction=0.94, centre=True)
+        geometry = prefs.saved_geometry("main")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+            fit_to_screen(self, self.width(), self.height(), fraction=0.98)
         self.dark = dark
         self.jobs = JobManager(self)
         self.project = Project(self.jobs, self)
@@ -142,6 +148,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.calibration_panel = CalibrationPanel()
         self.tabs.addTab(self.review, "🧪 Review")
         self.tabs.addTab(self.calibration_panel, "Calibration")
+        # These two ask for 1200 px or more, which would stop the whole window shrinking below that
+        # width. Ignoring their size hints lets them shrink with it.
+        for page in (self.review, self.calibration_panel):
+            page.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Ignored)
         self.compare_window: CompareWindow | None = None     # built on first use (⚖️)
         self.setCentralWidget(self.tabs)
 
@@ -324,7 +334,9 @@ class MainWindow(QtWidgets.QMainWindow):
         wl.addWidget(self.jobs_panel)
         left = self._dock("Workspace", workspace, QtCore.Qt.DockWidgetArea.LeftDockWidgetArea)
         spec_dock = self._dock("Spectrum", self.spectrum, QtCore.Qt.DockWidgetArea.RightDockWidgetArea)
-        self.resizeDocks([left, spec_dock], [470, 380], QtCore.Qt.Orientation.Horizontal)
+        # Dock widths follow the window, so the chromatogram keeps at least half of a small screen.
+        self.resizeDocks([left, spec_dock], [max(int(self.width() * 0.30), 300), max(int(self.width() * 0.24), 240)],
+                         QtCore.Qt.Orientation.Horizontal)
         self.workspace_dock, self.spectrum_dock = left, spec_dock
 
         self._build_actions()
@@ -547,32 +559,20 @@ class MainWindow(QtWidgets.QMainWindow):
         for key in self.step_actions:
             tb.addAction(self.step_actions[key])
         tb.addSeparator()
-        tools = QtWidgets.QToolButton()
-        tools.setText("Tools")
-        tools.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.tools_menu = QtWidgets.QMenu(tools)
+        # The Tools and Panels menus live in the menu bar (a drop-down button that falls into the
+        # toolbar's overflow arrow on a narrow window does not open reliably).
+        self.tools_menu = QtWidgets.QMenu("Tools", self)
         for key in ("fold", "siloxane", "hydro", "classify", "identify", "cluster"):
             self.tools_menu.addAction(self.workflow.step_info(key)["label"],
                                       lambda _checked=False, k=key: self.workflow.show_step(k))
         self.tools_menu.addSeparator()
         for action in (self.act_compare, self.act_overlap, self.act_calibrate, self.act_batch):
             self.tools_menu.addAction(action)
-        tools.setMenu(self.tools_menu)
-        tb.addWidget(tools)
-        # Closed panels can always be brought back from here (also View → Panels),
-        # kept on this bar because the View bar is full.
-        tb.addSeparator()
         for dock, tip in ((self.workspace_dock, "Show or hide the Runs / Tool / Layers panel"),
                           (self.spectrum_dock, "Show or hide the spectrum panel")):
             act = dock.toggleViewAction()
             act.setToolTip(tip)
-        panels = QtWidgets.QToolButton()
-        panels.setText("Panels ▾")
-        panels.setToolTip("Every panel: tick to show, untick to hide. Reset layout restores the default.")
-        panels.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.panels_menu = QtWidgets.QMenu(panels)
-        panels.setMenu(self.panels_menu)
-        tb.addWidget(panels)
+        self.panels_menu = QtWidgets.QMenu("Panels", self)
 
         self.addToolBarBreak()
         vb = self.addToolBar("View")
@@ -728,58 +728,74 @@ class MainWindow(QtWidgets.QMainWindow):
                 menu.addAction(d.toggleViewAction())
             menu.addSeparator()
             menu.addAction("Reset layout", self.reset_layout)
-        # The Process menu follows the workflow order, one headed section per step.
+        size = v.addMenu("Text size")
+        size.setToolTipsVisible(True)
+        group = QtGui.QActionGroup(self)
+        self.density_actions = {}
+        for key, label, tip in (("compact", "Compact", "Smaller text and tighter spacing, for laptop screens"),
+                                ("standard", "Standard", "The default on a large screen"),
+                                ("large", "Large", "Bigger text and looser spacing, for high-resolution monitors")):
+            act = size.addAction(label)
+            act.setToolTip(tip)
+            act.setCheckable(True)
+            act.setChecked(key == current_density())
+            act.triggered.connect(lambda _checked=False, k=key: self.set_text_size(k))
+            group.addAction(act)
+            self.density_actions[key] = act
+        # The Process menu follows the toolbar's eight steps, one submenu per step, so no menu is
+        # taller than a small screen. The numbers are the toolbar's.
         p = m.addMenu("&Process")
-        p.addSection("1  Load: modulation period and phase")
-        p.addAction(self.act_fix)
-        p.addSection("2  Align")
-        p.addAction(self.act_align_panel)
-        p.addAction(self.act_add_anchor)
-        p.addAction(QtGui.QAction("📍 Auto-find anchors on all runs", self, triggered=self.propagate_anchors))
-        p.addSection("3  Background")
-        p.addAction(self.act_background)
-        p.addAction(QtGui.QAction("Remove 🧹 from all runs", self, triggered=self.remove_background_all))
-        p.addAction(QtGui.QAction("Background settings…", self, triggered=self.show_background_panel))
-        p.addSection("4  Peak detection")
-        p.addAction(self.act_blobs_panel)
-        p.addAction(self.act_find_blobs)
-        p.addAction(self.act_blob_settings)
-        p.addAction(self.act_add_blob)
-        p.addAction(self.act_merge_blobs)
-        p.addAction(self.act_overlap)
-        p.addSection("4  Siloxane filterer")
-        p.addAction(self.act_siloxane)
-        p.addAction(QtGui.QAction("Remove 🫧 from all runs", self, triggered=self.remove_siloxane_all))
-        p.addSection("6  Assign hydrocarbons")
-        p.addAction(self.act_hydro_panel)
-        p.addAction(self.act_find_alkanes)
-        p.addAction(QtGui.QAction("⛓️ Propagate alkanes to all runs", self, triggered=self.propagate_alkanes))
-        p.addAction(self.act_assign_hydrocarbons)
-        p.addAction(self.act_hydro_settings)
-        p.addSection("5  Internal standards")
-        p.addAction(self.act_istd_panel)
-        p.addAction(self.act_label_istd)
-        p.addAction(QtGui.QAction("🔎 Find internal standards on all runs", self, triggered=self.propagate_istd))
-        p.addSection("7  Quantify")
-        p.addAction(self.act_calibrate)
-        p.addAction(self.act_quant)
-        p.addAction(self.act_quant_settings)
-        p.addAction(self.act_review)
-        p.addAction(self.act_reintegrate)
-        p.addAction(self.act_accept_footprint)
-        p.addAction(self.act_reset_footprint)
-        p.addAction(self.act_calib)
-        p.addAction(self.act_export)
-        p.addSection("6  Assign compound classes")
-        p.addAction(self.act_classify)
-        p.addSection("6  Assign compound names")
-        p.addAction(self.act_identify)
-        p.addSection("6  Explore clusters")
-        p.addAction(self.act_cluster)
-        p.addSection("8  Export")
-        p.addAction(QtGui.QAction("Export everything…", self, triggered=lambda: self.export_everything()))
-        p.addSection("Whole folder")
+
+        def step_menu(title):
+            sub = p.addMenu(title)
+            sub.setToolTipsVisible(True)
+            return sub
+
+        s = step_menu("1  Load: modulation period and phase")
+        s.addAction(self.act_fix)
+        s = step_menu("2  Align")
+        s.addAction(self.act_align_panel)
+        s.addAction(self.act_add_anchor)
+        s.addAction(QtGui.QAction("📍 Auto-find anchors on all runs", self, triggered=self.propagate_anchors))
+        s = step_menu("3  Background")
+        s.addAction(self.act_background)
+        s.addAction(QtGui.QAction("Remove 🧹 from all runs", self, triggered=self.remove_background_all))
+        s.addAction(QtGui.QAction("Background settings…", self, triggered=self.show_background_panel))
+        s = step_menu("4  Peaks")
+        for action in (self.act_blobs_panel, self.act_find_blobs, self.act_blob_settings, self.act_add_blob,
+                       self.act_merge_blobs, self.act_overlap):
+            s.addAction(action)
+        s.addSeparator()
+        s.addAction(self.act_siloxane)
+        s.addAction(QtGui.QAction("Remove 🫧 from all runs", self, triggered=self.remove_siloxane_all))
+        s = step_menu("5  Internal standards")
+        s.addAction(self.act_istd_panel)
+        s.addAction(self.act_label_istd)
+        s.addAction(QtGui.QAction("🔎 Find internal standards on all runs", self, triggered=self.propagate_istd))
+        s = step_menu("6  Assign")
+        s.addAction(self.act_identify)
+        s.addSection("Hydrocarbons")
+        for action in (self.act_hydro_panel, self.act_find_alkanes):
+            s.addAction(action)
+        s.addAction(QtGui.QAction("⛓️ Propagate alkanes to all runs", self, triggered=self.propagate_alkanes))
+        s.addAction(self.act_assign_hydrocarbons)
+        s.addAction(self.act_hydro_settings)
+        s.addSection("Classes and clusters")
+        s.addAction(self.act_classify)
+        s.addAction(self.act_cluster)
+        s = step_menu("7  Quantify")
+        for action in (self.act_calibrate, self.act_quant, self.act_quant_settings, self.act_review,
+                       self.act_reintegrate, self.act_accept_footprint, self.act_reset_footprint,
+                       self.act_calib, self.act_export):
+            s.addAction(action)
+        s = step_menu("8  Export")
+        s.addAction(QtGui.QAction("Export everything…", self, triggered=lambda: self.export_everything()))
+        p.addSeparator()
         p.addAction(self.act_batch)
+        # Tools sit in the menu bar rather than only as a toolbar button: a button that no longer
+        # fits the toolbar moves into its overflow arrow, where a drop-down menu is unreliable.
+        self.tools_menu.setTitle("&Tools")
+        m.addMenu(self.tools_menu)
         h = m.addMenu("&Help")
         h.addAction("Workflow guide: what each step does and why", self.show_workflow_guide)
         h.addAction(self.act_help)
@@ -3671,6 +3687,20 @@ class MainWindow(QtWidgets.QMainWindow):
         elif job.state == "done":
             self.log.appendPlainText(f"{job.name}: done")
 
+    def set_text_size(self, name: str):
+        """View > Text size: compact, standard or large, applied at once and remembered."""
+        set_density(self, name)
+        if name in getattr(self, "density_actions", {}):
+            self.density_actions[name].setChecked(True)
+
+    def apply_text_scale(self, D: dict):
+        """Called by the theme with the sizes of the chosen text size."""
+        self.workflow.set_text_scale(D["title_scale"], D["blurb_pt"], D["base_pt"])
+        for dock in self.findChildren(QtWidgets.QDockWidget):
+            holder = dock.widget()
+            if holder is not None and holder.layout() is not None:
+                holder.layout().setContentsMargins(D["margin"], 4, D["margin"], max(D["margin"] - 2, 4))
+
     def set_dark(self, on: bool):
         self.dark = on
         apply_theme(self, on)
@@ -3689,6 +3719,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self.project.flush_autosave()
+        try:
+            prefs.save_geometry("main", self.saveGeometry())
+        except Exception:                        # noqa: BLE001  (a preference that cannot be written is not worth a failed close)
+            pass
         if not self.undo.isClean() and self.project.entries and self.project.path is not None:
             answer = QtWidgets.QMessageBox.question(
                 self, "Unsaved changes", "Save the project before closing?",

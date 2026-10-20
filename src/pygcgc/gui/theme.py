@@ -28,6 +28,20 @@ LIGHT = {
 
 FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif'
 
+# How much room text and controls take. Compact is for laptop screens (1366 x 768, or 1080p
+# scaled to 150 %); the default follows the screen unless the user chose one (View > Text size).
+DENSITY = {
+    "compact": dict(base_pt=8.0, hint_pt=7.0, spacing=4, margin=6, title_scale=1.3, blurb_pt=8.5,
+                    tb_pad="2px 2px", btn_pad="3px 10px", btn_min="14px", tool_pad="3px 6px", tab_pad="5px 10px 4px 10px",
+                    field_pad="2px 6px", field_min="14px", menu_pad="3px 16px", header_pad="3px 5px"),
+    "standard": dict(base_pt=9.0, hint_pt=8.0, spacing=8, margin=10, title_scale=1.5, blurb_pt=9.5,
+                     tb_pad="3px 4px", btn_pad="5px 14px", btn_min="18px", tool_pad="5px 8px", tab_pad="7px 12px 6px 12px",
+                     field_pad="4px 8px", field_min="16px", menu_pad="4px 20px", header_pad="4px 6px"),
+    "large": dict(base_pt=10.5, hint_pt=9.0, spacing=10, margin=12, title_scale=1.9, blurb_pt=10.5,
+                  tb_pad="4px 4px", btn_pad="6px 16px", btn_min="18px", tool_pad="6px 10px", tab_pad="8px 14px 7px 14px",
+                  field_pad="5px 8px", field_min="18px", menu_pad="5px 22px", header_pad="5px 6px"),
+}
+
 _QSS = """
 * {{ font-family: {font}; }}
 QWidget {{ color: {text}; }}
@@ -48,16 +62,16 @@ QTabWidget#main_tabs::pane {{ border: 1px solid {line}; border-radius: 10px; bac
 QTabBar {{ background: transparent; }}
 QMainWindow > QTabBar {{ margin-left: 12px; }}
 QTabBar::tab:first {{ padding-left: 0; margin-left: 0; }}
-QTabBar::tab {{ background: transparent; color: {mid}; padding: 8px 14px 7px 14px; font-weight: 500;
+QTabBar::tab {{ background: transparent; color: {mid}; padding: {tab_pad}; font-weight: 500;
     margin-right: 2px; border: none; border-bottom: 2px solid transparent; }}
 QTabBar::tab:hover {{ color: {text}; }}
 QTabBar::tab:selected {{ color: {text}; border-bottom: 2px solid {highlight}; }}
 
 QDockWidget {{ color: {mid}; }}
-QDockWidget::title {{ background: transparent; padding: 8px 12px; text-align: left; font-weight: 600; }}
+QDockWidget::title {{ background: transparent; padding: {tool_pad}; text-align: left; font-weight: 600; }}
 
 QPushButton, QToolButton {{ background: {button}; color: {text}; border: 1px solid {line};
-    border-radius: 8px; padding: 6px 16px; min-height: 18px; }}
+    border-radius: 8px; padding: {btn_pad}; min-height: {btn_min}; }}
 QPushButton:hover, QToolButton:hover {{ background: {hover}; }}
 QPushButton:pressed, QToolButton:pressed {{ background: {line}; }}
 QPushButton:disabled, QToolButton:disabled {{ color: {mid}; background: {alt}; }}
@@ -65,17 +79,17 @@ QPushButton:default, QPushButton:checked {{ background: {highlight}; color: {onh
 QPushButton#go {{ background: {highlight}; color: {onhl}; border: none; border-radius: 16px; min-height: 20px; font-weight: bold; }}
 QPushButton#go:hover {{ background: {gohover}; }}
 QPushButton#go:disabled {{ background: {button}; color: {mid}; }}
-QToolBar {{ background: transparent; border: none; spacing: 2px; padding: 4px 4px; }}
+QToolBar {{ background: transparent; border: none; spacing: 2px; padding: {tb_pad}; }}
 QFrame#banner {{ background: {tint}; border: 1px solid {tint}; border-radius: 10px; }}
 QToolBar QLabel {{ color: {mid}; padding: 0 8px; }}
 QToolBar::separator {{ background: {line}; width: 1px; margin: 4px 6px; }}
-QToolButton {{ border: 1px solid transparent; border-radius: 8px; padding: 6px 10px; margin: 0 1px; background: transparent; min-height: 18px; }}
+QToolButton {{ border: 1px solid transparent; border-radius: 8px; padding: {tool_pad}; margin: 0 1px; background: transparent; min-height: {btn_min}; }}
 QToolButton:hover {{ background: {hover}; }}
 QToolButton:checked {{ background: {tint}; color: {highlight}; border: 1px solid {tint}; }}
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QTextEdit {{
     background: {alt}; color: {text}; border: 1px solid {line}; border-radius: 6px;
-    padding: 5px 8px; min-height: 18px; selection-background-color: {highlight}; selection-color: {onhl}; }}
+    padding: {field_pad}; min-height: {field_min}; selection-background-color: {highlight}; selection-color: {onhl}; }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border: 1px solid {highlight}; }}
 QComboBox::drop-down {{ border: none; width: 18px; }}
 QComboBox QAbstractItemView {{ background: {base}; selection-background-color: {highlight};
@@ -86,7 +100,7 @@ QTableView, QTreeView, QListView, QTableWidget, QListWidget, QTreeWidget {{
     gridline-color: transparent;
     selection-background-color: {highlight}; selection-color: {onhl}; outline: none; }}
 QHeaderView::section {{ background: {window}; color: {mid}; border: none;
-    border-bottom: 1px solid {line}; padding: 5px 6px; }}
+    border-bottom: 1px solid {line}; padding: {header_pad}; }}
 
 QGroupBox {{ border: none; border-top: 1px solid {line}; margin-top: 14px; padding-top: 8px; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 0px; color: {text}; font-weight: 600; }}
@@ -94,8 +108,8 @@ QGroupBox::title {{ subcontrol-origin: margin; left: 0px; color: {text}; font-we
 QMenuBar {{ background: transparent; color: {text}; padding: 2px 4px; }}
 QMenuBar::item {{ background: transparent; color: {text}; padding: 4px 8px; }}
 QMenuBar::item:selected {{ background: {button}; color: {text}; border-radius: 4px; }}
-QMenu {{ background: {base}; color: {text}; border: 1px solid {line}; padding: 4px; }}
-QMenu::item {{ color: {text}; padding: 5px 22px; border-radius: 4px; }}
+QMenu {{ background: {base}; color: {text}; border: 1px solid {line}; padding: 4px; menu-scrollable: 1; }}
+QMenu::item {{ color: {text}; padding: {menu_pad}; border-radius: 4px; }}
 QMenu::item:disabled {{ color: {mid}; }}
 QMenu::section {{ color: {mid}; padding: 6px 10px 2px 10px; }}
 QMenu::item:selected {{ background: {highlight}; color: {onhl}; }}
@@ -151,10 +165,50 @@ class FadeTabWidget(QtWidgets.QTabWidget):
         self.currentChanged.connect(lambda _i: fade_in(self.currentWidget()))
 
 
-def apply_theme(window, dark: bool) -> None:
+def current_density() -> str:
+    """The text size in use: the one set on this application, else the saved or screen-based default."""
+    app = QtWidgets.QApplication.instance()
+    name = app.property("_pygcgc_density") if app is not None else None
+    if name in DENSITY:
+        return name
+    from . import prefs
+    return prefs.density()
+
+
+def set_density(window, name: str, save: bool = True) -> None:
+    """Change the text size of the whole application at once, and remember the choice."""
+    if name not in DENSITY:
+        raise ValueError(f"unknown text size '{name}'")
+    if save:
+        from . import prefs
+        prefs.save_density(name)
+    apply_theme(window, getattr(window, "dark", False), density=name)
+
+
+def fit_to_screen(widget: QtWidgets.QWidget, width: int, height: int, fraction: float = 0.92,
+                  centre: bool = False) -> None:
+    """Resize a window to the size it wants, but never larger than `fraction` of the screen it is
+    on. Dialogs with a parent are positioned by Qt; only top-level windows are centred on request."""
+    screen = widget.screen() or QtGui.QGuiApplication.primaryScreen()
+    if screen is None:
+        widget.resize(width, height)
+        return
+    avail = screen.availableGeometry()
+    w, h = min(width, int(avail.width() * fraction)), min(height, int(avail.height() * fraction))
+    widget.resize(w, h)
+    if centre:
+        widget.move(avail.x() + (avail.width() - w) // 2, avail.y() + (avail.height() - h) // 2)
+
+
+def apply_theme(window, dark: bool, density: str | None = None) -> None:
     c = DARK if dark else LIGHT
     app = QtWidgets.QApplication.instance()
-    stylesheet = _QSS.format(font=FONT, **c)
+    if density is not None:
+        if density not in DENSITY:
+            raise ValueError(f"unknown text size '{density}'")
+        app.setProperty("_pygcgc_density", density)
+    D = DENSITY[current_density()]
+    stylesheet = _QSS.format(font=FONT, **c, **D)
     changed = app.styleSheet() != stylesheet
     # New windows inherit the application theme. Resetting it for each dialog
     # repolishes every existing widget, making repeated peak inspection slow.
@@ -165,13 +219,15 @@ def apply_theme(window, dark: bool) -> None:
         app.setStyle("Fusion")
         app.setProperty('_pygcgc_fusion_selected', True)
     font = QtGui.QFont("Helvetica Neue" if "Helvetica Neue" in QtGui.QFontDatabase.families()
-                        else "Arial", 9)
+                        else "Arial")
+    font.setPointSizeF(D["base_pt"])
     # A stylesheet can rewrite the family as a fallback list even though the
     # effective font is unchanged. Resetting that equivalent font recursively
     # propagates native FontChange events through hidden pyqtgraph windows.
     # Compare the resolved face/size/style instead of its request representation.
     current_font, requested_font = QtGui.QFontInfo(app.font()), QtGui.QFontInfo(font)
-    if (current_font.family() != requested_font.family()
+    if (abs(app.font().pointSizeF() - font.pointSizeF()) > 1e-6
+            or current_font.family() != requested_font.family()
             or current_font.pointSizeF() != requested_font.pointSizeF()
             or current_font.weight() != requested_font.weight()
             or current_font.italic() != requested_font.italic()):
@@ -179,9 +235,14 @@ def apply_theme(window, dark: bool) -> None:
     if changed:
         app.setStyleSheet(stylesheet)
     # Qt's default layout spacing is cramped; give every panel room to breathe.
+    # The spacing a layout asked for is remembered, so a switch to a tighter size can go back down.
     for lay in window.findChildren(QtWidgets.QLayout):
         if isinstance(lay, (QtWidgets.QBoxLayout, QtWidgets.QGridLayout, QtWidgets.QFormLayout)):
-            lay.setSpacing(max(lay.spacing(), 10))
+            original = lay.property("_orig_spacing")
+            if original is None:
+                original = lay.spacing()
+                lay.setProperty("_orig_spacing", original)
+            lay.setSpacing(max(int(original), D["spacing"]))
     # Panels grey their hints with "palette(mid)", which Qt resolves to a washed-out tint
     # under a stylesheet. Swap in the theme's own grey, keeping the original for the next switch.
     for w in window.findChildren(QtWidgets.QWidget):
@@ -191,7 +252,9 @@ def apply_theme(window, dark: bool) -> None:
             if "palette(mid)" not in original:
                 continue
             w.setProperty("_ss_original", original)
-        w.setStyleSheet(original.replace("palette(mid)", c["mid"] + "; font-size: 8pt"))
+        w.setStyleSheet(original.replace("palette(mid)", c["mid"] + f"; font-size: {D['hint_pt']:g}pt"))
+    if hasattr(window, "apply_text_scale"):
+        window.apply_text_scale(D)
     if hasattr(window, "refresh_icons"):
         window.refresh_icons(c)
     pal = QtGui.QPalette()

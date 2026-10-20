@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from PySide6 import QtCore, QtWidgets
+from .theme import fit_to_screen
 
 from ..core.background import storage_threshold
 from ..core.components import detect_components
@@ -66,7 +67,7 @@ class PeakPreviewDialog(QtWidgets.QDialog):
         self._generation = 0
         self._basis = None
         self.setWindowTitle(f"Preview peak fitting: {self.entry.name}")
-        self.resize(1150, 850)
+        fit_to_screen(self, 1150, 850)
         self.scope = QtWidgets.QComboBox()
         self.scope.addItem("Visible first-time interval (all second-time rows)", "region")
         self.scope.addItem("Current run", "run")

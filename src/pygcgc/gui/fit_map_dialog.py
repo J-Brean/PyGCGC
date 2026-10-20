@@ -21,6 +21,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
+from .theme import fit_to_screen
 
 from ..core.peaktable import format_accounting
 
@@ -41,7 +42,7 @@ class FitMapWindow(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent, QtCore.Qt.WindowType.Window)
         self.setWindowTitle("📊 Fit and residual map")
-        self.resize(1200, 900)
+        fit_to_screen(self, 1200, 900)
         self._data = None
 
         self.summary = QtWidgets.QLabel("")

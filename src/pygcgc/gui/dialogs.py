@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import fields, replace
 
 from PySide6 import QtWidgets
+from .theme import fit_to_screen
 
 from ..core import QuantSettings
 
@@ -88,7 +89,7 @@ class SettingsDialog(QtWidgets.QDialog):
     def __init__(self, title: str, settings, tips: dict | None = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(460, 560)
+        fit_to_screen(self, 460, 560)
         self._base = settings
         self._restore = False
         self._tips = tips or {}

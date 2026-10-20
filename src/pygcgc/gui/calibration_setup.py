@@ -7,6 +7,7 @@ import re
 from dataclasses import replace
 
 from PySide6 import QtCore, QtWidgets
+from .theme import fit_to_screen
 
 from ..core.calibration_inputs import CalibrationInputs, MASS_UNITS, filename_amount, calibration_coverage_errors
 from ..core.istd import references_to_targets
@@ -49,7 +50,7 @@ class CalibrationSetupWizard(QtWidgets.QWizard):
         self.project = project
         self.setWindowTitle("Set up calibration and units")
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
-        self.resize(1000, 680)
+        fit_to_screen(self, 1000, 680)
         self.setOption(QtWidgets.QWizard.WizardOption.NoBackButtonOnStartPage)
         self.setButtonText(QtWidgets.QWizard.WizardButton.FinishButton, "Apply setup")
         self._original = {t.compound: t for t in project.quant.targets or []}

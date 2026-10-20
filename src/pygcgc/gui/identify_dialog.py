@@ -22,6 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
+from .theme import fit_to_screen
 
 import numpy as np
 import pyqtgraph as pg
@@ -46,7 +47,7 @@ class LibraryBrowser(QtWidgets.QDialog):
     def __init__(self, library, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Library entries")
-        self.resize(820, 560)
+        fit_to_screen(self, 820, 560)
         self.entries = list(library.entries)
         self.library = library
         self._updating = False
@@ -168,7 +169,7 @@ class IdentifyDialog(QtWidgets.QDialog):
     def __init__(self, project, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🏷️ Identify")
-        self.resize(920, 640)
+        fit_to_screen(self, 920, 640)
         self.project = project
         self._name = None
         self._run = None

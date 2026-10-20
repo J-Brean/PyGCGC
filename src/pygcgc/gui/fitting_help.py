@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtGui, QtWidgets
+from .theme import fit_to_screen
 
 
 class FittingHelpDialog(QtWidgets.QDialog):
@@ -33,8 +34,8 @@ class FittingHelpDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("How overlapping peaks are fitted")
-        self.resize(1040, 780)
-        self.setMinimumSize(780, 650)
+        fit_to_screen(self, 1040, 780)
+        self.setMinimumSize(560, 460)
         self.position_ms = 0
         self._period = 10.
         self._dt = .005

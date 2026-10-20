@@ -24,6 +24,14 @@ from pygcgc import Run
 
 # The GUI's results cache goes to a throwaway folder, never the user's own.
 os.environ["PYGCGC_CACHE"] = tempfile.mkdtemp(prefix="pygcgc-test-cache-")
+os.environ["PYGCGC_LIBRARY_CACHE"] = tempfile.mkdtemp(prefix="pygcgc-test-libraries-")
+
+# Window preferences go to a throwaway file too, with the standard text size: the offscreen screen is
+# small, which would otherwise select the compact one. The small-screen tests choose their own.
+_settings = os.path.join(tempfile.mkdtemp(prefix="pygcgc-test-settings-"), "prefs.ini")
+with open(_settings, "w", encoding="utf-8") as _fh:
+    _fh.write("[ui]\ndensity=standard\n")
+os.environ["PYGCGC_SETTINGS"] = _settings
 
 TRUE_PHASE = 0.55      # the dummy pack's hidden phase
 PERIOD = 4.0
