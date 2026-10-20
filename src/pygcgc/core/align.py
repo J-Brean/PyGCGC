@@ -427,3 +427,47 @@ def resample_to_reference(image: np.ndarray, run_fold: Fold, ref_fold: Fold,
                               mode="constant", cval=0.0)
     bad = (col_src < 0) | (col_src > run_fold.n_cols - 1)
     return np.where(bad, 0.0, out).reshape(n_rows, n_cols)
+
+# ------------------------------------------------------------------ before and after
+def anchor_requirements(n_points: int) -> dict:
+    """What anchors buy, for the anchoring window's "how many do I need" box.
+
+    `n_points` is the number of runs-worth of matching anchors (anchors that every run to be aligned has).
+    `fits` lists each transform with the least it needs and the number "auto" asks for before it will
+    consider it; `auto` is the most flexible transform "auto" may consider with `n_points`, or None."""
+    labels = {"shift": "a shift", "affine": "a stretch and shift", "smooth": "a smooth curve"}
+    fits = [dict(kind=k, label=labels[k], least=FIT_MIN[k], auto=AUTO_MIN[k]) for k in TIER_ORDER]
+    eligible = [k for k in TIER_ORDER if n_points >= AUTO_MIN[k]]
+    return dict(fits=fits, auto=eligible[-1] if eligible else None, recommended=(AUTO_MIN["affine"], 6))
+
+
+def anchor_offsets(points: list[AnchorPoint]) -> tuple[float, float]:
+    """Median absolute distance, reference minus run, of a run's anchors: `(t1 seconds, t2 seconds)`.
+    This is how far the run sits from the reference before any alignment."""
+    if not points:
+        return float("nan"), float("nan")
+    return (float(np.median([abs(p.ref_t1 - p.run_t1) for p in points])),
+            float(np.median([abs(p.ref_t2 - p.run_t2) for p in points])))
+
+
+def image_similarity(ref: np.ndarray, img: np.ndarray, top_fraction: float = 0.10) -> float:
+    """How alike two images on the same grid are, from 0 (unrelated) to 1 (the same peaks in the same places).
+
+    Pearson correlation of the square-rooted intensities over the pixels that are in the brightest
+    `top_fraction` of either image, so the empty baseline does not flatter a poor alignment. NaN if too
+    few pixels qualify."""
+    if ref.shape != img.shape:
+        raise ValueError("images must share a grid")
+    a = np.sqrt(np.clip(np.nan_to_num(ref), 0, None))
+    b = np.sqrt(np.clip(np.nan_to_num(img), 0, None))
+    mask = np.zeros(a.shape, dtype=bool)
+    for x in (a, b):
+        positive = x[x > 0]
+        if positive.size:
+            mask |= x >= np.percentile(positive, 100 * (1 - top_fraction))
+    if mask.sum() < 10:
+        return float("nan")
+    u, v = a[mask], b[mask]
+    if u.std() == 0 or v.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(u, v)[0, 1])

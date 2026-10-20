@@ -283,7 +283,8 @@ def apply_theme(window, dark: bool, density: str | None = None) -> None:
     for view in (window.view2d, window.view1d, window.spectrum,
                  getattr(window, "calibration_panel", None), getattr(window, "batch_dialog", None),
                  getattr(window, "align_panel", None),
-                 getattr(window, "overlap_dialog", None), getattr(window, "compare_window", None)):
+                 getattr(window, "overlap_dialog", None), getattr(window, "compare_window", None),
+                 getattr(window, "anchor_window", None)):
         if view is not None:
             view.set_background(bg)
     if getattr(window, "results", None) is not None:

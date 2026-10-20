@@ -153,6 +153,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for page in (self.review, self.calibration_panel):
             page.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Ignored)
         self.compare_window: CompareWindow | None = None     # built on first use (⚖️)
+        self.anchor_window = None                            # built on first use (📍)
         self.setCentralWidget(self.tabs)
 
         # ---- docks
@@ -956,6 +957,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.project.runsChanged.connect(lambda: self.align_panel.refresh_runs(self.project.entries))
         self.align_panel.referenceChanged.connect(self.set_reference)
         self.align_panel.addAnchorRequested.connect(self.start_add_anchor)
+        self.align_panel.openWindowRequested.connect(lambda: self.show_anchor_window())
         self.align_panel.skipAnchorRequested.connect(self.skip_anchor_run)
         self.align_panel.refineRequested.connect(self.refine_anchors)
         self.align.refinementRunning.connect(lambda _on: self.align_panel.refresh())
@@ -1946,6 +1948,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.workflow.set_go_label("align", "Pick anchors across runs")
             self._align_changed()
             self.say("Anchor picking finished; collected points have been kept")
+            if self.anchor_window is not None:
+                self.anchor_window.refresh()
         elif self._blob_add_pending:
             self._blob_add_pending = False
             self.say("Adding a blob cancelled")
@@ -2160,6 +2164,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.renderer.expr.is_tic and not self._current_single_ion():
             self.say("Choose TIC or a single ion before picking anchors, so refinement uses the same signal")
             return
+        if not all(self.project.entries[i].name in self.align.phase_checked for i in loaded):
+            self.show_anchor_window()               # the phase check comes first
+            return
         self.cancel_pick()
         self.show_align_panel()
         self.tabs.setCurrentWidget(self.view2d)
@@ -2170,7 +2177,55 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "reference": self.align.reference,
                                 "name": self.align.next_anchor_name(), "ion": self._current_single_ion()}
         self._anchor_stage = "ref"
+        self.align.begin_hold()
+        self.show_anchor_window(pick=True)
         self._show_anchor_run()
+
+    def show_anchor_window(self, pick: bool = False):
+        """The 📍 anchoring window: phase check, picking, and the before-and-after check."""
+        if self.anchor_window is None:
+            from .anchor_window import AnchorWindow
+            self.anchor_window = AnchorWindow(self, parent=self)
+            apply_theme(self, self.dark)
+        if pick:
+            self.anchor_window.go_to_pick_page()
+        else:
+            self.anchor_window.open_window()
+
+    def anchor_pane_click(self, run: str, col: int, t2: float):
+        """A click on the anchoring window's own image of `run`."""
+        if self._anchor_stage is None:
+            return
+        p = self._anchor_pending
+        if run != p["order"][p["cursor"]]:
+            self.say("Wait for the window to show the run named at the top before clicking")
+            return
+        index = self.project.index_of(run)
+        if index is None:
+            return
+        fold = self.project.fold(index)
+        if not (0 <= col < fold.n_cols) or not np.isfinite(t2):
+            return
+        t1 = float(fold.t1[col] + 0.5 * fold.spec.period)
+        if self._anchor_stage == "ref":
+            self._finish_anchor_ref_click(t1, t2)
+        else:
+            self._finish_anchor_run_click(t1, t2)
+
+    def apply_anchors(self):
+        """The ANCHOR button: end picking, fit every run's transform from the clicks, and say what happened."""
+        if self._anchor_stage is not None:
+            self.cancel_pick()
+        samples = [self.project.entries[i].name for i in self.project.loaded()
+                   if self.project.entries[i].name != self.align.reference]
+        if not any(self.align.points.get(r) for r in samples):
+            self.say("Click at least one matching peak on a run other than the reference first")
+            return
+        self.align.apply_hold()
+        aligned = [r for r in samples if r in self.align.transforms]
+        if aligned and len(aligned) == len(samples):
+            self.workflow.mark_done("align", "Runs aligned. Check the before and after, or inspect ⚖️ Compare.")
+        self.say(f"Aligned {len(aligned)} of {len(samples)} run(s)")
 
     def _show_anchor_run(self):
         p = self._anchor_pending
@@ -2192,6 +2247,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.align_panel.set_picking(message, can_skip=self._anchor_stage == "run")
         self.workflow.set_go_label("align", "Finish picking (Esc)")
         self.say(message)
+        if self.anchor_window is not None:
+            self.anchor_window.refresh()
 
     def _finish_anchor_ref_click(self, t1: float, t2: float):
         p = self._anchor_pending

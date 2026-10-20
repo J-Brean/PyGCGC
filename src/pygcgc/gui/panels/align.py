@@ -24,6 +24,7 @@ class AlignPanel(QtWidgets.QWidget):
     kindChanged = QtCore.Signal(str)                    # "auto" / "shift" / "affine" / "smooth"
     propagateRequested = QtCore.Signal()
     showAlignedToggled = QtCore.Signal(bool)
+    openWindowRequested = QtCore.Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -107,10 +108,20 @@ class AlignPanel(QtWidgets.QWidget):
         self.resid_plot.addLine(y=0, pen=pg.mkPen((142, 134, 160)))
         self.resid_plot.addLegend()
 
+        self.window_btn = QtWidgets.QPushButton("Open the anchoring window…")
+        self.window_btn.setToolTip("Check phases, click matching peaks run by run, press Anchor, and compare before and after")
+        self.window_btn.clicked.connect(self.openWindowRequested)
+        phase_note = QtWidgets.QLabel("Get each run's phase right first. Anchors are only valid for the phase they "
+                                      "were picked with; changing a phase afterwards moves every peak in t₂.")
+        phase_note.setWordWrap(True)
+        phase_note.setStyleSheet("color: #D55E00; font-weight: bold;")
+        self.phase_note = phase_note
         form = QtWidgets.QFormLayout()
         form.addRow("Reference", self.reference)
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
+        lay.addWidget(phase_note)
+        lay.addWidget(self.window_btn)
         lay.addLayout(form)
         row = QtWidgets.QHBoxLayout()
         row.addWidget(self.add_btn)

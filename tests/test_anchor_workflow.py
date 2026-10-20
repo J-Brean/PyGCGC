@@ -8,7 +8,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from pygcgc.gui.jobs import CancelToken
-from tests.test_gui import TIMEOUT, _peak_pixel, _wait_render, window  # noqa: F401
+from tests.test_gui import TIMEOUT, _peak_pixel, _wait_render, confirm_phases, window  # noqa: F401
+
+
+@pytest.fixture(autouse=True)
+def _phases_confirmed(window):
+    """The anchoring window asks for each run's phase to be ticked first; these tests are about the clicks."""
+    confirm_phases(window)
 
 
 def click_peak(qtbot, w, ion=50):

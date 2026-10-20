@@ -662,8 +662,14 @@ def _setup_alignment(w):
     w.align.add_anchor("RUN_B", "P1", ref_t1, t2_ref, run_t1, t2_run, 50)
 
 
+def confirm_phases(w):
+    """Tick every run's phase as checked, which the anchoring window asks for before picking starts."""
+    w.align.phase_checked.update(e.name for e in w.project.entries)
+
+
 def test_align_reference_and_anchor_click_flow(qtbot, window):
     w = window
+    confirm_phases(w)
     w.set_ion_expression("50")
     w.set_reference("RUN_A")
     assert w.align.reference == "RUN_A"
@@ -691,6 +697,11 @@ def test_align_reference_and_anchor_click_flow(qtbot, window):
     assert w.align.points["RUN_A"][0].name == "P1"
     assert [p.name for p in w.align.points["RUN_B"]] == ["P1"]
     assert w.align.points["RUN_B"][0].ion == 50
+    assert "RUN_B" not in w.align.transforms          # clicks are only recorded until Anchor is pressed
+    assert w.align.pending_runs() == ["RUN_B"]
+    w.cancel_pick()
+    w.apply_anchors()
+    assert not w.align.pending_runs()
     tf = w.align.transforms["RUN_B"]
     assert tf.kind == "shift"
     # The fit should exactly reproduce the two points that were actually
@@ -699,7 +710,6 @@ def test_align_reference_and_anchor_click_flow(qtbot, window):
     p = w.align.points["RUN_B"][0]
     t1f, t2f = tf.forward(p.run_t1, p.run_t2)
     assert (t1f, t2f) == pytest.approx((p.ref_t1, p.ref_t2), abs=1e-6)
-    w.cancel_pick()
 
 
 def test_align_add_anchor_undo(qtbot, window):

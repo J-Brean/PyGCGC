@@ -23,6 +23,7 @@ DEFAULT_WINDOW = 12.0
 class AlignState(QtCore.QObject):
     changed = QtCore.Signal()   # reference, an anchor, a transform, or a kind override changed
     refinementRunning = QtCore.Signal(bool)
+    phaseStatusChanged = QtCore.Signal()    # a run's phase was ticked as checked, or changed since it was anchored
 
     def __init__(self, project, parent=None):
         super().__init__(parent)
@@ -33,10 +34,18 @@ class AlignState(QtCore.QObject):
         self.transforms: dict = {}
         self.errors: dict[str, str] = {}
         self.refining = False
+        # While anchors are being picked, clicks are recorded but the transforms are left alone until the
+        # user presses Anchor: a transform refitted after every click would shift the images mid-pick and
+        # invalidate any blank-subtracted layer each time. `applied_points` is what the transforms were fitted from.
+        self.holding = False
+        self.applied_points: dict[str, list[AnchorPoint]] = {}
+        self.phase_at_anchor: dict[str, float] = {}      # each run's phase when its transform was fitted
+        self.phase_checked: set[str] = set()             # runs whose phase the user has confirmed
         self._revision = 0
         for signal in (self.changed, project.runsChanged, project.foldChanged, project.layersChanged):
             signal.connect(self._invalidate_refinement)
         project.runsChanged.connect(self._prune)
+        project.foldChanged.connect(self._phase_may_have_changed)
 
     def _invalidate_refinement(self, *_args):
         self._revision += 1
@@ -45,9 +54,59 @@ class AlignState(QtCore.QObject):
         names = {e.name for e in self.project.entries}
         if self.reference not in names:
             self.reference = None
-        for d in (self.points, self.kind, self.transforms, self.errors):
+        for d in (self.points, self.kind, self.transforms, self.errors, self.applied_points, self.phase_at_anchor):
             for k in [k for k in d if k not in names]:
                 d.pop(k)
+        self.phase_checked &= names
+
+    # ------------------------------------------------------------- phase
+    def _entry(self, name: str):
+        return next((e for e in self.project.entries if e.name == name), None)
+
+    def _phase_may_have_changed(self, index: int = -1) -> None:
+        """A run's phase or period changed: its confirmation no longer stands."""
+        entries = self.project.entries
+        names = [e.name for e in entries] if not (0 <= index < len(entries)) else [entries[index].name]
+        before = set(self.phase_checked)
+        self.phase_checked -= set(names)
+        if self.phase_checked != before or self.stale_phase_runs():
+            self.phaseStatusChanged.emit()
+
+    def set_phase_checked(self, name: str, checked: bool) -> None:
+        (self.phase_checked.add if checked else self.phase_checked.discard)(name)
+        self.phaseStatusChanged.emit()
+
+    def stale_phase_runs(self) -> list[str]:
+        """Runs whose phase differs from what it was when their transform was fitted. Their anchors
+        record positions inside a modulation, so a changed phase makes them wrong."""
+        out = []
+        for name, phase in self.phase_at_anchor.items():
+            entry = self._entry(name)
+            if entry is None or name not in self.transforms:
+                continue
+            period = float(self.project.period) if getattr(self.project, "period", None) else 0.0
+            delta = abs(float(entry.phase) - phase)
+            if period:
+                delta = min(delta % period, period - delta % period)
+            if delta > 1e-3:
+                out.append(name)
+        return out
+
+    # ------------------------------------------------------------- holding
+    def begin_hold(self) -> None:
+        """Start recording clicks without refitting."""
+        self.holding = True
+
+    def pending_runs(self) -> list[str]:
+        """Runs whose clicks differ from the ones their transform was fitted from."""
+        return [run for run in set(self.points) | set(self.applied_points)
+                if run != self.reference and self.points.get(run, []) != self.applied_points.get(run, [])]
+
+    def apply_hold(self) -> None:
+        """The Anchor button: fit every run's transform from its clicks."""
+        self.holding = False
+        self._recompute_all()
+        self.changed.emit()
 
     # ------------------------------------------------------------- editing
     def snapshot(self) -> dict:
@@ -55,6 +114,7 @@ class AlignState(QtCore.QObject):
                     points={k: list(v) for k, v in self.points.items()})
 
     def restore(self, snap: dict) -> None:
+        self.holding = False
         self.reference = snap.get("reference")
         self.kind = dict(snap.get("kind", {}))
         self.points = {k: list(v) for k, v in snap.get("points", {}).items()}
@@ -62,8 +122,10 @@ class AlignState(QtCore.QObject):
         self.changed.emit()
 
     def set_reference(self, name: str | None) -> None:
+        self.holding = False
         self.reference = name
         self.points, self.transforms, self.errors = {}, {}, {}
+        self.applied_points, self.phase_at_anchor = {}, {}
         self.changed.emit()
 
     def set_kind(self, run: str, kind: str) -> None:
@@ -91,11 +153,19 @@ class AlignState(QtCore.QObject):
         self.changed.emit()
 
     def _recompute(self, run: str) -> None:
+        if self.holding:
+            return
         pts = self.points.get(run)
         if not pts:
             self.transforms.pop(run, None)
             self.errors.pop(run, None)
+            self.applied_points.pop(run, None)
+            self.phase_at_anchor.pop(run, None)
             return
+        self.applied_points[run] = list(pts)
+        entry = self._entry(run)
+        if entry is not None:
+            self.phase_at_anchor[run] = float(entry.phase)
         try:
             self.transforms[run] = fit_alignment(pts, self.kind.get(run, "auto"))
             self.errors.pop(run, None)
@@ -104,7 +174,7 @@ class AlignState(QtCore.QObject):
             self.errors[run] = str(exc)
 
     def _recompute_all(self) -> None:
-        self.transforms, self.errors = {}, {}
+        self.transforms, self.errors, self.applied_points, self.phase_at_anchor = {}, {}, {}, {}
         for run in list(self.points):
             self._recompute(run)
 
@@ -319,15 +389,26 @@ class AlignState(QtCore.QObject):
 
     # ------------------------------------------------------------- files
     def to_dict(self) -> dict:
-        return dict(reference=self.reference, kind=dict(self.kind),
-                    points={run: [dict(name=p.name, ref_t1=p.ref_t1, ref_t2=p.ref_t2,
-                                       run_t1=p.run_t1, run_t2=p.run_t2, ion=p.ion) for p in pts]
+        out = dict(reference=self.reference, kind=dict(self.kind),
+                   points={run: [dict(name=p.name, ref_t1=p.ref_t1, ref_t2=p.ref_t2,
+                                      run_t1=p.run_t1, run_t2=p.run_t2, ion=p.ion) for p in pts]
                            for run, pts in self.points.items()})
+        # Only written when there is something to record, so projects without it are unchanged.
+        if self.phase_at_anchor:
+            out["phase_at_anchor"] = dict(self.phase_at_anchor)
+        if self.phase_checked:
+            out["phase_checked"] = sorted(self.phase_checked)
+        return out
 
     def from_dict(self, d: dict) -> None:
         d = d or {}
+        self.holding = False
         self.reference = d.get("reference")
         self.kind = dict(d.get("kind", {}))
         self.points = {run: [AnchorPoint(**p) for p in pts] for run, pts in d.get("points", {}).items()}
         self._recompute_all()
+        # Projects saved before this record how each run was anchored have none: nothing is called stale.
+        self.phase_at_anchor = {k: float(v) for k, v in d.get("phase_at_anchor", {}).items() if k in self.transforms}
+        self.phase_checked = set(d.get("phase_checked", []))
         self.changed.emit()
+        self.phaseStatusChanged.emit()

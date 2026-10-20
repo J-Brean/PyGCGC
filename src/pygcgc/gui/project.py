@@ -274,6 +274,8 @@ class Project(QtCore.QObject):
         an applied blank subtraction is out of date once an alignment changes.
         Nothing is recomputed automatically (a background job per run per
         anchor click would be far too heavy); the message says what to do."""
+        if self.align.holding:
+            return                      # clicks are only being recorded; the alignment itself has not changed
         if self.bg_blank and self.bg_settings.subtract_blank and self.any_background():
             self.message.emit("Alignment changed: apply 🧹 again to redo the blank subtraction with it")
 
